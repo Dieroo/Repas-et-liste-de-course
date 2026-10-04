@@ -1,0 +1,20 @@
+{
+  "name": "Repas & Courses",
+  "short_name": "Repas",
+  "description": "Les repas de la semaine et la liste de courses, partagés en famille.",
+  "lang": "fr",
+  "dir": "ltr",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FBF7F1",
+  "theme_color": "#FBF7F1",
+  "icons": [
+    { "src": "icons/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
