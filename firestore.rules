@@ -1,6 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Adresses en minuscules : la comparaison tient compte de la casse.
     function membre() {
       return request.auth != null
         && request.auth.token.email_verified == true
