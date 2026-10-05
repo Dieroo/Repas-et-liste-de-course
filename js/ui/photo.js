@@ -1,16 +1,18 @@
 // Photo d'un plat : choix sur le téléphone, puis compression dans le navigateur (CLAUDE.md §6 `photos`).
 import { PHOTO, VIGNETTE, dimensionsReduites, carreCentral, tailleStockee } from '../coeur/photo.js';
 
-/** Ouvre le sélecteur du téléphone (appareil photo ou galerie). À appeler dans un toucher. → File ou null. */
-export function choisirImage() {
+/**
+ * Ouvre l'appareil photo (`appareil`) ou la galerie du téléphone. À appeler dans un toucher. → File ou null.
+ * Pas de délai d'attente : la photo prise peut arriver plusieurs secondes après le retour sur la page.
+ */
+export function choisirImage({ appareil = false } = {}) {
   return new Promise((resoudre) => {
     const entree = document.createElement('input');
     entree.type = 'file';
     entree.accept = 'image/*';
+    if (appareil) entree.setAttribute('capture', 'environment');
     entree.addEventListener('change', () => resoudre(entree.files?.[0] ?? null), { once: true });
     entree.addEventListener('cancel', () => resoudre(null), { once: true });
-    // Filet de sécurité si « cancel » n'arrive pas : au retour sur la page, on conclut après un court délai.
-    window.addEventListener('focus', () => setTimeout(() => resoudre(entree.files?.[0] ?? null), 1000), { once: true });
     entree.click();
   });
 }

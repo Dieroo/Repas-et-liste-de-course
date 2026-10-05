@@ -7,18 +7,18 @@ import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisib
 const compressions = new Map(); // platId → jeton du dernier choix
 const fichesOuvertes = new Set(); // fonctions de rafraîchissement des fiches affichées
 let jetonSuivant = 0;
-let choixOuvert = false;
+let dernierAppui = 0; // horodatage de la dernière ouverture du sélecteur
 
 function rafraichirFiches() {
   for (const rafraichir of fichesOuvertes) rafraichir();
 }
 
-/** Choisit, compresse et enregistre une photo. Seul le dernier choix pour un plat est enregistré. */
-async function changerPhoto(id, actions) {
-  if (choixOuvert) return; // sélecteur déjà ouvert (double appui)
-  choixOuvert = true;
-  const fichier = await choisirImage();
-  choixOuvert = false;
+/** Prend ou choisit, compresse et enregistre une photo. Seul le dernier choix pour un plat est enregistré. */
+async function changerPhoto(id, actions, appareil) {
+  // Double appui : un seul sélecteur. Le verrou ne dépend pas de la fin du choix (« cancel » peut ne jamais arriver).
+  if (Date.now() - dernierAppui < 1000) return;
+  dernierAppui = Date.now();
+  const fichier = await choisirImage({ appareil });
   if (!fichier) return;
   jetonSuivant += 1;
   const jeton = jetonSuivant;
@@ -59,9 +59,12 @@ export function creer(ctx) {
   const figure = el('figure', { class: 'photo-plat' });
   const contenu = el('div', { class: 'fiche-contenu' });
   // Boutons gardés d'un rendu à l'autre : le focus (clavier, TalkBack) n'est pas perdu.
-  const boutonPhoto = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => changerPhoto(id, courant.actions) });
+  const boutonAppareil = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => changerPhoto(id, courant.actions, true) });
+  const boutonGalerie = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => changerPhoto(id, courant.actions, false) }, '🖼️ Depuis la galerie');
   const boutonRetrait = el('button', { class: 'bouton bouton-texte', type: 'button', onclick: retirer });
-  const actionsPhoto = el('div', { class: 'actions-photo' }, boutonPhoto, boutonRetrait);
+  const actionsPhoto = el('div', { class: 'actions-photo' },
+    el('div', { class: 'choix-photo' }, boutonAppareil, boutonGalerie),
+    boutonRetrait);
 
   const platCourant = () => courant.plats.find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
@@ -99,8 +102,9 @@ export function creer(ctx) {
     if (!plat) return;
     const enCours = compressions.has(id);
     const avecPhoto = aUnePhoto(plat);
-    boutonPhoto.disabled = enCours;
-    boutonPhoto.textContent = enCours ? 'Photo en cours…' : avecPhoto ? '📷 Changer la photo' : '📷 Ajouter une photo';
+    boutonAppareil.disabled = enCours;
+    boutonGalerie.disabled = enCours;
+    boutonAppareil.textContent = enCours ? 'Photo en cours…' : '📷 Prendre une photo';
     boutonRetrait.hidden = !avecPhoto || enCours;
     boutonRetrait.textContent = retraitAConfirmer ? 'Toucher pour confirmer le retrait' : 'Retirer la photo';
   }
@@ -123,7 +127,7 @@ export function creer(ctx) {
     annoncer('Photo retirée.');
     dessinerPhoto();
     majBoutonsPhoto();
-    boutonPhoto.focus();
+    boutonAppareil.focus();
   }
 
   function dessiner() {

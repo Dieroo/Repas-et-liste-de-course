@@ -827,6 +827,16 @@ body:not(.dans-app) main {
   gap: 4px 8px;
 }
 
+/* Appareil photo et galerie côte à côte, de même largeur. */
+.choix-photo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.choix-photo .bouton { padding: 0 12px; }
+
 .badges {
   display: flex;
   flex-wrap: wrap;
