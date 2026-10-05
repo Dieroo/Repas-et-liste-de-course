@@ -13,8 +13,8 @@ export function afficher() {
     etatVide(
       {
         emoji: '❤️',
-        titre: 'Bientôt : trier les plats d’un geste',
-        texte: 'Un plat à la fois, une réponse :',
+        titre: 'Bientôt\u00A0: trier les plats d’un geste',
+        texte: 'Un plat à la fois, une réponse\u00A0:',
       },
       el('ul', { class: 'gestes' },
         GESTES.map(({ emoji, libelle }) => el('li', { class: 'geste' },
