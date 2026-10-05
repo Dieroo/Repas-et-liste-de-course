@@ -2,11 +2,12 @@
 // SDK épinglé : changer la version ici, dans donnees.js et dans sw.js en même temps.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
-  getAuth,
+  initializeAuth,
+  indexedDBLocalPersistence,
+  browserLocalPersistence,
+  browserPopupRedirectResolver,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   onAuthStateChanged,
   signOut,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
@@ -18,12 +19,12 @@ import {
 
 // Configuration de l'application Web Firebase : publique par nature (CLAUDE.md §13).
 const firebaseConfig = {
-  apiKey: 'A_REMPLIR',
-  authDomain: 'A_REMPLIR',
-  projectId: 'A_REMPLIR',
-  storageBucket: 'A_REMPLIR',
-  messagingSenderId: 'A_REMPLIR',
-  appId: 'A_REMPLIR',
+  apiKey: 'AIzaSyD99deB4XRQV1ubKAHB3IsxYNSQuhwW7WA',
+  authDomain: 'repas-et-liste-de-course.firebaseapp.com',
+  projectId: 'repas-et-liste-de-course',
+  storageBucket: 'repas-et-liste-de-course.firebasestorage.app',
+  messagingSenderId: '995727109049',
+  appId: '1:995727109049:web:c4e0fa680415341554e468',
 };
 
 export const configuree = !Object.values(firebaseConfig).includes('A_REMPLIR');
@@ -33,7 +34,10 @@ let db = null;
 
 if (configuree) {
   const app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
+  // Pas de getAuth() : sur téléphone, il attendrait le chargement des scripts de connexion Google
+  // avant d'annoncer qui est connecté (très lent avec un réseau faible, en magasin).
+  // Ces scripts ne sont chargés qu'au moment de se connecter (voir connecter()).
+  auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] });
   auth.languageCode = 'fr';
   db = initializeFirestore(app, {
     localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
@@ -46,24 +50,14 @@ export function surChangementUtilisateur(rappel) {
   return onAuthStateChanged(auth, rappel);
 }
 
-/** Connexion Google : fenêtre de connexion, repli sur redirection si elle est bloquée. */
-export async function connecter() {
+/**
+ * Connexion Google dans une fenêtre. Pas de repli par redirection : sur github.io, Chrome isole le stockage
+ * du domaine de connexion Firebase et la redirection revient sans résultat.
+ */
+export function connecter() {
   const fournisseur = new GoogleAuthProvider();
   fournisseur.setCustomParameters({ prompt: 'select_account' });
-  try {
-    await signInWithPopup(auth, fournisseur);
-  } catch (erreur) {
-    if (erreur?.code === 'auth/popup-blocked' || erreur?.code === 'auth/operation-not-supported-in-this-environment') {
-      await signInWithRedirect(auth, fournisseur);
-      return;
-    }
-    throw erreur;
-  }
-}
-
-/** Résultat d'une connexion par redirection, au retour sur l'app (null s'il n'y en a pas). */
-export function retourDeRedirection() {
-  return getRedirectResult(auth);
+  return signInWithPopup(auth, fournisseur, browserPopupRedirectResolver);
 }
 
 export function deconnecter() {
@@ -77,6 +71,8 @@ export function messageErreurConnexion(erreur) {
     case 'auth/cancelled-popup-request':
     case 'auth/user-cancelled':
       return null;
+    case 'auth/popup-blocked':
+      return 'La fenêtre de connexion n’a pas pu s’ouvrir. Touchez de nouveau le bouton.';
     case 'auth/network-request-failed':
       return 'Pas de réseau pour le moment. Réessayez quand il revient.';
     case 'auth/unauthorized-domain':
