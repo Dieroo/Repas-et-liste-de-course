@@ -272,7 +272,7 @@ Vocabulaires fermés :
 - `forme` (viande) : `hachee` `fine` `morceaux` `effilochable`
 - `role` (légume) : `principal` `incorpore`
 
-`coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients. Les photos (`photos/`, `vignette`) ne font pas partie de `paquet@1` : ni import ni export (taille).
+`coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients. Les photos (`photos/`, `vignette`) ne font pas partie de `paquet@1` : ni import ni export (taille). Un plat ajouté par son nom n'enregistre que `id` et `nom` (écriture fusionnée, pour ne jamais écraser une recette créée entre-temps sur l'autre téléphone) : les champs absents valent leur défaut (`type` plat, `statutRecette` attente, `recurrence` aucune) et l'export les complète. Doublons repérés par le nom (slug du nom), pas par l'identifiant.
 
 Textes copiés par les boutons « Demander à Claude » (gestionnaire uniquement) :
 
