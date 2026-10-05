@@ -15,10 +15,12 @@ function ouvrirFicheProfil(ctx, existant) {
     const nom = el('input', {
       class: 'champ', id: 'profil-nom', maxlength: NOM_PROFIL_MAX, autocomplete: 'off', autofocus: !existant,
       value: existant?.nom ?? '',
+      oninput: () => { erreurs.nom.hidden = true; },
     });
     const email = el('input', {
       class: 'champ', id: 'profil-email', type: 'email', inputmode: 'email', autocomplete: 'off',
       value: existant?.email ?? '',
+      oninput: () => { erreurs.email.hidden = true; },
     });
     const portions = PORTIONS.map((p) => el('label', { class: 'choix' },
       el('input', {

@@ -49,6 +49,7 @@ function ouvrirAjout(ctx) {
       autocomplete: 'off',
       enterkeyhint: 'done',
       autofocus: true,
+      oninput: () => { erreur.hidden = true; },
     });
     return el('form', {
       class: 'formulaire',
