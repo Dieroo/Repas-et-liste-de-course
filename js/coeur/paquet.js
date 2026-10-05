@@ -31,7 +31,10 @@ const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
 const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
   'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
 const CHAMPS_INGREDIENT = ['produit', 'qte', 'qtePortion', 'unite', 'rayon', 'marqueurs', 'forme', 'role'];
-const CLES_IGNOREES = ['reglages', 'profils', 'produits', 'congelateur', 'semaines'];
+const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
+const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
+const CHAMPS_VARIANTE = ['pour', 'retirer', 'ajouter', 'consigne'];
+const ANNONCE_RECETTE = /"(format|plats)"\s*:/;
 
 // ——— Retrouver la recette dans le texte collé ———
 
@@ -79,24 +82,35 @@ export function extrairePaquet(texte) {
   const brut = String(texte ?? '');
   if (!brut.trim()) return { erreur: 'vide' };
   if (brut.length > TEXTE_MAX) return { erreur: 'trop_long' };
-  if (/^\s*DEMANDE-/.test(brut)) return { erreur: 'demande' };
+  // Sa propre demande, ou les corrections, recollées à la place de la réponse de Claude.
+  if (/^\s*(DEMANDE-|CORRECTION\s+paquet@)/i.test(brut)) return { erreur: 'demande' };
   const paquets = [];
-  let essais = 0;
+  let finDernier = -1; // fin du dernier objet lu
+  let coupe = -1; // dernier objet commencé, jamais refermé, qui annonce une recette
+  let budget = 20 * TEXTE_MAX; // caractères parcourus au plus (évite un coût quadratique)
   let i = brut.indexOf('{');
-  while (i !== -1 && essais < 5000) {
-    essais += 1;
+  while (i !== -1 && budget > 0) {
     const fin = finDObjet(brut, i);
-    if (fin === -1) break; // plus d'accolade fermante : la suite est coupée
+    budget -= (fin === -1 ? brut.length : fin) - i;
+    if (fin === -1) {
+      // Accolade jamais refermée : réponse coupée si une recette suit, sinon simple accolade dans la prose.
+      if (ANNONCE_RECETTE.test(brut.slice(i))) coupe = i;
+      i = brut.indexOf('{', i + 1);
+      continue;
+    }
     const objet = lireObjet(brut.slice(i, fin + 1));
     if (objet && ('format' in objet || 'plats' in objet)) {
       paquets.push(objet);
+      finDernier = fin;
       i = brut.indexOf('{', fin + 1);
     } else {
       i = brut.indexOf('{', i + 1);
     }
   }
+  // Une recette commencée après la dernière lue mais jamais terminée : rien n'est retenu (tout ou rien).
+  if (coupe > finDernier) return { erreur: 'coupee' };
   if (paquets.length) return { paquets };
-  return { erreur: /"(format|plats)"\s*:/.test(brut) ? 'coupee' : 'aucune' };
+  return { erreur: ANNONCE_RECETTE.test(brut) ? 'coupee' : 'aucune' };
 }
 
 // ——— Valeurs tolérées ———
@@ -154,7 +168,7 @@ function validerIngredient(brut, { position, champQte, signaler, inconnu }) {
   if (!nomProduit) refuser('nom de l’ingrédient manquant.', 'produit manquant');
   else ingredient.produit = nomProduit;
 
-  if (champQte === 'qtePortion' && brut.qtePortion === undefined && brut.qte !== undefined) {
+  if (champQte === 'qtePortion' && brut.qtePortion == null && brut.qte != null) {
     refuser('quantité par portion attendue.', '`qtePortion` attendu (quantité par portion) au lieu de `qte`');
   } else {
     const quantite = nombre(brut[champQte]);
@@ -164,7 +178,7 @@ function validerIngredient(brut, { position, champQte, signaler, inconnu }) {
 
   const unite = code(brut.unite);
   if (!VOCABULAIRES.unite.includes(unite)) {
-    refuser(brut.unite === undefined ? 'unité manquante.' : `unité «\u00A0${texte(String(brut.unite))}\u00A0» inconnue.`,
+    refuser(brut.unite == null ? 'unité manquante.' : `unité «\u00A0${texte(String(brut.unite))}\u00A0» inconnue.`,
       `unite : ${liste(VOCABULAIRES.unite)}`);
   } else {
     ingredient.unite = unite;
@@ -172,14 +186,14 @@ function validerIngredient(brut, { position, champQte, signaler, inconnu }) {
 
   const rayon = code(brut.rayon);
   if (!VOCABULAIRES.rayon.includes(rayon)) {
-    refuser(brut.rayon === undefined ? 'rayon manquant.' : `rayon «\u00A0${texte(String(brut.rayon))}\u00A0» inconnu.`,
+    refuser(brut.rayon == null ? 'rayon manquant.' : `rayon «\u00A0${texte(String(brut.rayon))}\u00A0» inconnu.`,
       `rayon : ${liste(VOCABULAIRES.rayon)}`);
   } else {
     ingredient.rayon = rayon;
   }
 
   const marqueurs = [];
-  if (brut.marqueurs !== undefined && !Array.isArray(brut.marqueurs)) {
+  if (brut.marqueurs != null && !Array.isArray(brut.marqueurs)) {
     refuser('marqueurs illisibles.', 'marqueurs : liste attendue');
   } else {
     for (const brutMarqueur of brut.marqueurs ?? []) {
@@ -247,14 +261,14 @@ function validerPlat(brut, index, idsProfils) {
   if (!erreurs.length) Object.assign(donnees, { id, nom });
 
   for (const champ of ['type', 'recurrence']) {
-    if (brut[champ] === undefined) continue;
+    if (brut[champ] == null) continue;
     const valeur = code(brut[champ]);
     if (VOCABULAIRES[champ].includes(valeur)) donnees[champ] = valeur;
     else signaler(`${affiche}\u00A0: ${champ === 'type' ? 'type de plat inconnu' : 'récurrence inconnue'}.`, `${champ} : ${liste(VOCABULAIRES[champ])}`);
   }
 
   let statut;
-  if (brut.statutRecette !== undefined) {
+  if (brut.statutRecette != null) {
     statut = code(brut.statutRecette);
     if (!VOCABULAIRES.statutRecette.includes(statut)) {
       signaler(`${affiche}\u00A0: statut de la recette inconnu.`, `statutRecette : ${liste(VOCABULAIRES.statutRecette)}`);
@@ -264,7 +278,7 @@ function validerPlat(brut, index, idsProfils) {
 
   // Ingrédients : obligatoires, sauf pour un plat sans recette (⏳).
   const aRecette = Array.isArray(brut.ingredients) && brut.ingredients.length > 0;
-  if (brut.ingredients !== undefined && !Array.isArray(brut.ingredients)) {
+  if (brut.ingredients != null && !Array.isArray(brut.ingredients)) {
     signaler(`${affiche}\u00A0: liste des ingrédients illisible.`, 'ingredients : liste attendue');
   } else if (aRecette) {
     const ingredients = brut.ingredients.map((ingredient, j) => validerIngredient(ingredient, {
@@ -276,7 +290,7 @@ function validerPlat(brut, index, idsProfils) {
     if (ingredients.every(Boolean)) donnees.ingredients = ingredients;
     if (statut === 'attente') {
       statut = 'brouillon';
-      prevenir(`${affiche}\u00A0: la recette a des ingrédients, elle passe en 📝 « Recette à vérifier ».`, 'statutRecette attente avec des ingrédients : brouillon retenu');
+      prevenir(`${affiche}\u00A0: la recette a des ingrédients, elle passe en 📝 «\u00A0Recette à vérifier\u00A0».`, 'statutRecette attente avec des ingrédients : brouillon retenu');
     } else if (statut === undefined) {
       statut = 'brouillon';
     }
@@ -285,22 +299,29 @@ function validerPlat(brut, index, idsProfils) {
   }
   if (statut) donnees.statutRecette = statut;
 
-  if (brut.portionsBase !== undefined || aRecette) {
+  if (brut.portionsBase != null || aRecette) {
     const portions = nombre(brut.portionsBase);
     if (!(Number.isInteger(portions) && portions > 0)) signaler(`${affiche}\u00A0: nombre de portions manquant ou invalide.`, 'portionsBase : entier supérieur à 0');
     else donnees.portionsBase = portions;
   }
 
-  if (brut.etapes !== undefined) {
+  if (brut.etapes != null) {
     if (!Array.isArray(brut.etapes)) {
       signaler(`${affiche}\u00A0: étapes illisibles.`, 'etapes : liste de phrases attendue');
     } else {
-      const etapes = brut.etapes.map((etape) => (typeof etape === 'number' ? String(etape) : texte(etape))).filter(Boolean);
-      if (etapes.length) donnees.etapes = etapes;
+      // Une étape doit être une phrase : un objet serait perdu sans le dire.
+      const lisibles = brut.etapes.map((etape, j) => {
+        if (etape == null) return '';
+        if (typeof etape === 'string' || typeof etape === 'number') return texte(String(etape));
+        signaler(`${affiche}\u00A0: étape ${j + 1} illisible.`, `etapes[${j}] : phrase attendue`);
+        return null;
+      });
+      const etapes = lisibles.filter(Boolean);
+      if (!lisibles.includes(null) && etapes.length) donnees.etapes = etapes;
     }
   }
 
-  if (brut.cuisson !== undefined) {
+  if (brut.cuisson != null) {
     if (!Array.isArray(brut.cuisson)) {
       signaler(`${affiche}\u00A0: cuisson illisible.`, 'cuisson : liste attendue');
     } else {
@@ -313,6 +334,7 @@ function validerPlat(brut, index, idsProfils) {
         }
         const cuisson = {};
         let ok = true;
+        if (Object.keys(c).some((cle) => !CHAMPS_CUISSON.includes(cle))) inconnu();
         const appareil = code(c.appareil);
         if (!VOCABULAIRES.appareil.includes(appareil)) {
           ok = false;
@@ -320,7 +342,7 @@ function validerPlat(brut, index, idsProfils) {
         } else {
           cuisson.appareil = appareil;
         }
-        if (c.tempC !== undefined) {
+        if (c.tempC != null) {
           const temperature = nombre(c.tempC);
           if (!(temperature > 0)) {
             ok = false;
@@ -346,23 +368,24 @@ function validerPlat(brut, index, idsProfils) {
     }
   }
 
-  if (brut.tempsActifMin !== undefined) {
+  if (brut.tempsActifMin != null) {
     const temps = nombre(brut.tempsActifMin);
     if (!(temps >= 0)) signaler(`${affiche}\u00A0: temps de travail invalide.`, 'tempsActifMin : nombre de minutes');
     else donnees.tempsActifMin = temps;
   }
 
-  if (brut.conservation !== undefined) {
+  if (brut.conservation != null) {
     if (!estObjet(brut.conservation)) {
       signaler(`${affiche}\u00A0: conservation illisible.`, 'conservation : { frigoJours, congelable } attendu');
     } else {
       const conservation = {};
-      if (brut.conservation.frigoJours !== undefined) {
+      if (Object.keys(brut.conservation).some((cle) => !CHAMPS_CONSERVATION.includes(cle))) inconnu();
+      if (brut.conservation.frigoJours != null) {
         const jours = nombre(brut.conservation.frigoJours);
         if (!(Number.isInteger(jours) && jours >= 0)) signaler(`${affiche}\u00A0: durée au frigo invalide.`, 'conservation.frigoJours : nombre entier de jours');
         else conservation.frigoJours = jours;
       }
-      if (brut.conservation.congelable !== undefined) {
+      if (brut.conservation.congelable != null) {
         const congelable = booleen(brut.conservation.congelable);
         if (congelable === null) signaler(`${affiche}\u00A0: congélation à préciser (oui ou non).`, 'conservation.congelable : true ou false');
         else conservation.congelable = congelable;
@@ -372,13 +395,13 @@ function validerPlat(brut, index, idsProfils) {
     }
   }
 
-  if (brut.emporter !== undefined) {
+  if (brut.emporter != null) {
     const emporter = booleen(brut.emporter);
-    if (emporter === null) signaler(`${affiche}\u00A0: « à emporter » à préciser (oui ou non).`, 'emporter : true ou false');
+    if (emporter === null) signaler(`${affiche}\u00A0: «\u00A0à emporter\u00A0» à préciser (oui ou non).`, 'emporter : true ou false');
     else donnees.emporter = emporter;
   }
 
-  if (brut.variantes !== undefined) {
+  if (brut.variantes != null) {
     if (!Array.isArray(brut.variantes)) {
       signaler(`${affiche}\u00A0: variantes illisibles.`, 'variantes : liste attendue');
     } else {
@@ -391,6 +414,7 @@ function validerPlat(brut, index, idsProfils) {
         }
         const variante = {};
         let ok = true;
+        if (Object.keys(v).some((cle) => !CHAMPS_VARIANTE.includes(cle))) inconnu();
         const pour = slug(typeof v.pour === 'string' ? v.pour : '');
         if (!pour) {
           ok = false;
@@ -401,15 +425,17 @@ function validerPlat(brut, index, idsProfils) {
             prevenir(`${ici}\u00A0: aucun profil «\u00A0${pour}\u00A0» dans l’app. Elle sera gardée, sans effet pour l’instant.`, `${la}.pour « ${pour} » : profil inconnu`);
           }
         }
-        if (v.retirer !== undefined && !Array.isArray(v.retirer)) {
+        // « À retirer » : des noms de produits seulement (un objet deviendrait « [object Object] »).
+        const retirer = v.retirer ?? [];
+        if (!Array.isArray(retirer) || retirer.some((p) => typeof p !== 'string' && typeof p !== 'number')) {
           ok = false;
-          signaler(`${ici}\u00A0: liste « à retirer » illisible.`, `${la}.retirer : liste de produits`);
+          signaler(`${ici}\u00A0: liste «\u00A0à retirer\u00A0» illisible.`, `${la}.retirer : liste de noms de produits`);
         } else {
-          variante.retirer = (v.retirer ?? []).map((p) => texte(String(p)).toLocaleLowerCase('fr-FR')).filter(Boolean);
+          variante.retirer = retirer.map((p) => texte(String(p)).toLocaleLowerCase('fr-FR')).filter(Boolean);
         }
-        if (v.ajouter !== undefined && !Array.isArray(v.ajouter)) {
+        if (v.ajouter != null && !Array.isArray(v.ajouter)) {
           ok = false;
-          signaler(`${ici}\u00A0: liste « à ajouter » illisible.`, `${la}.ajouter : liste d’ingrédients`);
+          signaler(`${ici}\u00A0: liste «\u00A0à ajouter\u00A0» illisible.`, `${la}.ajouter : liste d’ingrédients`);
         } else {
           const ajouts = (v.ajouter ?? []).map((ingredient, k) => validerIngredient(ingredient, {
             position: { affiche: `${ici}, ajout ${k + 1}`, claude: `${la}.ajouter[${k}]` },
@@ -451,8 +477,8 @@ export function validerPaquet(paquets, { profils = null } = {}) {
       erreurs.push({ message: 'Ce texte ne vient pas de votre projet Claude, ou d’une version que l’app ne connaît pas.', pourClaude: `format : \`${FORMAT}\` attendu` });
       continue;
     }
-    if (CLES_IGNOREES.some((cle) => paquet[cle] !== undefined)) clesIgnorees = true;
-    if (paquet.plats === undefined) continue;
+    if (Object.keys(paquet).some((cle) => cle !== 'format' && cle !== 'plats')) clesIgnorees = true;
+    if (paquet.plats == null) continue;
     if (!Array.isArray(paquet.plats)) {
       erreurs.push({ message: 'La liste des recettes est illisible.', pourClaude: 'plats : liste attendue' });
       continue;
@@ -506,7 +532,8 @@ function idLibre(base, pris) {
  * `valides` : `donnees` des plats validés. `cible` : plat depuis lequel on a touché « Coller la recette ».
  * → { elements: [{ id, nom, statut, ancienNom?, ingredients, etapes, avertissements }], ecritures: [{ id, donnees }],
  *     demandesAClore: [id], erreurs, avertissements }
- *   statut ∈ nouveau, complete (⏳ complété), remplace (recette existante remplacée).
+ *   statut ∈ nouveau, complete (⏳ complété), remplace (recette existante remplacée), inchange (pas d'ingrédients
+ *   reçus pour un plat existant : sa recette reste).
  */
 export function preparerImport(valides, { plats = [], demandes = [], cible = null } = {}) {
   const erreurs = [];
@@ -533,6 +560,14 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     const memeId = parId.get(donnees.id);
     const memeNom = parNom.get(slug(donnees.nom));
     if (viseCible) {
+      // La recette d'un autre plat déjà présent, collée sur cette fiche, en ferait un doublon.
+      if (memeNom && memeNom.id !== cible) {
+        erreurs.push({
+          message: `Cette réponse est la recette de «\u00A0${memeNom.nom}\u00A0», déjà dans vos plats. Copiez la réponse pour «\u00A0${parId.get(cible).nom}\u00A0».`,
+          pourClaude: `id ${cible} : recette de ${memeNom.id} reçue, recette de ${cible} attendue`,
+        });
+        continue;
+      }
       vise = cible;
     } else if (memeId && (slug(memeId.nom) === slug(donnees.nom)
       || statutDe(memeId) === 'attente'
@@ -561,8 +596,12 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     if (memeNom && memeNom.id !== vise) {
       avertissementsPlat.push(`Un autre plat s’appelle déjà «\u00A0${memeNom.nom}\u00A0».`);
     }
-    const statut = !existant ? 'nouveau' : statutDe(existant) === 'attente' ? 'complete' : 'remplace';
     const ecriture = { ...donnees, id: vise };
+    const recue = Boolean(ecriture.ingredients?.length);
+    // Sans ingrédients reçus, un plat qui a déjà sa recette garde son statut (il ne repasse pas en ⏳).
+    if (!recue && existant && statutDe(existant) !== 'attente') delete ecriture.statutRecette;
+    let statut = 'nouveau';
+    if (existant) statut = !recue ? 'inchange' : statutDe(existant) === 'attente' ? 'complete' : 'remplace';
     elements.push({
       id: vise,
       nom: donnees.nom,

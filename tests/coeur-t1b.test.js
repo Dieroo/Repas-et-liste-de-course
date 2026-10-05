@@ -347,9 +347,10 @@ test('preparerImport : identifiant pris par un autre plat, mais même nom ailleu
   assert.equal(r.elements[0].statut, 'remplace');
 });
 
-test('preparerImport : nom déjà porté par un autre plat → avertissement', () => {
-  const plats = [{ id: 'plat-du-jour', nom: 'Plat du jour' }, { id: 'autre', nom: 'Risotto test', statutRecette: 'validee' }];
-  const r = preparerImport(valides(RISOTTO), { plats, demandes: [], cible: 'plat-du-jour' });
+test('preparerImport : plat ⏳ complété sous un nom déjà porté par un autre plat → avertissement', () => {
+  const plats = [{ id: 'risotto-test', nom: 'Ancien nom' }, { id: 'autre', nom: 'Risotto test', statutRecette: 'validee' }];
+  const r = preparerImport(valides(RISOTTO), { plats, demandes: [] });
+  assert.equal(r.ecritures[0].id, 'risotto-test');
   assert.match(r.elements[0].avertissements[0], /Un autre plat s’appelle déjà/);
 });
 
@@ -426,4 +427,94 @@ test('routes : « Ajouter des recettes » réservé au gestionnaire, plat ciblé
   assert.equal(parametreDe('#/courses/x', 'courses'), '');
   assert.equal(parametreDe('#/plat/gratin', 'import'), '');
   assert.deepEqual(lireHash('#/import/risotto-test'), { route: 'import', parametre: 'risotto-test' });
+});
+
+// ——— Cas relevés à la relecture ———
+
+test('extrairePaquet : second bloc coupé → tout est refusé (jamais d’import partiel)', () => {
+  const complet = bloc(paquet(RISOTTO));
+  const coupe = bloc(paquet({ ...RISOTTO, id: 'autre', nom: 'Autre' })).slice(0, 120);
+  assert.equal(extrairePaquet(`${PROSE}${complet}\n\nEt la suivante :\n${coupe}`).erreur, 'coupee');
+});
+
+test('extrairePaquet : une accolade seule dans la prose ne bloque pas une réponse complète', () => {
+  const r = extrairePaquet(`Le modèle commence par { puis les plats.\n${PROSE}${bloc(paquet(RISOTTO))}`);
+  assert.equal(r.paquets?.length, 1);
+  const apres = extrairePaquet(`${bloc(paquet(RISOTTO))}\nAstuce : une accolade { qui traîne.`);
+  assert.equal(apres.paquets?.length, 1);
+});
+
+test('extrairePaquet : les corrections recollées par erreur sont reconnues', () => {
+  const corrections = texteCorrectionPourClaude({ erreur: 'coupee' });
+  assert.equal(extrairePaquet(corrections).erreur, 'demande');
+  assert.equal(extrairePaquet(`  ${corrections}`).erreur, 'demande');
+});
+
+test('validerPaquet : null vaut absent pour les champs facultatifs', () => {
+  const plat = {
+    ...RISOTTO,
+    type: null, recurrence: null, tempsActifMin: null, conservation: null, emporter: null, variantes: null, source: null,
+    cuisson: [{ appareil: 'cookeo', tempC: null, mode: null, dureeMin: 15 }],
+    ingredients: [{ produit: 'riz', qte: 300, unite: 'g', rayon: 'epicerie_salee', marqueurs: null, forme: null, role: null }],
+    etapes: ['Cuire.', null],
+  };
+  const resultat = validerPaquet([paquet(plat)]);
+  assert.equal(resultat.valide, true, JSON.stringify(resultat.plats[0].erreurs));
+  const { donnees } = resultat.plats[0];
+  assert.deepEqual(donnees.cuisson, [{ appareil: 'cookeo', dureeMin: 15 }]);
+  assert.deepEqual(donnees.ingredients[0].marqueurs, []);
+  assert.deepEqual(donnees.etapes, ['Cuire.']);
+  for (const champ of ['type', 'recurrence', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source']) assert.equal(champ in donnees, false, champ);
+  sansUndefined(donnees);
+  const attente = validerPaquet([paquet({ id: 'plat-x', nom: 'Plat X', statutRecette: 'attente', portionsBase: null, ingredients: null })]);
+  assert.equal(attente.valide, true);
+  assert.equal(validerPaquet([paquet({ ...RISOTTO, cuisson: [{ appareil: 'four', dureeMin: null }] })]).valide, false, 'durée toujours obligatoire');
+});
+
+test('validerPaquet : étapes et produits « à retirer » qui ne sont pas du texte → erreur', () => {
+  const etapes = erreursDe((p) => { p.etapes = [{ ordre: 1, texte: 'Cuire' }]; });
+  assert.ok(etapes.some((e) => /étape 1 illisible/.test(e.message) && /etapes\[0\]/.test(e.pourClaude)));
+  const retirer = erreursDe((p) => { p.variantes = [{ pour: 'profil-b', retirer: [{ produit: 'jambon' }] }]; });
+  assert.ok(retirer.some((e) => /à retirer\u00A0» illisible/.test(e.message)));
+});
+
+test('validerPaquet : champs inconnus imbriqués et clés de premier niveau signalés', () => {
+  const plat = structuredClone(RISOTTO);
+  plat.cuisson = [{ appareil: 'cookeo', dureeMin: 6, programme: 'pression' }];
+  plat.conservation = { frigoJours: 2, congelateurMois: 3 };
+  plat.variantes = [{ pour: 'profil-b', retirer: [], besoin: 'sans_viande' }];
+  const resultat = validerPaquet([{ format: 'paquet@1', hypotheses: ['x'], plats: [plat] }], { profils: PROFILS });
+  assert.equal(resultat.valide, true);
+  assert.match(resultat.avertissements[0].message, /Seules les recettes/);
+  assert.match(resultat.plats[0].avertissements.map((a) => a.message).join(' | '), /non reconnues/);
+  assert.deepEqual(resultat.plats[0].donnees.conservation, { frigoJours: 2 });
+});
+
+test('validerPaquet : espaces insécables autour des guillemets dans les messages affichés', () => {
+  const messages = [
+    ...validerPaquet([paquet({ ...RISOTTO, statutRecette: 'attente' })]).plats[0].avertissements,
+    ...erreursDe((p) => { p.emporter = 'parfois'; }),
+    ...erreursDe((p) => { p.variantes = [{ pour: 'profil-b', retirer: 'x', ajouter: 'y' }]; }),
+  ].map((e) => e.message);
+  for (const message of messages) assert.doesNotMatch(message, /« | »/, message);
+});
+
+test('preparerImport : collage sans ingrédients sur un plat rempli → sa recette et son statut restent', () => {
+  const plats = [{ id: 'risotto-test', nom: 'Risotto test', statutRecette: 'brouillon', ingredients: [{ produit: 'riz' }] }];
+  const r = preparerImport(valides({ id: 'risotto-test', nom: 'Risotto test', statutRecette: 'attente' }), { plats, demandes: [] });
+  assert.equal(r.elements[0].statut, 'inchange');
+  assert.equal('statutRecette' in r.ecritures[0].donnees, false);
+  const attente = preparerImport(valides({ id: 'plat-x', nom: 'Plat X' }), { plats: [{ id: 'plat-x', nom: 'Plat X' }], demandes: [] });
+  assert.equal(attente.elements[0].statut, 'inchange');
+});
+
+test('preparerImport : la recette d’un autre plat existant, collée sur une fiche → erreur, rien d’écrit', () => {
+  const plats = [{ id: 'plat-du-jour', nom: 'Plat du jour' }, { id: 'risotto-test', nom: 'Risotto test', statutRecette: 'brouillon' }];
+  const demandes = [{ id: 'plat-du-jour__recette', statut: 'ouverte' }];
+  const r = preparerImport(valides(RISOTTO), { plats, demandes, cible: 'plat-du-jour' });
+  assert.equal(r.erreurs.length, 1);
+  assert.match(r.erreurs[0].message, /recette de «\u00A0Risotto test\u00A0», déjà dans vos plats/);
+  assert.doesNotMatch(r.erreurs[0].message, INTERDITS);
+  assert.deepEqual(r.ecritures, []);
+  assert.deepEqual(r.demandesAClore, []);
 });

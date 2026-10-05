@@ -1156,6 +1156,12 @@ body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom));
   cursor: pointer;
 }
 
+/* Flèche de dépliage (le marqueur natif disparaît avec display: flex). */
+.collage-manuel summary { list-style: none; }
+.collage-manuel summary::-webkit-details-marker { display: none; }
+.collage-manuel summary::before { content: '▸'; width: 1.25em; }
+.collage-manuel[open] > summary::before { content: '▾'; }
+
 .zone-collage {
   min-height: 140px;
   resize: vertical;
