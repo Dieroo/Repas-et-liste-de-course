@@ -136,13 +136,27 @@ export function quantiteLisible(qte, unite) {
   return mot ? `${nombre.format(qte)}\u00A0${mot}` : nombre.format(qte);
 }
 
-const APPAREILS = {
+export const APPAREILS = {
   plaque: 'Plaque',
   four: 'Four',
   cookeo: 'Cookeo',
   airfryer: 'Airfryer',
   monsieur_cuisine: 'Monsieur Cuisine',
 };
+
+/**
+ * Étape de cuisson principale : la plus longue (la première en cas d'égalité). Son appareil donne le pictogramme
+ * du plat. → { appareil, dureeMin } ou null (pas de cuisson, ou appareil inconnu).
+ */
+export function cuissonPrincipale(plat) {
+  let principale = null;
+  for (const cuisson of Array.isArray(plat?.cuisson) ? plat.cuisson : []) {
+    if (!Object.hasOwn(APPAREILS, cuisson?.appareil ?? '')) continue;
+    const duree = typeof cuisson.dureeMin === 'number' && Number.isFinite(cuisson.dureeMin) ? cuisson.dureeMin : 0;
+    if (!principale || duree > principale.dureeMin) principale = { appareil: cuisson.appareil, dureeMin: duree };
+  }
+  return principale;
+}
 
 /** « Four · 200 °C · 20 min · chaleur tournante » */
 export function cuissonLisible(cuisson) {

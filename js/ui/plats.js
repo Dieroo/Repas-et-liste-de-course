@@ -1,6 +1,7 @@
 // Écran Plats : recherche, filtres, liste, ajout d'un plat par son nom.
 import { el, etatVide, pastille } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
+import { modeDeCuisson } from './pictos.js';
 import { FILTRES, LIBELLES_TYPE, STATUTS, NOM_MAX, filtrerPlats, visuelDuPlat, statutDe, typeDe } from '../coeur/plats.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
@@ -25,8 +26,13 @@ export function vignetteDuPlat(plat, grande = false) {
 
 function carteDuPlat(plat) {
   const statut = statutDe(plat) !== 'validee' ? STATUTS[statutDe(plat)] : null;
-  const detail = [LIBELLES_TYPE[typeDe(plat)] ?? 'Plat', statut ? `${statut.emoji}\u00A0${statut.libelle}` : null]
-    .filter(Boolean).join(' · ');
+  // « Plat · [pictogramme] Four · 📝 Recette à vérifier » : type, mode de cuisson principal, statut.
+  const morceaux = [
+    LIBELLES_TYPE[typeDe(plat)] ?? 'Plat',
+    modeDeCuisson(plat),
+    statut ? `${statut.emoji}\u00A0${statut.libelle}` : null,
+  ].filter(Boolean);
+  const detail = morceaux.flatMap((morceau, i) => (i ? [' · ', morceau] : [morceau]));
   return el('li', {},
     el('a', { class: 'carte-plat', href: `#/plat/${encodeURIComponent(plat.id)}`, 'data-cle': plat.id },
       vignetteDuPlat(plat),

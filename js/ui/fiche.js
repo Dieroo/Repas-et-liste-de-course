@@ -2,6 +2,7 @@
 import { el, pastille, annoncer } from './dom.js';
 import { choisirImage, preparerPhoto } from './photo.js';
 import { copier } from './presse-papiers.js';
+import { modeDeCuisson } from './pictos.js';
 import { texteDemandeRecette } from '../coeur/paquet.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
@@ -192,6 +193,7 @@ export function creer(ctx) {
         el('p', { class: 'badges' },
           el('span', { class: 'badge' }, LIBELLES_TYPE[typeDe(plat)] ?? 'Plat'),
           el('span', { class: `badge badge-${statut}` }, `${STATUTS[statut].emoji}\u00A0${STATUTS[statut].libelle}`),
+          modeDeCuisson(plat, { duree: true, classe: 'badge badge-cuisson' }),
           typeof plat.portionsBase === 'number'
             ? el('span', { class: 'badge' }, accord(plat.portionsBase, 'portion', 'portions'))
             : null,

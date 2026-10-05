@@ -75,6 +75,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 - Titres : « Fraunces » (Google Fonts, mise en cache par le service worker) ; texte : police système.
 - Cartes arrondies (16 px), ombres douces, espacements généreux, cibles ≥ 48 px.
 - Visuel des plats : grand emoji sur pastille teintée selon la catégorie (🍲 mijoté, 🐟 poisson, 🥧 gratin ou tarte, 🍝 pâtes, 🍰 dessert, 🥂 apéro). Une photo prise ou choisie sur le téléphone remplace l'emoji quand elle existe (§6 `photos`). **Aucune image récupérée sur le web.**
+- Mode de cuisson principal : pictogramme au trait de l'appareil de l'étape de cuisson la plus longue (la première en cas d'égalité ; `cuissonPrincipale`), toujours suivi de son nom (« Four » ; « Cookeo · 45 min » sur la fiche). Rien si le plat n'a pas de cuisson. Partout où un plat apparaît : liste des plats et fiche (T1c), Découvrir (T1d), grille de la semaine (T3), plats proposés par « Proposer » (T4), Batch (T5). Dessins propres à l'app (`ui/pictos.js`), jamais de logo de marque.
 - Animations brèves et utiles (case cochée, carte qui glisse) ; vibration légère quand on coche (`navigator.vibrate`).
 
 **Écran Découvrir** (premier contact, ludique)
@@ -98,7 +99,8 @@ js/
   notifications.js        envoi ntfy
   ui/                     un module par écran (semaine, courses, plats, fiche, decouvrir, batch, congelateur, demandes, reglages, import)
                           + dom.js (outils DOM), connexion.js (écrans avant l'app), profil.js (avatar, panneau du profil),
-                          feuille.js (feuilles du bas), photo.js (choix et compression), presse-papiers.js (copier, coller)
+                          feuille.js (feuilles du bas), photo.js (choix et compression), presse-papiers.js (copier, coller),
+                          pictos.js (pictogrammes des appareils de cuisson)
   coeur/                  logique pure : ni DOM ni Firebase
     roles.js              rôle de la personne connectée, écrans permis
     slug.js               identifiants et recherche sans accents
@@ -287,7 +289,7 @@ Vocabulaires fermés :
 
 **Ajouter des recettes** (écran `#/import`, gestionnaire ; `#/import/<platId>` depuis « Coller la recette » d'une fiche) :
 - Le gestionnaire colle la **réponse entière** de Claude : l'app y retrouve chaque objet `paquet@1` (prose, blocs de code, plusieurs blocs réunis). Elle distingue texte vide, demande recollée par erreur (`DEMANDE-…`), réponse coupée et absence de recette.
-- Tolérances : casse, accents et séparateurs des vocabulaires fermés (`Incorporé` → `incorpore`), nombres écrits en texte (`"0,5"`), `produit` mis en minuscules. Champs inconnus, `notes`, `derniereFois` et clés autres que `plats` ignorés avec un avertissement (repris dans la tranche qui les utilise : notes et sauvegarde en T1c, réglages et profils ensuite).
+- Tolérances : casse, accents et séparateurs des vocabulaires fermés (`Incorporé` → `incorpore`), nombres écrits en texte (`"0,5"`), `produit` mis en minuscules. Champs inconnus, `notes`, `derniereFois` et clés autres que `plats` ignorés avec un avertissement (repris dans la tranche qui les utilise : notes et sauvegarde en T1d, réglages et profils ensuite).
 - Grille : `id` et `nom` toujours ; `portionsBase` et `ingredients` sauf plat sans recette ; avec des ingrédients, le statut devient au moins `brouillon` ; `tempC` conseillé pour four et airfryer.
 - Plat visé : la cible (une seule recette collée), sinon le même `id` s'il s'agit du même plat (même nom, plat ⏳ ou demande ouverte), sinon le même nom, sinon un nouveau plat (identifiant libre `-2` si un autre plat, déjà rempli, utilise le sien). Deux recettes visant le même plat : erreur.
 - Écriture : seulement les champs présents (`mergeFields`), jamais `vignette` ni `notes`, jamais de table vide ni de valeur `undefined` ; demandes satisfaites closes dans un second lot (`update`, `statut: traitee`, `traiteeLe`).
@@ -358,6 +360,7 @@ besoin: sans_viande | avec_proteine
 4. Score = moyenne des notes des profils concernés (non noté = 3) + bonus d'ancienneté (semaines depuis `derniereFois`, plafonné) − malus si servi la semaine précédente − malus ⚠️ (plus fort pour « variante à créer ») − malus des règles `preference` déclenchées + bruit faible (graine fixe en test).
 5. Apéro : `apero.nbSuggestions` fiches `apero` compatibles avec tous les profils (ou adaptables), jamais les mêmes deux semaines de suite.
 6. Glouton + amélioration locale (le problème est minuscule). Tout reste modifiable à la main : verrouiller, échanger, réaffecter, choisir une variante.
+7. Chaque plat proposé affiche le pictogramme de son mode de cuisson principal (§4).
 
 **Batch (`batch.js`)** — regrouper par appareil puis température ; four : 2 plats simultanés si écart ≤ 10 °C ; plaques : 4 en parallèle ; cookeo et airfryer : 1 à la fois. Les variantes (ex. part au saumon) apparaissent comme petites préparations à part. Durée estimée = file d'appareil la plus longue + temps actif ; alerte au-delà de `dureeBatchMaxMin`. « Batch terminé » → `portionsACongeler` ajoutées au congélateur.
 
@@ -365,11 +368,11 @@ besoin: sans_viande | avec_proteine
 
 ## 10. Écrans
 
-1. **Semaine** (accueil) : ce soir pour chacun, carte « prochaine action », grille jours × profils, apéro du week-end, « Proposer » (les deux membres), « Imprimer » (menu de la semaine et apéro, puis liste de courses par rayon, sur une page pensée pour l'impression ; `window.print()` → « Enregistrer au format PDF » de Chrome, à envoyer), badges ⏳ et Demandes (gestionnaire).
+1. **Semaine** (accueil) : ce soir pour chacun, carte « prochaine action », grille jours × profils (chaque plat avec le pictogramme de son mode de cuisson principal, §4), apéro du week-end, « Proposer » (les deux membres), « Imprimer » (menu de la semaine et apéro, puis liste de courses par rayon, sur une page pensée pour l'impression ; `window.print()` → « Enregistrer au format PDF » de Chrome, à envoyer), badges ⏳ et Demandes (gestionnaire).
 2. **Courses** : bascule Drive / Magasin, grandes cases à cocher, ajout rapide, origine visible (plat, apéro, habituel).
-3. **Plats** : recherche, filtres (type, statut, compatibilité), ★ par profil, ajout par nom (→ ⏳ et demande de recette).
+3. **Plats** : recherche, filtres (type, statut, compatibilité), ★ par profil, pictogramme du mode de cuisson principal, ajout par nom (→ ⏳ et demande de recette).
 4. **Découvrir** : §4.
-5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges et variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
+5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges (dont le mode de cuisson principal et sa durée) et variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
    - Fiche en lecture, un seul bouton « Modifier » (les deux membres) : ingrédients (ajouter, retirer, quantité, unité), étapes, portions, conservation.
    - Ajout d'un ingrédient : suggestions dès les premières lettres, tirées de tous les ingrédients déjà connus, unité, rayon et nature préremplis ; pour un produit jamais vu, unité, rayon et une question « Viande / Poisson / Légume / Autre », une fois pour toutes.
 6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, sauvegarde).
@@ -379,10 +382,10 @@ besoin: sans_viande | avec_proteine
 | | Contenu | Fini quand |
 |---|---|---|
 | T0 Socle | PWA installable, connexion Google, refus propre si adresse non autorisée, rôles, tokens et navigation du §4, indicateur hors ligne | Installée sur les 2 téléphones ; l'app s'ouvre en mode avion ; l'utilisatrice des courses trouve l'écran beau |
-| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom (+ demande de recette), notes 0–5, écran Découvrir, modification d'une fiche par les deux membres, photo de la fiche (prise ou choisie, compressée, par les deux membres), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
+| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, pictogramme du mode de cuisson, ajout par nom (+ demande de recette), notes 0–5, écran Découvrir, modification d'une fiche par les deux membres, photo de la fiche (prise ou choisie, compressée, par les deux membres), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
 | T2 Compatibilité & variantes | Règles des profils, substitutions, `compatibilite.js` + tests, badges, demandes, notification ntfy (variantes et recettes à ajouter) | Un plat aux lardons passe en ⚠️ « version saumon » pour le profil concerné ; une variante manquante déclenche une demande et une notification |
-| T3 Semaine, liste & apéro | Sélection manuelle, personnes (adultes, enfants) et repas par plat, choix des variantes, apéro, `liste.js` + tests, placard, modes Drive et Magasin, « Courses terminées », « Imprimer » (menu + liste en PDF via le navigateur) | Une vraie commande drive préparée avec l'app |
-| T4 Congélateur & proposition | Stock, `congelateur.js` et `proposition.js` + tests, « Proposer » (repas et apéro) + ajustements | « Proposer » couvre tous les repas de chacun, fin de semaine par le congélateur |
+| T3 Semaine, liste & apéro | Sélection manuelle, pictogramme de cuisson sur la grille, personnes (adultes, enfants) et repas par plat, choix des variantes, apéro, `liste.js` + tests, placard, modes Drive et Magasin, « Courses terminées », « Imprimer » (menu + liste en PDF via le navigateur) | Une vraie commande drive préparée avec l'app |
+| T4 Congélateur & proposition | Stock, `congelateur.js` et `proposition.js` + tests, « Proposer » (repas et apéro, avec le pictogramme de cuisson de chaque plat proposé) + ajustements | « Proposer » couvre tous les repas de chacun, fin de semaine par le congélateur |
 | T5 Batch | `batch.js` + tests, vue par appareil, « Batch terminé » | Un vrai dimanche préparé avec l'écran batch |
 
 V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » (rythme d'achat par produit), plan de cuisson minuté, statistiques.
@@ -410,8 +413,10 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 - [x] T0 Socle — validé le 2026-10-05 sur le téléphone du gestionnaire (connexion, rôles, installation, mode avion) ; installation et avis sur le téléphone de l'utilisatrice des courses reportés à la fin du projet (décision du propriétaire)
 - [ ] T1 Plats, import & Découvrir — en trois livraisons :
   - [x] T1a profils, bibliothèque, fiche, ajout par nom (+ demande de recette), photo (appareil ou galerie), aperçu de la vue « Repas et courses » — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
-  - [ ] T1b « Ajouter des recettes » (coller la réponse de Claude, aperçu, enregistrement), « Demander à Claude » et « Coller la recette » sur la fiche
-  - [ ] T1c notes 0–5, Découvrir, modifier ou valider une fiche, sauvegarde et restauration par fichier
+  - [x] T1b « Ajouter des recettes » (coller la réponse de Claude, aperçu, enregistrement), « Demander à Claude » et « Coller la recette » sur la fiche — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
+  - [ ] T1c-1 pictogramme du mode de cuisson principal (liste des plats, fiche)
+  - [ ] T1c-2 « Modifier » une recette (les deux membres) et « Recette vérifiée »
+  - [ ] T1d notes 0–5, Découvrir, sauvegarde et restauration par fichier ; le critère « Fini quand » de T1 se vérifie ici
 - [ ] T2 Compatibilité & variantes
 - [ ] T3 Semaine, liste & apéro
 - [ ] T4 Congélateur & proposition
@@ -428,3 +433,5 @@ Décisions :
 - 2026-10-05 — T0 clos. L'utilisatrice des courses ne testera l'app qu'une fois terminée (décision du propriétaire) : risque d'adoption découvert tard, assumé.
 - 2026-10-05 — T1 redécoupé pour que chaque livraison se teste seule sur le téléphone du gestionnaire : T1b = ajout de recettes par collage ; T1c = notes, Découvrir, modification, sauvegarde et import de fichier. L'écran Demandes et les badges restent en T2, comme au §11 (le gestionnaire ne crée pas de demande lui-même). À trancher en T2 : en aperçu « Repas et courses », le gestionnaire crée une demande comme l'autre membre, pour pouvoir tester seul. Le critère « Fini quand » de T1 sera adapté en T1c.
 - 2026-10-05 — Maîtres mots du propriétaire (§1). Recettes modifiables par les deux membres (T1c) : ingrédients, quantités, unités, étapes, portions ; suggestions tirées des ingrédients connus, question « Viande / Poisson / Légume / Autre » pour un produit jamais vu ; un nouvel ajout depuis Claude signale qu'il remplace des modifications faites à la main. Personnes (adultes, enfants) et repas par plat, réglables depuis la semaine, et placard avec seuils (T3, §9).
+- 2026-10-05 — T1c redécoupé : « Modifier » d'abord (T1c), notes, Découvrir et sauvegarde ensuite (T1d). Un produit jamais vu ne demande que sa nature (« Viande / Poisson / Légume / Autre ») : une viande est « en morceaux » et un légume « fondu dans le plat » par défaut, modifiables ensuite.
+- 2026-10-05 — Pictogramme du mode de cuisson principal à côté de chaque plat, puis sur les plats de la semaine et les suggestions de « Proposer » (§4). Dessins au trait propres à l'app, validés par le propriétaire sur description, toujours accompagnés du nom de l'appareil ; livrés à part (T1c-1), avant « Modifier ».
