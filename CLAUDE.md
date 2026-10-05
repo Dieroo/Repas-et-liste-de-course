@@ -25,7 +25,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 - 2 adultes, Android + Chrome, comptes Google. 3 profils : les 2 adultes et 1 jeune enfant (noté par ses parents).
 - Deux rôles, déduits de l'adresse e-mail connectée (`reglages/foyer.gestionnaire`) :
   - le **gestionnaire** (« Recettes et réglages ») : ajoute les recettes (import, « Demander à Claude », « Coller la recette »), traite les demandes, règle l'app ; peut aussi tout ce que fait l'autre membre ;
-  - l'**utilisatrice des courses** (« Repas et courses ») : planifie la semaine (choix des plats, « Proposer », variantes, apéro, validation), fait les courses, ajoute des plats par leur nom, prend ou choisit les photos des plats, note les plats.
+  - l'**utilisatrice des courses** (« Repas et courses ») : planifie la semaine (choix des plats, « Proposer », variantes, apéro, validation), fait les courses, ajoute des plats par leur nom, prend ou choisit les photos des plats, note les plats, modifie les recettes (ingrédients, quantités, unités, étapes, portions, conservation).
 - Les deux peuvent organiser la semaine ; c'est surtout l'utilisatrice des courses qui le fait.
 - Courses le samedi, commandées au **drive** depuis l'application de l'enseigne (pas d'API disponible) ; parfois en magasin. Batch cooking le dimanche.
 - Apéro chaque week-end, avec des incontournables récurrents (boisson).
@@ -122,10 +122,10 @@ package.json              uniquement "type": "module" et le script de test
 |---|---|
 | `reglages/foyer` | `versionSchema: 1`, `gestionnaire` (e-mail), `debutSemaine`, `nbPlats {min, max}`, `dessertParSemaine` (0 ou 1), `frigoJoursDefaut` (3), `dureeBatchMaxMin`, `rayons[]` (ordre du parcours en magasin), `appareils[]`, `apero {actif, jour, nbSuggestions, incontournables[]}`, `drive {nom, urlRecherche}` (modèle contenant `{q}`), `notifications {ntfySujet}` |
 | `profils/{id}` | `nom`, `email` (facultatif, sert à reconnaître la personne connectée), `ordre`, `repas {midis: [jours], soirs: [jours]}`, `coefPortion` (1 adulte, 0,5 enfant), `regles[]` (§7) |
-| `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe` |
+| `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe`, `modifieeLe` et `modifieePar` (posés par « Modifier », effacés par un nouvel ajout depuis Claude) |
 | `photos/{platId}` | `image` (JPEG compressé dans le navigateur, 1024 px max, ~200 Ko max), `majPar`, `majLe` ; lu seulement à l'ouverture de la fiche, pour que la liste des plats reste légère |
-| `produits/{id}` | `nom`, `rayon`, `uniteDefaut`, `marqueurs[]`, `habituel {actif, qte, unite}`, `rechercheDrive` (terme de recherche personnalisé, facultatif), `achats[]` (dates, V2) |
-| `semaines/{dimancheISO}` | `statut` (`brouillon` → `validee` → `courses_faites` → `batch_fait`), `plats [{platId, portionsACuire, portionsACongeler}]`, `affectations {profilId: {"lun-soir": {platId, variante} ou {congelId}}}`, `apero {jour, platIds[]}`, `majPar`, `majLe` |
+| `produits/{id}` | `nom`, `rayon`, `uniteDefaut`, `marqueurs[]`, `habituel {actif, qte, unite}`, `rechercheDrive` (terme de recherche personnalisé, facultatif), `placard {actif, seuil, unite}` (§9 ; `seuil` vide = toujours proposé), `achats[]` (dates, V2) |
+| `semaines/{dimancheISO}` | `statut` (`brouillon` → `validee` → `courses_faites` → `batch_fait`), `plats [{platId, adultes, enfants, repas, portionsACuire, portionsACongeler}]` (`portionsACuire` = (`adultes` + `enfants` × `coefPortion` enfant, soit 0,5) × `repas`), `affectations {profilId: {"lun-soir": {platId, variante} ou {congelId}}}`, `apero {jour, platIds[]}`, `majPar`, `majLe` |
 | `semaines/{dimancheISO}/lignes/{cle}` | `produitId`, `libelle`, `qte`, `unite`, `rayon`, `sources [{type: plat, apero, habituel ou manuel, ref, pour}]`, `special` (vrai si lié aux plats ou à l'apéro de la semaine), `coche`, `manuel` |
 | `congelateur/{id}` | `platId`, `nom`, `portions`, `dateCongelation` |
 | `demandes/{id}` | `type` (`variante` ou `recette`), `platId`, `profilId` et `besoin` (`sans_viande` ou `avec_proteine`, variantes seulement), `creePar`, `creeLe`, `statut` (`ouverte` ou `traitee`), `traiteeLe` |
@@ -291,6 +291,7 @@ Vocabulaires fermés :
 - Grille : `id` et `nom` toujours ; `portionsBase` et `ingredients` sauf plat sans recette ; avec des ingrédients, le statut devient au moins `brouillon` ; `tempC` conseillé pour four et airfryer.
 - Plat visé : la cible (une seule recette collée), sinon le même `id` s'il s'agit du même plat (même nom, plat ⏳ ou demande ouverte), sinon le même nom, sinon un nouveau plat (identifiant libre `-2` si un autre plat, déjà rempli, utilise le sien). Deux recettes visant le même plat : erreur.
 - Écriture : seulement les champs présents (`mergeFields`), jamais `vignette` ni `notes`, jamais de table vide ni de valeur `undefined` ; demandes satisfaites closes dans un second lot (`update`, `statut: traitee`, `traiteeLe`).
+- Fiche modifiée à la main (`modifieeLe`) : l'aperçu annonce « Remplace les modifications faites à la main le … ».
 - Tout ou rien : la moindre erreur bloque l'enregistrement ; « Copier les corrections pour Claude » copie un texte avec les codes exacts. Les messages affichés n'emploient aucun mot technique (§4) ; le texte collé n'est jamais affiché.
 
 ```
@@ -321,7 +322,7 @@ besoin: sans_viande | avec_proteine
 ## 9. Algorithmes (`js/coeur/`, couverts par des tests)
 
 **Liste (`liste.js`)**
-1. Par plat retenu : facteur = (`portionsACuire` + `portionsACongeler`) / `portionsBase` ; chaque ingrédient × facteur.
+1. Par plat retenu : facteur = (`portionsACuire` + `portionsACongeler`) / `portionsBase` ; chaque ingrédient × facteur. `portionsACuire` vient du nombre d'adultes, d'enfants et de repas choisis pour le plat, réglables depuis la liste des plats de la semaine ; la liste est recalculée en direct.
 2. Variantes (explicites ou automatiques) : `ajouter` ou `par` × portions du profil concerné (× `coefPortion`) ; `retirer` ignoré dans les quantités (léger surplus assumé). Ligne étiquetée « pour <profil> ».
 3. Apéro de la semaine : ingrédients des fiches `apero` choisies + `apero.incontournables`.
 4. Préparations `hebdo` et habituels actifs ajoutés.
@@ -331,6 +332,24 @@ besoin: sans_viande | avec_proteine
    - **Drive** : « Spécial cette semaine » (`special`) puis « Habituels » ; chaque ligne a un bouton 🔍 qui ouvre `drive.urlRecherche` en remplaçant `{q}` par `encodeURIComponent(rechercheDrive || nom)`. Depuis la ligne, « Modifier la recherche » enregistre `rechercheDrive` sur le produit (ex. « pâtes courtes » → « penne ») : le bon terme sert toutes les semaines suivantes.
    - **Magasin** : par rayon (ordre des réglages), lignes cochées en bas, fonctionne hors ligne.
 8. Un plat ⏳ sélectionné n'apporte aucune ligne : bandeau « ingrédients à ajouter à la main ».
+9. **Placard** : un produit marqué `placard` dont le total de la semaine est sous son seuil va dans « Déjà à la maison ? », interrupteur éteint (non acheté par défaut, un toucher l'ajoute) ; au-delà du seuil, ligne normale. Équivalences approximatives, pour comparer au seuil seulement : pincée ≈ 0,5 g ; c. à café ≈ 5 g ou 5 ml ; c. à soupe ≈ 15 g ou 15 ml. Liste de départ ci-dessous, modifiable dans Réglages et enrichie d'un toucher « Toujours dans mon placard » depuis la liste de courses.
+
+   | Produit | Seuil de départ |
+   |---|---|
+   | Sel fin, poivre | toujours proposés (sans seuil) |
+   | Huile d'olive, huile neutre | 6 c. à soupe |
+   | Gros sel | 2 c. à soupe |
+   | Épices et herbes sèches (paprika, cumin, curry, curcuma, cannelle, muscade, piment d'Espelette, 4 épices, gingembre moulu, herbes de Provence, thym, laurier, origan) | 2 c. à café |
+   | Vinaigre (vin, balsamique, cidre), sauce soja | 4 c. à soupe |
+   | Moutarde, concentré de tomate, maïzena, miel, chapelure | 2 c. à soupe |
+   | Bouillon en cube, fond de veau, fumet | 2 cubes ou 2 c. à soupe |
+   | Sucre blanc ou roux | 30 g |
+   | Farine | 50 g |
+   | Levure chimique, sucre vanillé | 1 sachet |
+   | Extrait de vanille | 1 c. à café |
+   | Ail | 2 gousses |
+   | Beurre | 30 g |
+   | Lait | 10 cl |
 
 **Proposition (`proposition.js`)**
 1. Créneaux = repas de chaque profil sur la semaine, pondérés par `coefPortion`.
@@ -351,6 +370,8 @@ besoin: sans_viande | avec_proteine
 3. **Plats** : recherche, filtres (type, statut, compatibilité), ★ par profil, ajout par nom (→ ⏳ et demande de recette).
 4. **Découvrir** : §4.
 5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges et variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
+   - Fiche en lecture, un seul bouton « Modifier » (les deux membres) : ingrédients (ajouter, retirer, quantité, unité), étapes, portions, conservation.
+   - Ajout d'un ingrédient : suggestions dès les premières lettres, tirées de tous les ingrédients déjà connus, unité, rayon et nature préremplis ; pour un produit jamais vu, unité, rayon et une question « Viande / Poisson / Légume / Autre », une fois pour toutes.
 6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, sauvegarde).
 
 ## 11. Tranches
@@ -358,9 +379,9 @@ besoin: sans_viande | avec_proteine
 | | Contenu | Fini quand |
 |---|---|---|
 | T0 Socle | PWA installable, connexion Google, refus propre si adresse non autorisée, rôles, tokens et navigation du §4, indicateur hors ligne | Installée sur les 2 téléphones ; l'app s'ouvre en mode avion ; l'utilisatrice des courses trouve l'écran beau |
-| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom (+ demande de recette), notes 0–5, écran Découvrir, édition simple d'une fiche, photo de la fiche (prise ou choisie, compressée, par les deux membres), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
+| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom (+ demande de recette), notes 0–5, écran Découvrir, modification d'une fiche par les deux membres, photo de la fiche (prise ou choisie, compressée, par les deux membres), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
 | T2 Compatibilité & variantes | Règles des profils, substitutions, `compatibilite.js` + tests, badges, demandes, notification ntfy (variantes et recettes à ajouter) | Un plat aux lardons passe en ⚠️ « version saumon » pour le profil concerné ; une variante manquante déclenche une demande et une notification |
-| T3 Semaine, liste & apéro | Sélection manuelle, choix des variantes, apéro, `liste.js` + tests, modes Drive et Magasin, « Courses terminées », « Imprimer » (menu + liste en PDF via le navigateur) | Une vraie commande drive préparée avec l'app |
+| T3 Semaine, liste & apéro | Sélection manuelle, personnes (adultes, enfants) et repas par plat, choix des variantes, apéro, `liste.js` + tests, placard, modes Drive et Magasin, « Courses terminées », « Imprimer » (menu + liste en PDF via le navigateur) | Une vraie commande drive préparée avec l'app |
 | T4 Congélateur & proposition | Stock, `congelateur.js` et `proposition.js` + tests, « Proposer » (repas et apéro) + ajustements | « Proposer » couvre tous les repas de chacun, fin de semaine par le congélateur |
 | T5 Batch | `batch.js` + tests, vue par appareil, « Batch terminé » | Un vrai dimanche préparé avec l'écran batch |
 
@@ -406,3 +427,4 @@ Décisions :
 - 2026-10-05 — Filet de sécurité si l'app n'est pas adoptée : « Imprimer » sur Semaine (T3), menu + liste de courses en PDF via l'impression du navigateur, sans bibliothèque.
 - 2026-10-05 — T0 clos. L'utilisatrice des courses ne testera l'app qu'une fois terminée (décision du propriétaire) : risque d'adoption découvert tard, assumé.
 - 2026-10-05 — T1 redécoupé pour que chaque livraison se teste seule sur le téléphone du gestionnaire : T1b = ajout de recettes par collage ; T1c = notes, Découvrir, modification, sauvegarde et import de fichier. L'écran Demandes et les badges restent en T2, comme au §11 (le gestionnaire ne crée pas de demande lui-même). À trancher en T2 : en aperçu « Repas et courses », le gestionnaire crée une demande comme l'autre membre, pour pouvoir tester seul. Le critère « Fini quand » de T1 sera adapté en T1c.
+- 2026-10-05 — Maîtres mots du propriétaire (§1). Recettes modifiables par les deux membres (T1c) : ingrédients, quantités, unités, étapes, portions ; suggestions tirées des ingrédients connus, question « Viande / Poisson / Légume / Autre » pour un produit jamais vu ; un nouvel ajout depuis Claude signale qu'il remplace des modifications faites à la main. Personnes (adultes, enfants) et repas par plat, réglables depuis la semaine, et placard avec seuils (T3, §9).
