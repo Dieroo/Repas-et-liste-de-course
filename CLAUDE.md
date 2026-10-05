@@ -17,7 +17,10 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 ## 2. Contexte d'usage
 
 - 2 adultes, Android + Chrome, comptes Google. 3 profils : les 2 adultes et 1 jeune enfant (noté par ses parents).
-- Deux rôles, déduits de l'adresse e-mail connectée : le **gestionnaire** (planification, recettes, réglages, demandes) et l'**utilisatrice des courses** (vue simplifiée).
+- Deux rôles, déduits de l'adresse e-mail connectée (`reglages/foyer.gestionnaire`) :
+  - le **gestionnaire** (« Recettes et réglages ») : ajoute les recettes (import, « Demander à Claude », « Coller la recette »), traite les demandes, règle l'app ; peut aussi tout ce que fait l'autre membre ;
+  - l'**utilisatrice des courses** (« Repas et courses ») : planifie la semaine (choix des plats, « Proposer », variantes, apéro, validation), fait les courses, ajoute des plats par leur nom, prend ou choisit les photos des plats, note les plats.
+- Les deux peuvent organiser la semaine ; c'est surtout l'utilisatrice des courses qui le fait.
 - Courses le samedi, commandées au **drive** depuis l'application de l'enseigne (pas d'API disponible) ; parfois en magasin. Batch cooking le dimanche.
 - Apéro chaque week-end, avec des incontournables récurrents (boisson).
 - Un plat tient ~3 jours au frigo (réglable par fiche) : la fin de semaine est couverte par le congélateur, alimenté par les surplus du batch.
@@ -46,7 +49,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 **Navigation**
 - Barre d'onglets en bas : **Semaine · Courses · Plats · Découvrir**. Batch, Congélateur, Demandes et Réglages s'ouvrent depuis Semaine ou l'icône de profil.
 - Accueil « Semaine » : en tête, le repas de chacun ce soir, puis une carte « prochaine action » qui suit le calendrier (samedi : « Courses : 32 articles » ; dimanche : « Batch : 4 plats »).
-- Vue simplifiée pour l'utilisatrice des courses : ni import, ni réglages, ni « Demander à Claude ».
+- Vue de l'utilisatrice des courses : ni import, ni réglages, ni « Demander à Claude », ni Demandes. Elle planifie la semaine : Semaine et Plats doivent rester aussi simples que Courses.
 
 **Ton**
 - Phrases courtes et chaleureuses. Jamais affichés : « paquet », « slug », « JSON », « IA ». L'import s'appelle « Ajouter des recettes ».
@@ -114,10 +117,10 @@ package.json              uniquement "type": "module" et le script de test
 | `semaines/{dimancheISO}` | `statut` (`brouillon` → `validee` → `courses_faites` → `batch_fait`), `plats [{platId, portionsACuire, portionsACongeler}]`, `affectations {profilId: {"lun-soir": {platId, variante} ou {congelId}}}`, `apero {jour, platIds[]}`, `majPar`, `majLe` |
 | `semaines/{dimancheISO}/lignes/{cle}` | `produitId`, `libelle`, `qte`, `unite`, `rayon`, `sources [{type: plat, apero, habituel ou manuel, ref, pour}]`, `special` (vrai si lié aux plats ou à l'apéro de la semaine), `coche`, `manuel` |
 | `congelateur/{id}` | `platId`, `nom`, `portions`, `dateCongelation` |
-| `demandes/{id}` | `type: "variante"`, `platId`, `profilId`, `besoin` (`sans_viande` ou `avec_proteine`), `creePar`, `creeLe`, `statut` (`ouverte` ou `traitee`) |
+| `demandes/{id}` | `type` (`variante` ou `recette`), `platId`, `profilId` et `besoin` (`sans_viande` ou `avec_proteine`, variantes seulement), `creePar`, `creeLe`, `statut` (`ouverte` ou `traitee`) |
 
 - Jours : `dim` `lun` `mar` `mer` `jeu` `ven` `sam` ; moments : `midi` `soir`.
-- Identifiants : `plats` et `produits` = slug du nom (`carbonade-flamande`), stables. `demandes` : `platId__profilId` (une seule demande ouverte par plat et profil).
+- Identifiants : `plats` et `produits` = slug du nom (`carbonade-flamande`), stables. `demandes` : `platId__profilId` pour une variante (une seule demande ouverte par plat et profil), `platId__recette` pour une recette à ajouter.
 - **Une ligne de liste = un document** : deux personnes peuvent cocher en même temps sans conflit. `cle` = `produitId__unite` pour les lignes générées, aléatoire pour les manuelles.
 - `appareils[]` par défaut : `plaque` ×4 · `four` ×1 (2 plats simultanés si même température) · `cookeo` ×1 · `airfryer` ×1 · `monsieur_cuisine` (inactif).
 
@@ -189,7 +192,8 @@ Sens inverse : un plat sans viande ni poisson affecté à un profil qui a `prote
 
 **Demandes et notification**
 - Badge « Demandes » sur l'accueil du gestionnaire, mis à jour en temps réel ; écran Demandes avec bouton « Demander à Claude » (texte §8).
-- Si `notifications.ntfySujet` est défini et que la demande vient d'un autre membre que le gestionnaire : `fetch('https://ntfy.sh/' + sujet, { method: 'POST', body: 'Recette à ajouter : <plat> — version <profil>' })`. Message minimal, rien d'autre. Échec silencieux (la demande reste visible dans l'app).
+- Plat ajouté par son nom (⏳) par l'utilisatrice des courses → `demande` `type: "recette"` ; elle passe `traitee` dès que la fiche reçoit ses ingrédients (import).
+- Si `notifications.ntfySujet` est défini et que la demande vient d'un autre membre que le gestionnaire : `fetch('https://ntfy.sh/' + sujet, { method: 'POST', body })` avec `body` = `Recette à ajouter : <plat> — version <profil>` (variante) ou `Recette à ajouter : <plat>` (recette). Message minimal, rien d'autre. Échec silencieux (la demande reste visible dans l'app).
 - Une demande passe `traitee` dès que la fiche reçoit la variante (import).
 
 ## 8. Format d'import `paquet@1`
@@ -316,11 +320,11 @@ besoin: sans_viande | avec_proteine
 
 ## 10. Écrans
 
-1. **Semaine** (accueil) : ce soir pour chacun, carte « prochaine action », grille jours × profils, apéro du week-end, « Proposer », badges ⏳ et Demandes (gestionnaire).
+1. **Semaine** (accueil) : ce soir pour chacun, carte « prochaine action », grille jours × profils, apéro du week-end, « Proposer » (les deux membres), « Imprimer » (menu de la semaine et apéro, puis liste de courses par rayon, sur une page pensée pour l'impression ; `window.print()` → « Enregistrer au format PDF » de Chrome, à envoyer), badges ⏳ et Demandes (gestionnaire).
 2. **Courses** : bascule Drive / Magasin, grandes cases à cocher, ajout rapide, origine visible (plat, apéro, habituel).
-3. **Plats** : recherche, filtres (type, statut, compatibilité), ★ par profil, ajout par nom (→ ⏳).
+3. **Plats** : recherche, filtres (type, statut, compatibilité), ★ par profil, ajout par nom (→ ⏳ et demande de recette).
 4. **Découvrir** : §4.
-5. **Fiche** : recette, badges et variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
+5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges et variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
 6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, sauvegarde).
 
 ## 11. Tranches
@@ -328,9 +332,9 @@ besoin: sans_viande | avec_proteine
 | | Contenu | Fini quand |
 |---|---|---|
 | T0 Socle | PWA installable, connexion Google, refus propre si adresse non autorisée, rôles, tokens et navigation du §4, indicateur hors ligne | Installée sur les 2 téléphones ; l'app s'ouvre en mode avion ; l'utilisatrice des courses trouve l'écran beau |
-| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom, notes 0–5, écran Découvrir, édition simple d'une fiche, photo de la fiche (prise ou choisie, compressée), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
-| T2 Compatibilité & variantes | Règles des profils, substitutions, `compatibilite.js` + tests, badges, demandes, notification ntfy | Un plat aux lardons passe en ⚠️ « version saumon » pour le profil concerné ; une variante manquante déclenche une demande et une notification |
-| T3 Semaine, liste & apéro | Sélection manuelle, choix des variantes, apéro, `liste.js` + tests, modes Drive et Magasin, « Courses terminées » | Une vraie commande drive préparée avec l'app |
+| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom (+ demande de recette), notes 0–5, écran Découvrir, édition simple d'une fiche, photo de la fiche (prise ou choisie, compressée, par les deux membres), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
+| T2 Compatibilité & variantes | Règles des profils, substitutions, `compatibilite.js` + tests, badges, demandes, notification ntfy (variantes et recettes à ajouter) | Un plat aux lardons passe en ⚠️ « version saumon » pour le profil concerné ; une variante manquante déclenche une demande et une notification |
+| T3 Semaine, liste & apéro | Sélection manuelle, choix des variantes, apéro, `liste.js` + tests, modes Drive et Magasin, « Courses terminées », « Imprimer » (menu + liste en PDF via le navigateur) | Une vraie commande drive préparée avec l'app |
 | T4 Congélateur & proposition | Stock, `congelateur.js` et `proposition.js` + tests, « Proposer » (repas et apéro) + ajustements | « Proposer » couvre tous les repas de chacun, fin de semaine par le congélateur |
 | T5 Batch | `batch.js` + tests, vue par appareil, « Batch terminé » | Un vrai dimanche préparé avec l'écran batch |
 
@@ -366,6 +370,8 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 Décisions :
 - 2026-10-04 — Stack validée : PWA vanilla + Firestore + GitHub Pages. Recettes produites par un Projet Claude au format `paquet@1`.
 - 2026-10-05 — Apéro hebdomadaire ; variantes automatiques par substitution et demandes de variante notifiées (ntfy) ; mode Drive sans API (lien de recherche) ; direction visuelle « cuisine familiale » ; écran Découvrir ; vue simplifiée pour l'utilisatrice des courses.
-- 2026-10-05 — Gestionnaire désigné à la première ouverture : tant que `reglages/foyer` n'existe pas, « C'est moi qui planifie » le crée (transaction, jamais d'écrasement). Mise en ligne : pull request de la branche de travail vers `main`, fusionnée par le propriétaire.
+- 2026-10-05 — Gestionnaire désigné à la première ouverture : tant que `reglages/foyer` n'existe pas, « C'est moi » le crée (transaction, jamais d'écrasement). Mise en ligne : pull request de la branche de travail vers `main`, fusionnée par le propriétaire.
 - 2026-10-05 — Photo par recette avancée de V2 à T1 : image compressée dans `photos/{platId}` (Firestore ; Firebase Storage demanderait le forfait payant Blaze), vignette légère dans la fiche ; photos hors `paquet@1`.
 - 2026-10-05 — Socle : connexion par fenêtre uniquement (`initializeAuth` sans résolveur au démarrage, pour ne pas ralentir l'ouverture sur téléphone) ; service worker en cache d'abord, mise à jour d'un bloc via `VERSION` = empreinte des fichiers (vérifiée par `npm test`) ; caches préfixés `repas-courses-` et réparés à l'ouverture, car le domaine github.io est partagé avec d'autres apps du compte ; un compte jamais confirmé par le serveur ne voit pas la copie locale.
+- 2026-10-05 — Rôles réels du foyer : l'utilisatrice des courses planifie aussi la semaine, ajoute les plats par leur nom et les photos ; le gestionnaire ajoute les recettes (import, « Demander à Claude »), traite les demandes et règle l'app. Les deux peuvent organiser la semaine. Un plat ajouté par son nom crée une demande de recette, notifiée au gestionnaire (ntfy, T2). Libellés : « Recettes et réglages » et « Repas et courses ».
+- 2026-10-05 — Filet de sécurité si l'app n'est pas adoptée : « Imprimer » sur Semaine (T3), menu + liste de courses en PDF via l'impression du navigateur, sans bibliothèque.
