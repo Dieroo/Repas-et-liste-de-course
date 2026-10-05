@@ -68,6 +68,7 @@ const etat = {
   erreurCreation: null,
   collectionsSuivies: false,
   profils: [],
+  profilsCharges: false,
   plats: [],
   platsCharges: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
@@ -76,6 +77,8 @@ const etat = {
 let cleAffichee = '';
 let vueCourante = null;
 let minuteurInjoignable = null;
+let routeAffichee = '';
+let routePrecedente = '';
 
 // ——— Comptes confirmés ———
 
@@ -113,6 +116,7 @@ function monter(cle, fabriquer, { dansApp = false, titre = NOM_APP, ctx = null }
   boutonProfil.hidden = !dansApp;
   if (!dansApp) bandeauApercu.hidden = true;
   if (!dansApp && panneauProfil.open) panneauProfil.close();
+  document.title = titre;
   if (cle === cleAffichee) {
     if (ctx) vueCourante?.maj?.(ctx);
     return;
@@ -120,14 +124,14 @@ function monter(cle, fabriquer, { dansApp = false, titre = NOM_APP, ctx = null }
 
   const changementDEcran = cle.split('|')[0] !== cleAffichee.split('|')[0];
   const focusDansLEcran = zone.contains(document.activeElement);
+  // L'ancien écran note ce qu'il veut retrouver (défilement…) avant que le nouveau soit construit.
   vueCourante?.detruire?.();
-  cleAffichee = cle;
-  document.title = titre;
   const fabrique = fabriquer();
   vueCourante = fabrique instanceof Node ? { noeud: fabrique } : fabrique;
+  cleAffichee = cle;
   if (changementDEcran) vueCourante.noeud.classList.add('entree');
   zone.replaceChildren(vueCourante.noeud);
-  if (changementDEcran && dansApp) window.scrollTo(0, 0);
+  if (changementDEcran && dansApp) window.scrollTo(0, vueCourante.defilement ?? 0);
   if ((changementDEcran && dansApp) || focusDansLEcran) zone.focus({ preventScroll: true });
 }
 
@@ -218,6 +222,11 @@ function rendreApp() {
   const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
   if (location.hash !== hashAttendu) history.replaceState(null, '', hashAttendu);
 
+  if (route !== routeAffichee) {
+    routePrecedente = routeAffichee;
+    routeAffichee = route;
+  }
+
   const { titre, module, onglet: ongletActif } = ECRANS[route];
   for (const onglet of onglets.querySelectorAll('[data-route]')) {
     if (onglet.dataset.route === ongletActif) onglet.setAttribute('aria-current', 'page');
@@ -232,15 +241,19 @@ function rendreApp() {
     roleReel,
     reglages: reglagesFoyer,
     profils: etat.profils,
+    profilsCharges: etat.profilsCharges,
     plats: etat.plats,
     platsCharges: etat.platsCharges,
     parametre,
+    routePrecedente,
     actions,
   };
 
-  // La date et la salutation font partie de la clé : l'écran se met à jour si l'app reprend plus tard.
+  // Semaine : la date et la salutation font partie de la clé, l'écran se met à jour si l'app reprend plus tard.
   const maintenant = new Date();
-  const moment = `${maintenant.toDateString()}-${maintenant.getHours() >= 18 || maintenant.getHours() < 5}`;
+  const moment = route === 'semaine'
+    ? `${maintenant.toDateString()}-${maintenant.getHours() >= 18 || maintenant.getHours() < 5}`
+    : '';
   const cle = `${route}/${parametre}|${role}|${roleReel}|${utilisateur.uid}|${moment}`;
   const titrePage = route === 'plat' ? etat.plats.find((p) => p.id === parametre)?.nom ?? titre : titre;
   monter(cle, () => (module.creer ? module.creer(ctx) : module.afficher(ctx)), {
@@ -264,6 +277,8 @@ const actions = {
     const demanderRecette = roleDe(etat.utilisateur.email, etat.donnees.reglages) !== 'gestionnaire';
     ecrire(donnees.ajouterPlat(resultat.plat, etat.utilisateur.email, { demanderRecette }),
       'Le plat n’a pas pu être enregistré. Réessayez.');
+    // Affiché tout de suite ; la copie de Firestore remplace cette version dès son arrivée.
+    etat.plats = [...etat.plats, resultat.plat];
     annoncer(demanderRecette
       ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée.`
       : `«\u00A0${resultat.plat.nom}\u00A0» ajouté.`);
@@ -315,6 +330,7 @@ function oublierDonnees() {
     donnees: { statut: 'chargement' },
     collectionsSuivies: false,
     profils: [],
+    profilsCharges: false,
     plats: [],
     platsCharges: false,
     apercu: false,
@@ -371,9 +387,15 @@ function suivreDonnees() {
       donnees.suivreCollections((maj) => {
         Object.assign(etat, maj);
         if (maj.plats) etat.platsCharges = true;
+        if (maj.profils) etat.profilsCharges = true;
+        rendre();
+      }, (code) => {
+        donnees.arreterCollections();
+        etat.collectionsSuivies = false;
+        etat.donnees = { statut: 'erreur', code };
         rendre();
       });
-    } else if (suivi.statut === 'refuse' && etat.collectionsSuivies) {
+    } else if ((suivi.statut === 'refuse' || suivi.statut === 'erreur') && etat.collectionsSuivies) {
       donnees.arreterCollections();
       etat.collectionsSuivies = false;
     }

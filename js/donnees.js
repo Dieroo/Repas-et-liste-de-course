@@ -65,15 +65,17 @@ export function devenirGestionnaire(email) {
 /**
  * Suit les profils et les plats en temps réel (un abonnement par collection).
  * rappel({ profils }) ou rappel({ plats }) à chaque changement, documents sous la forme { id, ...champs }.
+ * surErreur(code) si une écoute s'arrête pour une autre raison qu'un accès refusé (géré par reglages/foyer).
  */
-export function suivreCollections(rappel) {
+export function suivreCollections(rappel, surErreur) {
   arreterCollections();
   for (const nom of ['profils', 'plats']) {
     arretsCollections.push(onSnapshot(
       collection(db, nom),
       (instantane) => rappel({ [nom]: instantane.docs.map((d) => ({ ...d.data(), id: d.id })) }),
-      // Accès refusé ou autre erreur : l'écran d'état vient de reglages/foyer, rien à faire ici.
-      () => {},
+      (erreur) => {
+        if (erreur?.code !== 'permission-denied') surErreur(erreur?.code ?? '');
+      },
     ));
   }
 }
@@ -84,11 +86,16 @@ export function arreterCollections() {
 
 /** Suit la photo d'un plat (lue seulement quand sa fiche est ouverte). → fonction d'arrêt. */
 export function suivrePhoto(platId, rappel) {
-  return onSnapshot(
-    doc(db, 'photos', platId),
-    (instantane) => rappel(instantane.exists() ? instantane.data() : null),
-    () => rappel(null),
-  );
+  try {
+    return onSnapshot(
+      doc(db, 'photos', platId),
+      (instantane) => rappel(instantane.exists() ? instantane.data() : null),
+      () => rappel(null),
+    );
+  } catch {
+    rappel(null);
+    return () => {};
+  }
 }
 
 // ——— Écritures ———
@@ -99,10 +106,14 @@ function trace(auteur) {
   return { majPar: auteur, majLe: serverTimestamp() };
 }
 
-/** Ajoute un plat ⏳ ; si l'auteur n'est pas le gestionnaire, crée aussi la demande de recette. */
+/**
+ * Ajoute un plat par son nom ({ id, nom } : statut ⏳ par défaut). Écriture fusionnée : si l'autre téléphone a
+ * créé ce plat entre-temps, sa recette, ses notes et sa photo restent intactes.
+ * Si l'auteur n'est pas le gestionnaire, crée aussi la demande de recette.
+ */
 export function ajouterPlat(plat, auteur, { demanderRecette }) {
   const lot = writeBatch(db);
-  lot.set(doc(db, 'plats', plat.id), { ...plat, ...trace(auteur) });
+  lot.set(doc(db, 'plats', plat.id), { id: plat.id, nom: plat.nom, ...trace(auteur) }, { merge: true });
   if (demanderRecette) {
     const demande = demandeDeRecette(plat.id, auteur);
     lot.set(doc(db, 'demandes', demande.id), { ...demande.donnees, creeLe: serverTimestamp() });
