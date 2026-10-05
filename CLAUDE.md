@@ -14,6 +14,12 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 
 **Critère de réussite n°1 : la personne qui fait les courses l'adopte, alors qu'elle n'est pas convaincue par ce genre d'outil.** Simplicité, clarté et beauté passent avant le nombre de fonctionnalités. Chaque écran a une action principale évidente.
 
+**Maîtres mots du propriétaire** (à appliquer à chaque écran) :
+- une vraie application, belle ;
+- très simple et intuitive ;
+- tout est ajustable et modifiable ;
+- une base de données qui s'enrichit à l'usage : chaque recette, ingrédient ou réglage saisi resservira ensuite (suggestions, valeurs préremplies) au lieu d'être redemandé.
+
 ## 2. Contexte d'usage
 
 - 2 adultes, Android + Chrome, comptes Google. 3 profils : les 2 adultes et 1 jeune enfant (noté par ses parents).
