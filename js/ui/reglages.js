@@ -147,7 +147,7 @@ export function creer(ctx) {
         emoji: '⚙️',
         teinte: 'olive',
         titre: 'D’autres réglages arrivent',
-        texte: 'Les rayons du magasin, l’ajout de recettes et la sauvegarde trouveront leur place ici.',
+        texte: 'Les rayons du magasin, les appareils et la sauvegarde trouveront leur place ici.',
       }),
     ),
     maj(nouveau) {

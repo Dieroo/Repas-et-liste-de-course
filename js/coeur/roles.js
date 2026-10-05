@@ -3,8 +3,12 @@
 export const ROUTE_PAR_DEFAUT = 'semaine';
 
 // Écrans connus, et ceux réservés au gestionnaire.
-const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'decouvrir', 'reglages'];
-const ROUTES_GESTIONNAIRE = ['reglages'];
+const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'decouvrir', 'reglages', 'import'];
+const ROUTES_GESTIONNAIRE = ['reglages', 'import'];
+
+// Écrans qui reçoivent l'identifiant d'un plat : « #/plat/<id> » (obligatoire), « #/import/<id> » (facultatif).
+export const ROUTES_AVEC_PARAMETRE = ['plat', 'import'];
+const PARAMETRE_VALIDE = /^[a-z0-9-]+$/;
 
 /** Adresse comparable : sans espaces autour, en minuscules ; '' si absente. */
 export function normaliserEmail(email) {
@@ -55,6 +59,13 @@ export function lireHash(hash) {
 export function resoudreRoute(hash, role) {
   const { route, parametre } = lireHash(hash);
   // Fiche d'un plat : identifiant au format slug seulement (sinon la liste des plats).
-  if (route === 'plat' && !/^[a-z0-9-]+$/.test(parametre)) return routeAutorisee('plats', role) ? 'plats' : ROUTE_PAR_DEFAUT;
+  if (route === 'plat' && !PARAMETRE_VALIDE.test(parametre)) return routeAutorisee('plats', role) ? 'plats' : ROUTE_PAR_DEFAUT;
   return routeAutorisee(route, role) ? route : ROUTE_PAR_DEFAUT;
+}
+
+/** Paramètre retenu pour un écran : l'identifiant du plat s'il est valide, sinon ''. */
+export function parametreDe(hash, route) {
+  if (!ROUTES_AVEC_PARAMETRE.includes(route)) return '';
+  const { route: demandee, parametre } = lireHash(hash);
+  return demandee === route && PARAMETRE_VALIDE.test(parametre) ? parametre : '';
 }

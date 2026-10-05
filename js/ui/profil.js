@@ -18,7 +18,7 @@ const LIBELLES_ROLE = {
 };
 
 /** Remplit et ouvre le panneau du profil. `role` est le rôle réel ; `apercu` : vue « Repas et courses » affichée. */
-export function ouvrirProfil(dialogue, { utilisateur, role, apercu, onReglages, onApercu, onDeconnecter }) {
+export function ouvrirProfil(dialogue, { utilisateur, role, apercu, onReglages, onAjouterRecettes, onApercu, onDeconnecter }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
   const bouton = (texte, action, classe = 'bouton-secondaire') => el('button', {
@@ -38,6 +38,7 @@ export function ouvrirProfil(dialogue, { utilisateur, role, apercu, onReglages, 
         ),
       ),
       el('p', { class: 'etiquette' }, LIBELLES_ROLE[role] ?? ''),
+      role === 'gestionnaire' && !apercu ? bouton('📋 Ajouter des recettes', onAjouterRecettes) : null,
       role === 'gestionnaire' && !apercu ? bouton('⚙️ Réglages', onReglages) : null,
       role === 'gestionnaire'
         ? bouton(apercu ? 'Quitter l’aperçu' : `👀 Aperçu de la vue «\u00A0${LIBELLES_ROLE.courses}\u00A0»`, () => onApercu(!apercu))

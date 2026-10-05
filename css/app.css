@@ -271,6 +271,7 @@ body:not(.dans-app) main {
 }
 
 .carte-ligne {
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 16px;
@@ -855,6 +856,17 @@ body:not(.dans-app) main {
 
 .badge-attente { background: var(--ocre-doux); }
 .badge-brouillon { background: var(--bleu-doux); }
+.badge-nouveau { background: var(--olive-doux); }
+.badge-complete { background: var(--ocre-doux); }
+.badge-remplace { background: var(--bleu-doux); }
+
+/* Recette d'une fiche (gestionnaire) : demander à Claude, coller sa réponse. */
+.actions-recette {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 
 .fiche-section {
   display: flex;
@@ -1122,3 +1134,92 @@ body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom));
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ——— Ajouter des recettes ——— */
+
+/* Zone de copie de secours : hors de la vue, jamais lue. */
+.hors-ecran {
+  position: fixed;
+  top: 0;
+  left: -9999px;
+  opacity: 0;
+}
+
+.collage-manuel > :not(summary) { margin-top: 8px; }
+
+.collage-manuel summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  color: var(--texte-doux);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Flèche de dépliage (le marqueur natif disparaît avec display: flex). */
+.collage-manuel summary { list-style: none; }
+.collage-manuel summary::-webkit-details-marker { display: none; }
+.collage-manuel summary::before { content: '▸'; width: 1.25em; }
+.collage-manuel[open] > summary::before { content: '▾'; }
+
+.zone-collage {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.ligne-collee {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding-left: 4px;
+  color: var(--olive);
+  font-weight: 600;
+}
+
+.resultat-import:empty { display: none; }
+
+.resultat-import h2:focus { outline: none; }
+
+.resultat-erreur { border-color: var(--accent); }
+
+.liste-erreurs,
+.liste-avertissements,
+.liste-apercu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liste-erreurs li {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--accent-doux);
+}
+
+.liste-avertissements li {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+}
+
+.apercu-plat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  border-top: 1px solid var(--bordure);
+}
+
+.apercu-plat:first-child { border-top: none; padding-top: 0; }
+
+.apercu-nom {
+  font-family: var(--police-titre);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.apercu-plat .badges { margin-top: 0; }

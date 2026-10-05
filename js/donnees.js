@@ -60,16 +60,17 @@ export function devenirGestionnaire(email) {
   });
 }
 
-// ——— Collections partagées (profils, plats) ———
+// ——— Collections partagées (profils, plats, demandes) ———
 
 /**
- * Suit les profils et les plats en temps réel (un abonnement par collection).
- * rappel({ profils }) ou rappel({ plats }) à chaque changement, documents sous la forme { id, ...champs }.
+ * Suit les profils, les plats et les demandes en temps réel (un abonnement par collection).
+ * rappel({ profils }), rappel({ plats }) ou rappel({ demandes }) à chaque changement, documents sous la forme
+ * { id, ...champs }.
  * surErreur(code) si une écoute s'arrête pour une autre raison qu'un accès refusé (géré par reglages/foyer).
  */
 export function suivreCollections(rappel, surErreur) {
   arreterCollections();
-  for (const nom of ['profils', 'plats']) {
+  for (const nom of ['profils', 'plats', 'demandes']) {
     arretsCollections.push(onSnapshot(
       collection(db, nom),
       (instantane) => rappel({ [nom]: instantane.docs.map((d) => ({ ...d.data(), id: d.id })) }),
@@ -134,6 +135,38 @@ export function retirerPhoto(platId, auteur) {
   lot.delete(doc(db, 'photos', platId));
   lot.update(doc(db, 'plats', platId), { vignette: deleteField(), ...trace(auteur) });
   return lot.commit();
+}
+
+/**
+ * Enregistre des recettes (CLAUDE.md §8). Seuls les champs présents sont écrits (`mergeFields`) : les autres
+ * (notes, photo, champs absents de la recette) restent intacts. Les demandes satisfaites sont closes dans un
+ * second lot, par `update` : son échec ne touche pas aux recettes et ne peut pas recréer une demande disparue.
+ * → promesse de l'envoi des recettes (rejetée aussi si le lot n'a pas pu être construit).
+ */
+export function importer({ ecritures, demandesAClore }, auteur) {
+  let envoi;
+  try {
+    const lot = writeBatch(db);
+    for (const { id, donnees } of ecritures) {
+      const document = { ...donnees, id, ...trace(auteur) };
+      lot.set(doc(db, 'plats', id), document, { mergeFields: Object.keys(document) });
+    }
+    envoi = lot.commit();
+  } catch (erreur) {
+    return Promise.reject(erreur);
+  }
+  if (demandesAClore.length) {
+    try {
+      const lot = writeBatch(db);
+      for (const id of demandesAClore) lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
+      lot.commit().catch(() => {
+        // La demande reste ouverte ; elle sera close au prochain ajout de la recette.
+      });
+    } catch {
+      // Idem.
+    }
+  }
+  return envoi;
 }
 
 export function enregistrerProfil(profil) {

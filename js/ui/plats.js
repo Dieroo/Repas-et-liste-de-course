@@ -182,6 +182,10 @@ export function creer(ctx) {
     noeud: el('div', { class: 'vue' },
       el('header', { class: 'vue-entete' }, el('h1', {}, 'Plats'), compteur),
       champRecherche,
+      // Action propre au gestionnaire : ajouter les recettes rendues par son projet Claude.
+      ctx.role === 'gestionnaire'
+        ? el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/import' }, '📋 Ajouter des recettes')
+        : null,
       el('div', { class: 'puces', role: 'group', 'aria-label': 'Afficher' }, boutonsFiltre),
       zoneMessage,
       liste,
