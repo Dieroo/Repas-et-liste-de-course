@@ -54,6 +54,7 @@ export function lireHash(hash) {
 /** Écran à afficher pour un hash (« #/courses ») : l'écran demandé s'il est permis, sinon l'accueil. */
 export function resoudreRoute(hash, role) {
   const { route, parametre } = lireHash(hash);
-  if (route === 'plat' && !parametre) return routeAutorisee('plats', role) ? 'plats' : ROUTE_PAR_DEFAUT;
+  // Fiche d'un plat : identifiant au format slug seulement (sinon la liste des plats).
+  if (route === 'plat' && !/^[a-z0-9-]+$/.test(parametre)) return routeAutorisee('plats', role) ? 'plats' : ROUTE_PAR_DEFAUT;
   return routeAutorisee(route, role) ? route : ROUTE_PAR_DEFAUT;
 }

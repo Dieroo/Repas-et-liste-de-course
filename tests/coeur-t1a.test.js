@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { slug, sansAccents, correspond } from '../js/coeur/slug.js';
 import {
   categorieDuPlat, visuelDuPlat, filtrerPlats, nouveauPlatParNom, demandeDeRecette,
-  quantiteLisible, cuissonLisible, NOM_MAX,
+  quantiteLisible, cuissonLisible, statutDe, typeDe, NOM_MAX,
 } from '../js/coeur/plats.js';
 import { trierProfils, profilDeLEmail, preparerProfil, libellePortion } from '../js/coeur/profils.js';
-import { dimensionsReduites, carreCentral } from '../js/coeur/photo.js';
+import { dimensionsReduites, carreCentral, tailleStockee, PHOTO, VIGNETTE } from '../js/coeur/photo.js';
 import { lireHash, resoudreRoute, roleEffectif, routeAutorisee } from '../js/coeur/roles.js';
 
 // ——— slug.js ———
@@ -27,6 +27,9 @@ test('sansAccents et correspond : recherche tolérante', () => {
   assert.equal(correspond('Crème brûlée', 'brulee creme'), true);
   assert.equal(correspond('Crème brûlée', 'chocolat'), false);
   assert.equal(correspond('Tout plat', ''), true);
+  assert.equal(correspond('Gratin d’aubergines', "d'aubergines"), true);
+  assert.equal(correspond('Pot au feu', 'pot-au-feu'), true);
+  assert.equal(correspond('Pot-au-feu', 'pot au feu'), true);
 });
 
 // ——— plats.js ———
@@ -43,6 +46,18 @@ test('categorieDuPlat : type d’abord, puis forme, puis poisson', () => {
   assert.equal(categorieDuPlat({ type: 'plat', nom: 'Carbonade flamande' }), 'mijote');
   assert.equal(categorieDuPlat({ nom: 'Sans type' }), 'mijote');
   assert.equal(categorieDuPlat({ type: 'inconnu', nom: 'X' }), 'mijote');
+  assert.equal(categorieDuPlat({ nom: 'Soupe de poissons' }), 'poisson');
+  assert.equal(categorieDuPlat({ nom: 'Gratins de courgettes' }), 'gratin');
+  assert.equal(categorieDuPlat({ nom: 'Mini-quiches' }), 'gratin');
+  assert.equal(categorieDuPlat({ nom: 'Moules marinières' }), 'poisson');
+  assert.equal(categorieDuPlat({ nom: 'Hachis parmentier' }), 'gratin');
+});
+
+test('typeDe et statutDe : valeurs par défaut d’un plat ajouté par son nom', () => {
+  assert.equal(typeDe({ id: 'x', nom: 'X' }), 'plat');
+  assert.equal(statutDe({ id: 'x', nom: 'X' }), 'attente');
+  assert.equal(statutDe({ statutRecette: 'validee' }), 'validee');
+  assert.equal(statutDe({ statutRecette: 'inconnu' }), 'attente');
 });
 
 test('visuelDuPlat : emoji et teinte', () => {
@@ -65,14 +80,24 @@ test('filtrerPlats : tri par nom, filtres et recherche', () => {
   assert.deepEqual(filtrerPlats(catalogue, { recherche: 'boeuf' }).map((p) => p.id), ['boeuf']);
   assert.deepEqual(filtrerPlats(catalogue, { filtre: 'dessert', recherche: 'flam' }), []);
   assert.deepEqual(filtrerPlats(undefined), []);
+  assert.deepEqual(filtrerPlats([{ id: 'x', nom: 'X' }], { filtre: 'attente' }).map((p) => p.id), ['x']);
+  assert.deepEqual(filtrerPlats([{ id: 'x', nom: 'X' }], { filtre: 'plat' }).map((p) => p.id), ['x']);
 });
 
-test('nouveauPlatParNom : plat ⏳ prêt à enregistrer', () => {
+test('nouveauPlatParNom : seulement l’identifiant et le nom', () => {
   const { plat } = nouveauPlatParNom('  Gratin   dauphinois ', catalogue);
-  assert.deepEqual(plat, {
-    id: 'gratin-dauphinois', nom: 'Gratin dauphinois', type: 'plat', recurrence: 'aucune',
-    statutRecette: 'attente', ingredients: [], etapes: [], notes: {},
-  });
+  assert.deepEqual(plat, { id: 'gratin-dauphinois', nom: 'Gratin dauphinois' });
+});
+
+test('nouveauPlatParNom : doublon reconnu par le nom, même si l’identifiant diffère', () => {
+  const plats = [{ id: 'gratin-pates-jambon', nom: 'Gratin de pâtes au jambon' }];
+  const doublon = nouveauPlatParNom('gratin de PATES au jambon', plats);
+  assert.equal(doublon.existant, 'gratin-pates-jambon');
+});
+
+test('nouveauPlatParNom : identifiant déjà pris par un autre nom → identifiant libre', () => {
+  const plats = [{ id: 'boeuf', nom: 'Bœuf bourguignon' }, { id: 'boeuf-2', nom: 'Bœuf carottes' }];
+  assert.deepEqual(nouveauPlatParNom('Bœuf', plats).plat, { id: 'boeuf-3', nom: 'Bœuf' });
 });
 
 test('nouveauPlatParNom : refus clairs', () => {
@@ -80,7 +105,7 @@ test('nouveauPlatParNom : refus clairs', () => {
   assert.match(nouveauPlatParNom('x'.repeat(NOM_MAX + 1)).erreur, /trop long/);
   assert.match(nouveauPlatParNom('???').erreur, /ni lettre ni chiffre/);
   const doublon = nouveauPlatParNom('BŒUF', [{ id: 'boeuf', nom: 'Bœuf' }]);
-  assert.equal(doublon.erreur, '« Bœuf » existe déjà.');
+  assert.equal(doublon.erreur, '«\u00A0Bœuf\u00A0» existe déjà.');
   assert.equal(doublon.existant, 'boeuf');
 });
 
@@ -121,6 +146,8 @@ test('trierProfils et profilDeLEmail', () => {
   assert.equal(profilDeLEmail(profils, 'z@example.com'), null);
   assert.equal(profilDeLEmail(profils, ''), null);
   assert.equal(libellePortion(0.5), 'Enfant');
+  assert.equal(libellePortion(undefined), 'Portion à choisir');
+  assert.equal(libellePortion(0.75), 'Portion 0,75');
 });
 
 test('preparerProfil : nouveau profil', () => {
@@ -155,6 +182,13 @@ test('dimensionsReduites et carreCentral', () => {
   assert.deepEqual(carreCentral(300, 500), { x: 0, y: 100, cote: 300 });
 });
 
+test('tailleStockee : base64 et préfixe comptés', () => {
+  assert.equal(tailleStockee(3), 23 + 4);
+  assert.equal(tailleStockee(4), 23 + 8);
+  assert.ok(tailleStockee(149_000) <= PHOTO.octetsMax && tailleStockee(150_000) > PHOTO.octetsMax);
+  assert.ok(tailleStockee(7_500) > VIGNETTE.octetsMax - 23 && tailleStockee(7_400) <= VIGNETTE.octetsMax);
+});
+
 // ——— roles.js (T1a) ———
 
 test('lireHash : route et paramètre', () => {
@@ -170,6 +204,8 @@ test('resoudreRoute : fiche d’un plat pour les deux rôles', () => {
   assert.equal(resoudreRoute('#/plat/x', 'courses'), 'plat');
   assert.equal(resoudreRoute('#/plat/', 'gestionnaire'), 'plats');
   assert.equal(resoudreRoute('#/plat', 'courses'), 'plats');
+  assert.equal(resoudreRoute('#/plat/a%2Fb', 'courses'), 'plats');
+  assert.equal(resoudreRoute('#/plat/Majuscules', 'courses'), 'plats');
 });
 
 test('roleEffectif : aperçu de la vue « Repas et courses »', () => {

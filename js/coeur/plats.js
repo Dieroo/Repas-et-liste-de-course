@@ -37,13 +37,24 @@ const VISUELS = {
   preparation: { emoji: '🫙', teinte: 'bleu' },
 };
 
-const MOTS_GRATIN = /\b(gratin|gratine|tarte|tartes|quiche|tourte|clafoutis sale|parmentier|moussaka)\b/;
-const MOTS_PATES = /\b(pates|spaghetti|spaghettis|tagliatelle|tagliatelles|penne|macaroni|macaronis|lasagne|lasagnes|ravioli|raviolis|gnocchi|gnocchis|coquillettes|fusilli|linguine|nouilles|cannelloni|cannellonis)\b/;
-const MOTS_POISSON = /\b(poisson|saumon|cabillaud|colin|thon|truite|sardine|sardines|maquereau|lieu|merlu|dorade|bar|crevette|crevettes|moules|crabe|calamar|calamars|seiche|fruits de mer)\b/;
+// Mots au singulier ; le « s » (ou « x ») du pluriel est accepté.
+const MOTS_GRATIN = /\b(gratin|gratine|tarte|quiche|tourte|clafouti sale|parmentier|moussaka)[sx]?\b/;
+const MOTS_PATES = /\b(pate|spaghetti|tagliatelle|penne|macaroni|lasagne|ravioli|gnocchi|coquillette|fusilli|linguine|nouille|cannelloni)s?\b/;
+const MOTS_POISSON = /\b(poisson|saumon|cabillaud|colin|thon|truite|sardine|maquereau|lieu|merlu|dorade|bar|crevette|moule|crabe|calamar|seiche|fruits de mer)[sx]?\b/;
+
+/** Type d'un plat ; « plat » par défaut (plat ajouté par son nom). */
+export function typeDe(plat) {
+  return plat?.type ?? 'plat';
+}
+
+/** Statut de la recette ; ⏳ par défaut (plat ajouté par son nom, sans recette). */
+export function statutDe(plat) {
+  return STATUTS[plat?.statutRecette] ? plat.statutRecette : 'attente';
+}
 
 /** Catégorie visuelle : d'abord le type, puis la forme du plat, puis le poisson, sinon « mijoté ». */
 export function categorieDuPlat(plat) {
-  const type = plat?.type ?? 'plat';
+  const type = typeDe(plat);
   if (type !== 'plat') return VISUELS[type] ? type : 'mijote';
   const nom = slug(plat?.nom).replace(/-/g, ' ');
   if (MOTS_GRATIN.test(nom)) return 'gratin';
@@ -63,8 +74,8 @@ const comparer = new Intl.Collator('fr', { sensitivity: 'base' }).compare;
 export function filtrerPlats(plats, { recherche = '', filtre = 'tous' } = {}) {
   return (plats ?? [])
     .filter((plat) => {
-      if (filtre === 'attente') return plat.statutRecette === 'attente';
-      if (filtre !== 'tous') return (plat.type ?? 'plat') === filtre;
+      if (filtre === 'attente') return statutDe(plat) === 'attente';
+      if (filtre !== 'tous') return typeDe(plat) === filtre;
       return true;
     })
     .filter((plat) => correspond(plat.nom, recherche))
@@ -72,29 +83,23 @@ export function filtrerPlats(plats, { recherche = '', filtre = 'tous' } = {}) {
 }
 
 /**
- * Plat créé à partir de son seul nom (statut ⏳).
+ * Plat créé à partir de son seul nom : { id, nom } seulement. Les champs absents valent leurs valeurs par
+ * défaut (type « plat », statut ⏳) : l'enregistrement, fusionné, ne peut ainsi jamais écraser une recette
+ * ajoutée entre-temps sur l'autre téléphone.
  * → { plat } ou { erreur, existant? } (existant : id du plat qui porte déjà ce nom).
  */
 export function nouveauPlatParNom(nom, plats = []) {
   const propre = String(nom ?? '').replace(/\s+/g, ' ').trim();
   if (!propre) return { erreur: 'Donnez un nom au plat.' };
   if (propre.length > NOM_MAX) return { erreur: `Le nom est trop long (${NOM_MAX} caractères au plus).` };
-  const id = slug(propre);
-  if (!id) return { erreur: 'Ce nom ne contient ni lettre ni chiffre.' };
-  const existant = plats.find((plat) => plat.id === id);
-  if (existant) return { erreur: `« ${existant.nom} » existe déjà.`, existant: id };
-  return {
-    plat: {
-      id,
-      nom: propre,
-      type: 'plat',
-      recurrence: 'aucune',
-      statutRecette: 'attente',
-      ingredients: [],
-      etapes: [],
-      notes: {},
-    },
-  };
+  const base = slug(propre);
+  if (!base) return { erreur: 'Ce nom ne contient ni lettre ni chiffre.' };
+  const existant = plats.find((plat) => slug(plat.nom) === base);
+  if (existant) return { erreur: `«\u00A0${existant.nom}\u00A0» existe déjà.`, existant: existant.id };
+  const pris = new Set(plats.map((plat) => plat.id));
+  let id = base;
+  for (let n = 2; pris.has(id); n += 1) id = `${base}-${n}`;
+  return { plat: { id, nom: propre } };
 }
 
 /** Demande de recette créée quand l'autre membre ajoute un plat par son nom (CLAUDE.md §7). */

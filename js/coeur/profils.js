@@ -25,7 +25,10 @@ export function profilDeLEmail(profils, email) {
 }
 
 export function libellePortion(coefPortion) {
-  return PORTIONS.find((p) => p.valeur === coefPortion)?.libelle ?? `Portion ${coefPortion}`;
+  const connue = PORTIONS.find((p) => p.valeur === coefPortion);
+  if (connue) return connue.libelle;
+  if (typeof coefPortion !== 'number' || !Number.isFinite(coefPortion)) return 'Portion à choisir';
+  return `Portion ${new Intl.NumberFormat('fr-FR').format(coefPortion)}`;
 }
 
 /**

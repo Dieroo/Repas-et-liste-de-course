@@ -19,8 +19,13 @@ export function slug(texte) {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Vrai si chaque mot recherché apparaît dans le texte (casse et accents ignorés). */
+/** Mots d'un texte : sans accents, apostrophes, tirets ni ponctuation. */
+function mots(texte) {
+  return sansAccents(texte).replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Vrai si chaque mot recherché apparaît dans le texte (casse, accents, apostrophes et tirets ignorés). */
 export function correspond(texte, recherche) {
-  const cible = sansAccents(texte);
-  return sansAccents(recherche).split(' ').filter(Boolean).every((mot) => cible.includes(mot));
+  const cible = mots(texte);
+  return mots(recherche).split(' ').filter(Boolean).every((mot) => cible.includes(mot));
 }
