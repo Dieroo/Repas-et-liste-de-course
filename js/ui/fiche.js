@@ -1,6 +1,8 @@
 // Fiche d'un plat : photo, statut, ingrédients, étapes, cuisson, conservation.
 import { el, pastille, annoncer } from './dom.js';
 import { choisirImage, preparerPhoto } from './photo.js';
+import { copier } from './presse-papiers.js';
+import { texteDemandeRecette } from '../coeur/paquet.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
@@ -38,7 +40,7 @@ async function changerPhoto(id, actions, appareil) {
 }
 
 function accord(nombre, singulier, pluriel) {
-  return `${nombre} ${nombre > 1 ? pluriel : singulier}`;
+  return `${nombre}\u00A0${nombre > 1 ? pluriel : singulier}`;
 }
 
 function section(titre, ...contenu) {
@@ -66,8 +68,34 @@ export function creer(ctx) {
     el('div', { class: 'choix-photo' }, boutonAppareil, boutonGalerie),
     boutonRetrait);
 
+  // Recette (gestionnaire) : « Demander à Claude » copie la demande, « Coller la recette » ouvre l'ajout pour ce plat.
+  // Gardés d'un rendu à l'autre, comme les boutons de la photo.
+  let demandeCopiee = false;
+  const boutonDemander = el('button', { class: 'bouton bouton-plein', type: 'button', onclick: demanderAClaude }, '📋 Demander à Claude');
+  const lienColler = el('a', { class: 'bouton bouton-plein', href: `#/import/${encodeURIComponent(id)}` }, 'Coller la recette');
+  const messageCopie = el('p', { class: 'aide', role: 'status' });
+  const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, boutonDemander, lienColler);
+
   const platCourant = () => courant.plats.find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
+
+  async function demanderAClaude() {
+    const plat = platCourant();
+    if (!plat) return;
+    const reussi = await copier(texteDemandeRecette(plat));
+    demandeCopiee = demandeCopiee || reussi;
+    messageCopie.textContent = reussi
+      ? 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la recette\u00A0».'
+      : 'La copie n’a pas marché. Réessayez.';
+    majActionsRecette();
+  }
+
+  /** Avant la copie, l'action principale est « Demander à Claude » ; ensuite, « Coller la recette ». */
+  function majActionsRecette() {
+    boutonDemander.className = `bouton bouton-plein ${demandeCopiee ? 'bouton-secondaire' : 'bouton-principal'}`;
+    lienColler.className = `bouton bouton-plein ${demandeCopiee ? 'bouton-principal' : 'bouton-secondaire'}`;
+    messageCopie.hidden = !messageCopie.textContent;
+  }
 
   const arreterPhoto = ctx.actions.suivrePhoto(id, (donnees) => {
     photo = donnees;
@@ -87,7 +115,7 @@ export function creer(ctx) {
     if (source) {
       const image = figure.querySelector('img') ?? el('img', {});
       image.src = source;
-      image.alt = `Photo du plat : ${plat.nom}`;
+      image.alt = `Photo du plat\u00A0: ${plat.nom}`;
       image.classList.toggle('en-attente', !photo?.image);
       if (!image.isConnected) figure.replaceChildren(image);
     } else {
@@ -142,6 +170,7 @@ export function creer(ctx) {
     }
 
     const statut = statutDe(plat);
+    const gestionnaire = courant.role === 'gestionnaire';
     const nomsProfils = new Map((courant.profils ?? []).map((p) => [p.id, p.nom]));
     const ingredients = plat.ingredients ?? [];
     const etapes = plat.etapes ?? [];
@@ -154,13 +183,15 @@ export function creer(ctx) {
       congelable === true ? 'se congèle' : congelable === false ? 'ne se congèle pas' : null,
     ].filter(Boolean).join(' · ');
 
+    const focusRecette = actionsRecette.contains(document.activeElement) ? document.activeElement : null;
+    majActionsRecette();
     // replaceChildren écrirait « null » : les blocs absents sont retirés.
     contenu.replaceChildren(...[
       el('header', { class: 'vue-entete' },
         el('h1', {}, plat.nom),
         el('p', { class: 'badges' },
           el('span', { class: 'badge' }, LIBELLES_TYPE[typeDe(plat)] ?? 'Plat'),
-          el('span', { class: `badge badge-${statut}` }, `${STATUTS[statut].emoji} ${STATUTS[statut].libelle}`),
+          el('span', { class: `badge badge-${statut}` }, `${STATUTS[statut].emoji}\u00A0${STATUTS[statut].libelle}`),
           typeof plat.portionsBase === 'number'
             ? el('span', { class: 'badge' }, accord(plat.portionsBase, 'portion', 'portions'))
             : null,
@@ -168,14 +199,16 @@ export function creer(ctx) {
       ),
 
       statut === 'attente'
-        ? el('section', { class: 'carte carte-ligne' },
-          pastille('⏳', 'ocre'),
-          el('div', { class: 'carte-texte' },
-            el('h2', {}, 'Recette à ajouter'),
-            el('p', {}, courant.roleReel === 'gestionnaire'
-              ? 'Ajoutez-la avec « Ajouter des recettes », bientôt disponible.'
-              : 'Elle a été demandée. Elle apparaîtra ici dès qu’elle sera ajoutée.'),
-          ))
+        ? el('section', { class: 'carte' },
+          el('div', { class: 'carte-ligne' },
+            pastille('⏳', 'ocre'),
+            el('div', { class: 'carte-texte' },
+              el('h2', {}, 'Recette à ajouter'),
+              el('p', {}, gestionnaire
+                ? 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'
+                : 'Elle a été demandée. Elle apparaîtra ici dès qu’elle sera ajoutée.'),
+            )),
+          gestionnaire ? actionsRecette : null)
         : null,
 
       ingredients.length
@@ -196,19 +229,25 @@ export function creer(ctx) {
       variantes.length
         ? section('Variantes', el('ul', { class: 'liste-simple' }, variantes.map((v) => el('li', {}, el('span', {},
           el('strong', {}, nomsProfils.get(v.pour) ?? 'Autre profil'),
-          v.consigne ? ` : ${v.consigne}` : '',
+          v.consigne ? `\u00A0: ${v.consigne}` : '',
         )))))
         : null,
 
       (conservation || typeof plat.tempsActifMin === 'number' || typeof plat.emporter === 'boolean' || plat.source)
         ? section('Bon à savoir', el('dl', { class: 'infos' },
-          ligneInfo('Préparation', typeof plat.tempsActifMin === 'number' ? `${plat.tempsActifMin} min de travail` : ''),
+          ligneInfo('Préparation', typeof plat.tempsActifMin === 'number' ? `${plat.tempsActifMin}\u00A0min de travail` : ''),
           ligneInfo('Conservation', conservation),
           ligneInfo('Boîte à emporter', plat.emporter === false ? 'Supporte mal la boîte' : plat.emporter === true ? 'Se réchauffe bien' : ''),
           ligneInfo('Source', plat.source ? String(plat.source) : ''),
         ))
         : null,
+
+      gestionnaire && statut !== 'attente'
+        ? section('Nouvelle version', el('p', { class: 'texte-doux' }, 'Pour corriger la recette, demandez-en une nouvelle version à votre projet Claude.'), actionsRecette)
+        : null,
     ].filter(Boolean));
+    // Bouton de la recette qui avait le focus : il le retrouve après la mise à jour.
+    if (focusRecette && !actionsRecette.contains(document.activeElement)) focusRecette.focus({ preventScroll: true });
   }
 
   function toutDessiner() {

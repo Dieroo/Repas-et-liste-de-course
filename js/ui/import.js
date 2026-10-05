@@ -1,0 +1,305 @@
+// Écran « Ajouter des recettes » (gestionnaire) : coller la réponse de Claude, aperçu, enregistrement (CLAUDE.md §8).
+// Le texte collé n'est jamais affiché : il contient des mots techniques (§4). Seul l'aperçu l'est.
+import { el, annoncer } from './dom.js';
+import { copier, lirePressePapiers, lectureBloquee } from './presse-papiers.js';
+import { extrairePaquet, validerPaquet, preparerImport, texteCorrectionPourClaude } from '../coeur/paquet.js';
+
+const MESSAGES_EXTRACTION = {
+  vide: 'Rien à coller. Dans l’app Claude, copiez toute la réponse, puis revenez ici.',
+  trop_long: 'Ce texte est trop long pour être une réponse de Claude.',
+  demande: 'C’est votre demande, pas la réponse de Claude. Collez-la dans votre projet Claude, puis copiez sa réponse.',
+  coupee: 'La recette semble coupée ou abîmée. Copiez toute la réponse de Claude, jusqu’à la fin.',
+  aucune: 'Aucune recette trouvée dans ce texte. Copiez toute la réponse de Claude.',
+};
+
+const LIBELLES_STATUT = {
+  nouveau: 'Nouveau plat',
+  complete: 'Complète la recette ⏳',
+  remplace: 'Remplace la recette actuelle',
+};
+
+const pluriel = (n, singulier, plurielTexte) => `${n}\u00A0${n > 1 ? plurielTexte : singulier}`;
+
+export function creer(ctx) {
+  let courant = ctx;
+  const cible = ctx.parametre || null;
+  let texte = ''; // dernier texte collé
+  let colle = false; // vrai dès qu'un collage a eu lieu (même vide)
+  let minuteurSaisie = null;
+  let signature = ''; // évite de reconstruire (et de réannoncer) un aperçu identique
+  let preparation = null; // écritures prêtes, si l'aperçu est valide
+  let copieFaite = false;
+  let enregistre = false;
+  let focaliserResultat = false;
+
+  const sousTitre = el('p', { class: 'sous-titre' });
+  const retour = el('a', { class: 'retour', onclick: revenir }, el('span', { 'aria-hidden': 'true' }, '‹'), el('span', { class: 'retour-texte' }));
+
+  const boutonColler = el('button', {
+    class: 'bouton bouton-principal bouton-plein',
+    type: 'button',
+    onclick: collerDepuisPressePapiers,
+  }, '📋 Coller la réponse de Claude');
+
+  const aideBlocage = el('p', { class: 'message-erreur', hidden: true },
+    'Le téléphone bloque la lecture du presse-papiers. Collez à la main\u00A0: touchez longuement la zone ci-dessous, puis «\u00A0Coller\u00A0». ',
+    'Pour réactiver le bouton\u00A0: Chrome › Paramètres › Paramètres des sites › Presse-papiers.');
+
+  const zoneTexte = el('textarea', {
+    class: 'champ zone-collage',
+    id: 'texte-colle',
+    rows: '5',
+    spellcheck: 'false',
+    autocapitalize: 'off',
+    autocomplete: 'off',
+    'aria-describedby': 'aide-collage',
+    // Le texte peut arriver en plusieurs morceaux : on analyse une fois la saisie terminée.
+    oninput: () => {
+      clearTimeout(minuteurSaisie);
+      minuteurSaisie = setTimeout(() => analyser(zoneTexte.value, { manuel: true }), 300);
+    },
+  });
+  const collageManuel = el('details', { class: 'collage-manuel' },
+    el('summary', {}, 'Coller à la main'),
+    el('label', { class: 'etiquette-champ', for: 'texte-colle' }, 'Réponse de Claude'),
+    el('p', { class: 'aide', id: 'aide-collage' }, 'Touchez longuement la zone, puis «\u00A0Coller\u00A0».'),
+    zoneTexte,
+  );
+
+  const ligneCollee = el('div', { class: 'ligne-collee', hidden: true },
+    el('span', {}, '✓ Réponse collée'),
+    el('button', { class: 'bouton bouton-texte', type: 'button', onclick: effacer }, 'Effacer'),
+  );
+
+  const resultat = el('div', { class: 'resultat-import' });
+
+  function platCible() {
+    return cible ? courant.plats.find((plat) => plat.id === cible) ?? null : null;
+  }
+
+  function revenir(evenement) {
+    // Venu de cet écran-là : retour dans l'historique, pour que le geste retour d'Android reste naturel.
+    const attendu = cible ? 'plat' : 'plats';
+    if (courant.routePrecedente === attendu && history.length > 1) {
+      evenement.preventDefault();
+      history.back();
+    }
+  }
+
+  function majEntete() {
+    const plat = platCible();
+    sousTitre.textContent = plat
+      ? `Recette de «\u00A0${plat.nom}\u00A0»`
+      : 'Collez la réponse de votre projet Claude.';
+    retour.href = plat ? `#/plat/${encodeURIComponent(plat.id)}` : '#/plats';
+    retour.querySelector('.retour-texte').textContent = plat ? plat.nom : 'Plats';
+  }
+
+  async function collerDepuisPressePapiers() {
+    clearTimeout(minuteurSaisie);
+    const lu = await lirePressePapiers();
+    if (lu.refus) {
+      aideBlocage.hidden = false;
+      collageManuel.open = true;
+      zoneTexte.focus();
+      return;
+    }
+    analyser(lu.texte, { manuel: false });
+  }
+
+  function effacer() {
+    clearTimeout(minuteurSaisie);
+    texte = '';
+    colle = false;
+    zoneTexte.value = '';
+    signature = '';
+    dessiner();
+    boutonColler.focus();
+  }
+
+  function analyser(nouveau, { manuel }) {
+    texte = nouveau ?? '';
+    // Zone vidée à la main : rien à montrer. Presse-papiers vide : on le dit.
+    colle = !manuel || Boolean(texte.trim());
+    copieFaite = false;
+    enregistre = false;
+    signature = '';
+    focaliserResultat = !manuel || Boolean(extrairePaquet(texte).paquets);
+    dessiner();
+  }
+
+  /** Calcule l'aperçu ; ne reconstruit l'affichage que s'il a changé. */
+  function dessiner() {
+    majEntete();
+    const etat = calculer();
+    const nouvelleSignature = JSON.stringify([etat, copieFaite, navigator.onLine]);
+    if (nouvelleSignature === signature) return;
+    signature = nouvelleSignature;
+    preparation = etat.type === 'pret' ? etat.preparation : null;
+
+    // Une recette lue : le texte collé disparaît de l'écran (il contient des mots techniques).
+    const lue = etat.type === 'pret' || etat.type === 'erreurs' || etat.type === 'chargement';
+    ligneCollee.hidden = !lue;
+    if (lue) {
+      zoneTexte.value = '';
+      collageManuel.open = false;
+    }
+
+    resultat.replaceChildren(...rendu(etat));
+    if (focaliserResultat) {
+      focaliserResultat = false;
+      resultat.querySelector('[data-titre-resultat]')?.focus();
+    }
+  }
+
+  function calculer() {
+    if (!colle) return { type: 'rien' };
+    const extrait = extrairePaquet(texte);
+    if (extrait.erreur) return { type: 'illisible', code: extrait.erreur };
+    const validation = validerPaquet(extrait.paquets, { profils: courant.profilsCharges ? courant.profils : null });
+    if (!validation.valide) return { type: 'erreurs', validation };
+    // Sans les plats et les demandes, un plat déjà présent passerait pour nouveau : on attend leur chargement.
+    if (!courant.platsCharges || !courant.demandesChargees) return { type: 'chargement' };
+    const prepares = preparerImport(validation.plats.map((plat) => plat.donnees), {
+      plats: courant.plats,
+      demandes: courant.demandes,
+      cible,
+    });
+    if (prepares.erreurs.length) return { type: 'erreurs', validation: { ...validation, plats: [], erreurs: prepares.erreurs } };
+    return { type: 'pret', validation, preparation: prepares };
+  }
+
+  function titreResultat(texteTitre) {
+    return el('h2', { tabindex: '-1', 'data-titre-resultat': '' }, texteTitre);
+  }
+
+  function boutonCopierCorrections(probleme) {
+    return el('button', {
+      class: 'bouton bouton-principal bouton-plein',
+      type: 'button',
+      onclick: async () => {
+        const reussi = await copier(texteCorrectionPourClaude(probleme));
+        if (reussi) {
+          copieFaite = true;
+          dessiner();
+        } else {
+          annoncer('La copie n’a pas marché. Réessayez.');
+        }
+      },
+    }, '📋 Copier les corrections pour Claude');
+  }
+
+  const messageCopie = () => el('p', { class: 'aide', role: 'status' },
+    'Copié. Collez-le dans votre projet Claude, puis collez ici sa nouvelle réponse.');
+
+  function rendu(etat) {
+    switch (etat.type) {
+      case 'rien':
+        return [];
+      case 'illisible': {
+        const corrigeable = etat.code === 'coupee';
+        return [el('section', { class: 'carte resultat-erreur' },
+          titreResultat('Recette illisible'),
+          el('p', { role: 'alert' }, MESSAGES_EXTRACTION[etat.code] ?? MESSAGES_EXTRACTION.aucune),
+          corrigeable ? boutonCopierCorrections({ erreur: etat.code }) : null,
+          corrigeable && copieFaite ? messageCopie() : null,
+        )];
+      }
+      case 'chargement':
+        return [el('section', { class: 'carte' },
+          titreResultat('Recette lue'),
+          el('p', { class: 'texte-doux', role: 'status' }, 'Chargement des plats…'),
+          el('button', { class: 'bouton bouton-principal bouton-plein', type: 'button', disabled: true }, 'Enregistrer'),
+        )];
+      case 'erreurs': {
+        const { validation } = etat;
+        const messages = [
+          ...validation.erreurs.map((e) => e.message),
+          ...validation.plats.flatMap((plat) => plat.erreurs.map((e) => e.message)),
+        ];
+        return [el('section', { class: 'carte resultat-erreur' },
+          titreResultat(messages.length > 1 ? `${messages.length} points à corriger` : '1 point à corriger'),
+          el('ul', { class: 'liste-erreurs', role: 'alert' }, messages.map((message) => el('li', {}, `⚠️ ${message}`))),
+          boutonCopierCorrections(validation),
+          copieFaite ? messageCopie() : null,
+        )];
+      }
+      default:
+        return [renduPret(etat)];
+    }
+  }
+
+  function renduPret({ validation, preparation: prepares }) {
+    const n = prepares.elements.length;
+    const avertissementsGeneraux = [...validation.avertissements, ...prepares.avertissements].map((a) => a.message);
+    return el('section', { class: 'carte resultat-pret' },
+      titreResultat(n > 1 ? `${n} recettes prêtes` : '1 recette prête'),
+      avertissementsGeneraux.length
+        ? el('ul', { class: 'liste-avertissements' }, avertissementsGeneraux.map((m) => el('li', {}, `⚠️ ${m}`)))
+        : null,
+      el('ul', { class: 'liste-apercu' }, prepares.elements.map((element, i) => {
+        const avertissements = [
+          ...(validation.plats[i]?.avertissements ?? []).map((a) => a.message),
+          ...element.avertissements,
+        ];
+        return el('li', { class: 'apercu-plat' },
+          el('p', { class: 'apercu-nom' }, element.nom),
+          el('p', { class: 'badges' }, el('span', { class: `badge badge-${element.statut}` }, LIBELLES_STATUT[element.statut])),
+          element.ancienNom ? el('p', { class: 'texte-doux' }, `Renommé\u00A0: «\u00A0${element.ancienNom}\u00A0» → «\u00A0${element.nom}\u00A0»`) : null,
+          element.ingredients
+            ? el('p', { class: 'texte-doux' }, [pluriel(element.ingredients, 'ingrédient', 'ingrédients'), element.etapes ? pluriel(element.etapes, 'étape', 'étapes') : null].filter(Boolean).join(' · '))
+            : el('p', { class: 'texte-doux' }, 'Sans recette pour l’instant (⏳)'),
+          avertissements.length
+            ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
+            : null,
+        );
+      })),
+      el('button', {
+        class: 'bouton bouton-principal bouton-plein',
+        type: 'button',
+        onclick: enregistrer,
+      }, n > 1 ? `Enregistrer les ${n} recettes` : 'Enregistrer la recette'),
+      navigator.onLine
+        ? null
+        : el('p', { class: 'aide' }, 'Hors ligne\u00A0: la recette est gardée sur ce téléphone et sera partagée au retour du réseau.'),
+    );
+  }
+
+  function enregistrer() {
+    if (!preparation || enregistre) return;
+    enregistre = true;
+    const { ecritures } = preparation;
+    courant.actions.importer(preparation);
+    annoncer(ecritures.length > 1 ? `${ecritures.length} recettes enregistrées.` : 'Recette enregistrée.');
+    // Remplace cet écran dans l'historique : le geste retour ne ramène pas à un aperçu déjà enregistré.
+    location.replace(ecritures.length === 1 ? `#/plat/${encodeURIComponent(ecritures[0].id)}` : '#/plats');
+  }
+
+  // Lecture déjà bloquée par le téléphone : la zone de collage s'ouvre d'emblée, avec l'explication.
+  lectureBloquee().then((bloquee) => {
+    if (!bloquee) return;
+    aideBlocage.hidden = false;
+    collageManuel.open = true;
+  });
+
+  dessiner();
+
+  return {
+    noeud: el('div', { class: 'vue import' },
+      retour,
+      el('header', { class: 'vue-entete' }, el('h1', {}, 'Ajouter des recettes'), sousTitre),
+      boutonColler,
+      aideBlocage,
+      collageManuel,
+      ligneCollee,
+      resultat,
+    ),
+    maj(nouveau) {
+      courant = nouveau;
+      dessiner();
+    },
+    detruire() {
+      clearTimeout(minuteurSaisie);
+    },
+  };
+}

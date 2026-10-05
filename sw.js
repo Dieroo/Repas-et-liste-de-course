@@ -9,7 +9,7 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = 'fb214d5c5dc9';
+const VERSION = '3d24fed6d4c2';
 const VERSION_SDK = '12.19.0';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
@@ -27,9 +27,11 @@ const FICHIERS_APP = [
   './js/coeur/plats.js',
   './js/coeur/profils.js',
   './js/coeur/photo.js',
+  './js/coeur/paquet.js',
   './js/ui/dom.js',
   './js/ui/feuille.js',
   './js/ui/photo.js',
+  './js/ui/presse-papiers.js',
   './js/ui/connexion.js',
   './js/ui/profil.js',
   './js/ui/semaine.js',
@@ -38,6 +40,7 @@ const FICHIERS_APP = [
   './js/ui/fiche.js',
   './js/ui/decouvrir.js',
   './js/ui/reglages.js',
+  './js/ui/import.js',
   './icons/icone.svg',
   './icons/icone-192.png',
   './icons/icone-512.png',

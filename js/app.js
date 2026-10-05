@@ -8,7 +8,7 @@ import {
 } from './firebase.js';
 import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
-import { roleDe, roleEffectif, lireHash, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
+import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
 import { nouveauPlatParNom } from './coeur/plats.js';
 import {
   ecranChargement,
@@ -28,6 +28,7 @@ import * as plats from './ui/plats.js';
 import * as fiche from './ui/fiche.js';
 import * as decouvrir from './ui/decouvrir.js';
 import * as reglages from './ui/reglages.js';
+import * as importRecettes from './ui/import.js';
 
 // Écrans de l'app. `onglet` : onglet surligné. Un module expose creer(ctx) → { noeud, maj?, detruire? }
 // (mis à jour en direct) ou afficher(ctx) → nœud (reconstruit seulement si l'écran change).
@@ -38,6 +39,7 @@ const ECRANS = {
   plat: { titre: 'Plat', module: fiche, onglet: 'plats' },
   decouvrir: { titre: 'Découvrir', module: decouvrir, onglet: 'decouvrir' },
   reglages: { titre: 'Réglages', module: reglages, onglet: null },
+  import: { titre: 'Ajouter des recettes', module: importRecettes, onglet: 'plats' },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -71,6 +73,8 @@ const etat = {
   profilsCharges: false,
   plats: [],
   platsCharges: false,
+  demandes: [],
+  demandesChargees: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
 };
 
@@ -218,7 +222,7 @@ function rendreApp() {
   if (roleReel !== 'gestionnaire') etat.apercu = false;
   const role = roleEffectif(roleReel, etat.apercu);
   const route = resoudreRoute(location.hash, role);
-  const parametre = route === 'plat' ? lireHash(location.hash).parametre : '';
+  const parametre = parametreDe(location.hash, route);
   const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
   if (location.hash !== hashAttendu) history.replaceState(null, '', hashAttendu);
 
@@ -244,6 +248,8 @@ function rendreApp() {
     profilsCharges: etat.profilsCharges,
     plats: etat.plats,
     platsCharges: etat.platsCharges,
+    demandes: etat.demandes,
+    demandesChargees: etat.demandesChargees,
     parametre,
     routePrecedente,
     actions,
@@ -298,6 +304,19 @@ const actions = {
   retirerProfil(profilId) {
     ecrire(donnees.retirerProfil(profilId), 'Le profil n’a pas pu être retiré. Réessayez.');
   },
+  /** Recettes préparées par coeur/paquet.js › preparerImport. Affichées tout de suite, envoyées dès que possible. */
+  importer({ ecritures, demandesAClore }) {
+    ecrire(donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email),
+      'Les recettes n’ont pas pu être enregistrées. Réessayez.');
+    const recus = new Map(ecritures.map(({ id, donnees: champs }) => [id, champs]));
+    etat.plats = [
+      ...etat.plats.map((plat) => (recus.has(plat.id) ? { ...plat, ...recus.get(plat.id) } : plat)),
+      ...ecritures.filter(({ id }) => !etat.plats.some((plat) => plat.id === id)).map(({ donnees: champs }) => champs),
+    ];
+    etat.demandes = etat.demandes.map((demande) => (demandesAClore.includes(demande.id)
+      ? { ...demande, statut: 'traitee' }
+      : demande));
+  },
 };
 
 function changerApercu(actif) {
@@ -333,6 +352,8 @@ function oublierDonnees() {
     profilsCharges: false,
     plats: [],
     platsCharges: false,
+    demandes: [],
+    demandesChargees: false,
     apercu: false,
   });
 }
@@ -388,6 +409,7 @@ function suivreDonnees() {
         Object.assign(etat, maj);
         if (maj.plats) etat.platsCharges = true;
         if (maj.profils) etat.profilsCharges = true;
+        if (maj.demandes) etat.demandesChargees = true;
         rendre();
       }, (code) => {
         donnees.arreterCollections();
@@ -437,6 +459,7 @@ function demarrer() {
       role,
       apercu: etat.apercu,
       onReglages: () => { location.hash = '#/reglages'; },
+      onAjouterRecettes: () => { location.hash = '#/import'; },
       onApercu: changerApercu,
       onDeconnecter: seDeconnecter,
     });

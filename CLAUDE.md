@@ -91,15 +91,20 @@ js/
   donnees.js              abonnements onSnapshot → état central ; écritures
   notifications.js        envoi ntfy
   ui/                     un module par écran (semaine, courses, plats, fiche, decouvrir, batch, congelateur, demandes, reglages, import)
-                          + dom.js (outils DOM), connexion.js (écrans avant l'app), profil.js (avatar, panneau du profil)
+                          + dom.js (outils DOM), connexion.js (écrans avant l'app), profil.js (avatar, panneau du profil),
+                          feuille.js (feuilles du bas), photo.js (choix et compression), presse-papiers.js (copier, coller)
   coeur/                  logique pure : ni DOM ni Firebase
     roles.js              rôle de la personne connectée, écrans permis
+    slug.js               identifiants et recherche sans accents
+    plats.js              visuel, filtres, ajout par nom, affichage des quantités
+    profils.js            validation et ordre des profils
+    photo.js              dimensions et taille des photos
     compatibilite.js      règles, variantes, substitutions
     liste.js
     proposition.js
     batch.js
     congelateur.js
-    paquet.js             validation du format d'import
+    paquet.js             format d'import : extraction, validation, plat visé, textes pour Claude
 tests/                    node:test, fixtures génériques
 firestore.rules           adresses en espaces réservés (<EMAIL_1>, <EMAIL_2>)
 package.json              uniquement "type": "module" et le script de test
@@ -117,7 +122,7 @@ package.json              uniquement "type": "module" et le script de test
 | `semaines/{dimancheISO}` | `statut` (`brouillon` → `validee` → `courses_faites` → `batch_fait`), `plats [{platId, portionsACuire, portionsACongeler}]`, `affectations {profilId: {"lun-soir": {platId, variante} ou {congelId}}}`, `apero {jour, platIds[]}`, `majPar`, `majLe` |
 | `semaines/{dimancheISO}/lignes/{cle}` | `produitId`, `libelle`, `qte`, `unite`, `rayon`, `sources [{type: plat, apero, habituel ou manuel, ref, pour}]`, `special` (vrai si lié aux plats ou à l'apéro de la semaine), `coche`, `manuel` |
 | `congelateur/{id}` | `platId`, `nom`, `portions`, `dateCongelation` |
-| `demandes/{id}` | `type` (`variante` ou `recette`), `platId`, `profilId` et `besoin` (`sans_viande` ou `avec_proteine`, variantes seulement), `creePar`, `creeLe`, `statut` (`ouverte` ou `traitee`) |
+| `demandes/{id}` | `type` (`variante` ou `recette`), `platId`, `profilId` et `besoin` (`sans_viande` ou `avec_proteine`, variantes seulement), `creePar`, `creeLe`, `statut` (`ouverte` ou `traitee`), `traiteeLe` |
 
 - Jours : `dim` `lun` `mar` `mer` `jeu` `ven` `sam` ; moments : `midi` `soir`.
 - Identifiants : `plats` et `produits` = slug du nom (`carbonade-flamande`), stables. `demandes` : `platId__profilId` pour une variante (une seule demande ouverte par plat et profil), `platId__recette` pour une recette à ajouter.
@@ -232,7 +237,7 @@ Un seul format pour le catalogue de départ, l'import unitaire (recette produite
       "emporter": true,
       "variantes": [
         {
-          "pour": "profil_b",
+          "pour": "profil-b",
           "retirer": ["jambon blanc"],
           "ajouter": [
             { "produit": "thon au naturel", "qtePortion": 50, "unite": "g", "rayon": "epicerie_salee", "marqueurs": ["poisson"] }
@@ -273,6 +278,21 @@ Vocabulaires fermés :
 - `role` (légume) : `principal` `incorpore`
 
 `coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients. Les photos (`photos/`, `vignette`) ne font pas partie de `paquet@1` : ni import ni export (taille). Un plat ajouté par son nom n'enregistre que `id` et `nom` (écriture fusionnée, pour ne jamais écraser une recette créée entre-temps sur l'autre téléphone) : les champs absents valent leur défaut (`type` plat, `statutRecette` attente, `recurrence` aucune) et l'export les complète. Doublons repérés par le nom (slug du nom), pas par l'identifiant.
+
+**Ajouter des recettes** (écran `#/import`, gestionnaire ; `#/import/<platId>` depuis « Coller la recette » d'une fiche) :
+- Le gestionnaire colle la **réponse entière** de Claude : l'app y retrouve chaque objet `paquet@1` (prose, blocs de code, plusieurs blocs réunis). Elle distingue texte vide, demande recollée par erreur (`DEMANDE-…`), réponse coupée et absence de recette.
+- Tolérances : casse, accents et séparateurs des vocabulaires fermés (`Incorporé` → `incorpore`), nombres écrits en texte (`"0,5"`), `produit` mis en minuscules. Champs inconnus, `notes`, `derniereFois` et clés autres que `plats` ignorés avec un avertissement (repris dans la tranche qui les utilise : notes et sauvegarde en T1c, réglages et profils ensuite).
+- Grille : `id` et `nom` toujours ; `portionsBase` et `ingredients` sauf plat sans recette ; avec des ingrédients, le statut devient au moins `brouillon` ; `tempC` conseillé pour four et airfryer.
+- Plat visé : la cible (une seule recette collée), sinon le même `id` s'il s'agit du même plat (même nom, plat ⏳ ou demande ouverte), sinon le même nom, sinon un nouveau plat (identifiant libre `-2` si un autre plat, déjà rempli, utilise le sien). Deux recettes visant le même plat : erreur.
+- Écriture : seulement les champs présents (`mergeFields`), jamais `vignette` ni `notes`, jamais de table vide ni de valeur `undefined` ; demandes satisfaites closes dans un second lot (`update`, `statut: traitee`, `traiteeLe`).
+- Tout ou rien : la moindre erreur bloque l'enregistrement ; « Copier les corrections pour Claude » copie un texte avec les codes exacts. Les messages affichés n'emploient aucun mot technique (§4) ; le texte collé n'est jamais affiché.
+
+```
+CORRECTION paquet@1
+id: <id du plat>
+- <consigne avec les codes exacts>
+(Rends la fiche complète corrigée, en un seul bloc.)
+```
 
 Textes copiés par les boutons « Demander à Claude » (gestionnaire uniquement) :
 
@@ -361,7 +381,10 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 ## 14. Statut
 
 - [x] T0 Socle — validé le 2026-10-05 sur le téléphone du gestionnaire (connexion, rôles, installation, mode avion) ; installation et avis sur le téléphone de l'utilisatrice des courses reportés à la fin du projet (décision du propriétaire)
-- [ ] T1 Plats, import & Découvrir
+- [ ] T1 Plats, import & Découvrir — en trois livraisons :
+  - [x] T1a profils, bibliothèque, fiche, ajout par nom (+ demande de recette), photo (appareil ou galerie), aperçu de la vue « Repas et courses » — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
+  - [ ] T1b « Ajouter des recettes » (coller la réponse de Claude, aperçu, enregistrement), « Demander à Claude » et « Coller la recette » sur la fiche
+  - [ ] T1c notes 0–5, Découvrir, modifier ou valider une fiche, sauvegarde et restauration par fichier
 - [ ] T2 Compatibilité & variantes
 - [ ] T3 Semaine, liste & apéro
 - [ ] T4 Congélateur & proposition
@@ -376,3 +399,4 @@ Décisions :
 - 2026-10-05 — Rôles réels du foyer : l'utilisatrice des courses planifie aussi la semaine, ajoute les plats par leur nom et les photos ; le gestionnaire ajoute les recettes (import, « Demander à Claude »), traite les demandes et règle l'app. Les deux peuvent organiser la semaine. Un plat ajouté par son nom crée une demande de recette, notifiée au gestionnaire (ntfy, T2). Libellés : « Recettes et réglages » et « Repas et courses ».
 - 2026-10-05 — Filet de sécurité si l'app n'est pas adoptée : « Imprimer » sur Semaine (T3), menu + liste de courses en PDF via l'impression du navigateur, sans bibliothèque.
 - 2026-10-05 — T0 clos. L'utilisatrice des courses ne testera l'app qu'une fois terminée (décision du propriétaire) : risque d'adoption découvert tard, assumé.
+- 2026-10-05 — T1 redécoupé pour que chaque livraison se teste seule sur le téléphone du gestionnaire : T1b = ajout de recettes par collage ; T1c = notes, Découvrir, modification, sauvegarde et import de fichier. L'écran Demandes et les badges restent en T2, comme au §11 (le gestionnaire ne crée pas de demande lui-même). À trancher en T2 : en aperçu « Repas et courses », le gestionnaire crée une demande comme l'autre membre, pour pouvoir tester seul. Le critère « Fini quand » de T1 sera adapté en T1c.
