@@ -4,7 +4,6 @@
   "description": "Les repas de la semaine et la liste de courses, partagés en famille.",
   "lang": "fr",
   "dir": "ltr",
-  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

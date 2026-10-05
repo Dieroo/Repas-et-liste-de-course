@@ -1,14 +1,19 @@
 // Service worker : ouverture hors ligne (CLAUDE.md §3).
-// - Fichiers de l'app : servis depuis le cache, puis mis à jour en arrière-plan (nouvelle version à l'ouverture suivante).
+// - Fichiers de l'app : cache d'abord. Une nouvelle version arrive d'un seul bloc : quand ce fichier change,
+//   le navigateur remplit un nouveau cache complet, puis l'app l'utilise à l'ouverture suivante.
+// - VERSION est l'empreinte des fichiers de FICHIERS_APP : `npm test` échoue et donne la bonne valeur
+//   dès qu'un de ces fichiers change. Ajouter tout nouveau fichier de l'app à FICHIERS_APP.
 // - SDK Firebase (version épinglée) et police : cache d'abord.
 // - Firestore et la connexion Google ne passent pas par ici.
-// Changer VERSION à chaque mise en ligne qui modifie ce fichier ou ajoute un fichier à la liste.
+// - Le stockage est partagé avec les autres sites du même domaine github.io : tout porte le préfixe de l'app,
+//   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
-const VERSION = 't0-1';
+const PREFIXE = 'repas-courses-';
+const VERSION = '8c7cf208e11b';
 const VERSION_SDK = '12.19.0';
 
-const CACHE_APP = `app-${VERSION}`;
-const CACHE_EXTERNE = `externe-${VERSION_SDK}`;
+const CACHE_APP = `${PREFIXE}app-${VERSION}`;
+const CACHE_EXTERNE = `${PREFIXE}externe-${VERSION_SDK}`;
 
 const FICHIERS_APP = [
   './index.html',
@@ -43,15 +48,8 @@ const CHEMINS_ACCUEIL = [new URL('./', self.location.href).pathname, new URL(URL
 
 self.addEventListener('install', (evenement) => {
   evenement.waitUntil((async () => {
-    const app = await caches.open(CACHE_APP);
-    await app.addAll(FICHIERS_APP.map((chemin) => new Request(chemin, { cache: 'reload' })));
-    const externe = await caches.open(CACHE_EXTERNE);
-    await externe.addAll(SDK);
-    try {
-      await mettreLaPoliceEnCache(externe);
-    } catch {
-      // La police est un plus : sans elle, l'app utilise la police de secours.
-    }
+    await remplirCacheApp();
+    await completerCacheExterne();
     await self.skipWaiting();
   })());
 });
@@ -60,7 +58,7 @@ self.addEventListener('activate', (evenement) => {
   evenement.waitUntil((async () => {
     const noms = await caches.keys();
     await Promise.all(noms
-      .filter((nom) => nom !== CACHE_APP && nom !== CACHE_EXTERNE)
+      .filter((nom) => nom.startsWith(PREFIXE) && nom !== CACHE_APP && nom !== CACHE_EXTERNE)
       .map((nom) => caches.delete(nom)));
     await self.clients.claim();
   })());
@@ -73,44 +71,30 @@ self.addEventListener('fetch', (evenement) => {
 
   if (url.origin === self.location.origin) {
     if (requete.mode !== 'navigate') {
-      evenement.respondWith(servirPuisMettreAJour(evenement, CACHE_APP, requete));
+      evenement.respondWith(depuisCacheApp(requete, requete));
     } else if (CHEMINS_ACCUEIL.includes(url.pathname)) {
-      evenement.respondWith(servirPuisMettreAJour(evenement, CACHE_APP, URL_INDEX));
+      evenement.respondWith(depuisCacheApp(requete, URL_INDEX));
+      evenement.waitUntil(reparer());
     }
     return;
   }
 
-  if (url.href.startsWith('https://www.gstatic.com/firebasejs/') || url.origin === 'https://fonts.gstatic.com') {
-    evenement.respondWith(cacheDAbord(evenement, CACHE_EXTERNE));
-    return;
-  }
-
-  if (url.origin === 'https://fonts.googleapis.com') {
-    evenement.respondWith(servirPuisMettreAJour(evenement, CACHE_EXTERNE, requete));
+  if (url.href.startsWith('https://www.gstatic.com/firebasejs/')
+    || url.origin === 'https://fonts.gstatic.com'
+    || url.origin === 'https://fonts.googleapis.com') {
+    evenement.respondWith(cacheDAbord(evenement));
   }
 });
 
-/** Réponse du cache tout de suite, mise à jour du cache en arrière-plan ; réseau si rien en cache. */
-async function servirPuisMettreAJour(evenement, nomCache, cle) {
-  const cache = await caches.open(nomCache);
-  const enCache = await cache.match(cle);
-  const depuisReseau = fetch(evenement.request)
-    .then(async (reponse) => {
-      if (reponse.ok) await cache.put(cle, reponse.clone());
-      return reponse;
-    })
-    .catch(() => null);
-
-  if (enCache) {
-    evenement.waitUntil(depuisReseau);
-    return enCache;
-  }
-  return (await depuisReseau) ?? Response.error();
+/** Fichier de l'app : copie du cache, sinon réseau. */
+async function depuisCacheApp(requete, cle) {
+  const cache = await caches.open(CACHE_APP);
+  return (await cache.match(cle)) ?? fetch(requete);
 }
 
-/** Fichiers qui ne changent jamais à une adresse donnée (SDK épinglé, fichiers de police). */
-async function cacheDAbord(evenement, nomCache) {
-  const cache = await caches.open(nomCache);
+/** Fichiers qui ne changent pas à une adresse donnée (SDK épinglé, police). */
+async function cacheDAbord(evenement) {
+  const cache = await caches.open(CACHE_EXTERNE);
   const enCache = await cache.match(evenement.request);
   if (enCache) return enCache;
   const reponse = await fetch(evenement.request);
@@ -118,12 +102,52 @@ async function cacheDAbord(evenement, nomCache) {
   return reponse;
 }
 
-/** Feuille de style de la police et ses fichiers, pour que les titres restent beaux hors ligne. */
-async function mettreLaPoliceEnCache(cache) {
-  const reponse = await fetch(URL_POLICE);
-  if (!reponse.ok) return;
-  const css = await reponse.clone().text();
-  await cache.put(URL_POLICE, reponse);
-  const fichiers = [...css.matchAll(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/g)].map((m) => m[1]);
-  await cache.addAll(fichiers);
+/** Télécharge tous les fichiers de l'app d'un coup ; en cas d'échec, rien n'est gardé. */
+async function remplirCacheApp() {
+  const cache = await caches.open(CACHE_APP);
+  try {
+    await Promise.all(FICHIERS_APP.map(async (chemin) => {
+      // « ?v= » contourne le cache du CDN de GitHub Pages : tous les fichiers viennent de la même mise en ligne.
+      const reponse = await fetch(`${chemin}?v=${VERSION}`, { cache: 'reload' });
+      if (!reponse.ok) throw new Error(`${chemin} : ${reponse.status}`);
+      await cache.put(chemin, new Response(reponse.body, reponse));
+    }));
+  } catch (erreur) {
+    await caches.delete(CACHE_APP);
+    throw erreur;
+  }
+}
+
+/** Ajoute ce qui manque : SDK, feuille de police et ses fichiers (la police est facultative). */
+async function completerCacheExterne() {
+  const cache = await caches.open(CACHE_EXTERNE);
+  const manquants = [];
+  for (const url of SDK) if (!(await cache.match(url))) manquants.push(url);
+  await cache.addAll(manquants);
+  try {
+    let feuille = await cache.match(URL_POLICE);
+    if (!feuille) {
+      const reponse = await fetch(URL_POLICE);
+      if (!reponse.ok) return;
+      await cache.put(URL_POLICE, reponse.clone());
+      feuille = reponse;
+    }
+    const css = await feuille.text();
+    const fichiers = [...css.matchAll(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/g)].map((m) => m[1]);
+    for (const url of fichiers) if (!(await cache.match(url))) await cache.add(url);
+  } catch {
+    // Sans la police, les titres utilisent la police de secours.
+  }
+}
+
+/** À chaque ouverture en ligne : remet ce qu'un autre site du domaine aurait effacé. */
+async function reparer() {
+  try {
+    const cache = await caches.open(CACHE_APP);
+    const presents = await Promise.all(FICHIERS_APP.map((chemin) => cache.match(chemin)));
+    if (presents.some((reponse) => !reponse)) await remplirCacheApp();
+    await completerCacheExterne();
+  } catch {
+    // Hors ligne : on réessaiera à la prochaine ouverture.
+  }
 }
