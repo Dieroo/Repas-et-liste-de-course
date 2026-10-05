@@ -69,3 +69,15 @@ export function logo(classe = 'logo') {
   );
   return svg;
 }
+
+let minuteurAnnonce = null;
+
+/** Message bref en bas de l'écran (« Photo enregistrée. »), lu par les lecteurs d'écran. */
+export function annoncer(texte) {
+  const zone = document.getElementById('annonce');
+  if (!zone) return;
+  zone.textContent = texte;
+  zone.classList.add('visible');
+  clearTimeout(minuteurAnnonce);
+  minuteurAnnonce = setTimeout(() => zone.classList.remove('visible'), 3500);
+}

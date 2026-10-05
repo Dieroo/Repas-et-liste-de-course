@@ -542,6 +542,414 @@ body:not(.dans-app) main {
   overflow-wrap: anywhere;
 }
 
+/* ——— Champs et formulaires ——— */
+
+.champ {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 16px;
+  border: 1px solid var(--bordure);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--texte);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.champ::placeholder { color: var(--texte-doux); }
+
+.champ:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.formulaire {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.etiquette-champ {
+  margin-top: 8px;
+  font-weight: 600;
+}
+
+.aide {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+.formulaire .message-erreur { max-width: none; }
+
+.actions-feuille {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.groupe-choix {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.choix-ligne {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.choix {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  border: 1px solid var(--bordure);
+  border-radius: 14px;
+  background: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.choix input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choix:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-doux);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.choix:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.bouton-danger { color: var(--accent); }
+
+/* ——— Plats : recherche, filtres, liste ——— */
+
+.champ-recherche {
+  padding-left: 44px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a7d72' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='6.5'/%3E%3Cpath d='m16 16 4.5 4.5'/%3E%3C/svg%3E");
+  background-position: 14px center;
+  background-repeat: no-repeat;
+  background-size: 20px;
+}
+
+.puces {
+  display: flex;
+  gap: 8px;
+  margin: 0 calc(-1 * max(20px, env(safe-area-inset-left))) ;
+  padding: 2px max(20px, env(safe-area-inset-left));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.puces::-webkit-scrollbar { display: none; }
+
+.puce {
+  flex: none;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--bordure);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--texte);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.puce[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--sur-accent);
+}
+
+.liste-plats,
+.liste-profils {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.carte-plat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 14px 10px 10px;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.carte-plat:active { transform: scale(0.99); }
+
+.carte-plat .pastille,
+.vignette {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  font-size: 1.75rem;
+}
+
+.vignette {
+  flex: none;
+  object-fit: cover;
+  background: var(--accent-doux);
+}
+
+.carte-plat .avatar { pointer-events: none; }
+
+.carte-plat-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.carte-plat-nom {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.carte-plat-detail {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.chevron {
+  color: var(--texte-doux);
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.etat-vide.compact {
+  gap: 12px;
+  padding: 20px;
+}
+
+.bouton-flottant {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(var(--hauteur-onglets) + 16px + env(safe-area-inset-bottom));
+  z-index: 5;
+  min-height: 56px;
+  padding: 0 22px;
+  border-radius: 18px;
+  box-shadow: 0 6px 18px rgb(180 73 47 / 35%);
+}
+
+/* Place pour le bouton flottant sous la liste */
+.liste-plats { padding-bottom: 72px; }
+
+/* ——— Fiche d'un plat ——— */
+
+.retour {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  min-height: 48px;
+  padding-right: 12px;
+  color: var(--texte-doux);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.retour span { font-size: 1.5rem; line-height: 1; }
+
+.photo-plat {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  overflow: hidden;
+  border-radius: var(--rayon);
+  background: var(--accent-doux);
+  aspect-ratio: 4 / 3;
+}
+
+.photo-plat img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-plat img.en-attente { filter: blur(6px); transform: scale(1.04); }
+
+.photo-plat.sans-photo {
+  aspect-ratio: auto;
+  padding: 28px 0;
+  background: transparent;
+}
+
+.fiche-contenu {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.actions-photo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--olive-doux);
+  color: var(--texte);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.badge-attente { background: var(--ocre-doux); }
+.badge-brouillon { background: var(--bleu-doux); }
+
+.fiche-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.liste-ingredients,
+.liste-simple {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liste-ingredients li,
+.liste-simple li {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bordure);
+}
+
+.liste-ingredients .quantite {
+  flex: none;
+  min-width: 84px;
+  color: var(--texte-doux);
+  font-variant-numeric: tabular-nums;
+}
+
+.liste-etapes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.liste-etapes li::marker {
+  color: var(--accent);
+  font-family: var(--police-titre);
+  font-weight: 600;
+}
+
+.infos {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+}
+
+/* ——— Bandeau d'aperçu et annonces ——— */
+
+.bandeau-apercu {
+  position: sticky;
+  top: calc(64px + env(safe-area-inset-top));
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: var(--largeur);
+  margin: 0 auto;
+  padding: 6px 8px 6px 16px;
+  border-radius: 0 0 14px 14px;
+  background: var(--olive);
+  color: var(--surface);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.bandeau-apercu-bouton {
+  min-height: 44px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--texte);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.annonce {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--hauteur-onglets) + 88px + env(safe-area-inset-bottom));
+  z-index: 20;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: var(--texte);
+  color: var(--fond);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.annonce.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom)); }
+
 /* ——— Barre d'onglets ——— */
 
 .onglets {
