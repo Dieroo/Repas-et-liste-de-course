@@ -9,7 +9,7 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = '8c7cf208e11b';
+const VERSION = 'a57c76e1bbd0';
 const VERSION_SDK = '12.19.0';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
