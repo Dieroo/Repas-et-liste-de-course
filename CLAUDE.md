@@ -31,7 +31,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 | UI | HTML/CSS/JS vanilla, modules ES, **zéro build** | Rien à maintenir ; déployer = pousser sur `main` |
 | Hébergement | GitHub Pages (`main`, racine) | Gratuit, HTTPS |
 | Données | Cloud Firestore + `persistentLocalCache` (`persistentMultipleTabManager`) | Temps réel entre les deux téléphones, fonctionne hors ligne |
-| Auth | Firebase Auth, fournisseur Google (`signInWithPopup`, repli `signInWithRedirect`) | Comptes existants |
+| Auth | Firebase Auth, fournisseur Google (`signInWithPopup` ; `initializeAuth` sans résolveur au démarrage) | Comptes existants ; la redirection ne fonctionne pas sur github.io (stockage tiers partitionné) |
 | SDK | Firebase JS modulaire depuis le CDN officiel gstatic, version épinglée | Pas de bundler |
 | PWA | `manifest.webmanifest` + `sw.js` (cache de l'enveloppe applicative, du SDK et des polices) | Icône sur l'écran d'accueil, ouverture hors ligne |
 | Notification | ntfy (`https://ntfy.sh/<sujet>`), facultatif | Gratuit, sans serveur ; le gestionnaire installe l'app ntfy |
@@ -65,7 +65,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 
 - Titres : « Fraunces » (Google Fonts, mise en cache par le service worker) ; texte : police système.
 - Cartes arrondies (16 px), ombres douces, espacements généreux, cibles ≥ 48 px.
-- Visuel des plats : grand emoji sur pastille teintée selon la catégorie (🍲 mijoté, 🐟 poisson, 🥧 gratin ou tarte, 🍝 pâtes, 🍰 dessert, 🥂 apéro). **Aucune image récupérée sur le web.**
+- Visuel des plats : grand emoji sur pastille teintée selon la catégorie (🍲 mijoté, 🐟 poisson, 🥧 gratin ou tarte, 🍝 pâtes, 🍰 dessert, 🥂 apéro). Une photo prise ou choisie sur le téléphone remplace l'emoji quand elle existe (§6 `photos`). **Aucune image récupérée sur le web.**
 - Animations brèves et utiles (case cochée, carte qui glisse) ; vibration légère quand on coche (`navigator.vibrate`).
 
 **Écran Découvrir** (premier contact, ludique)
@@ -78,7 +78,8 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 ```
 index.html
 manifest.webmanifest
-sw.js
+sw.js                     liste de précache à tenir à jour (vérifiée par tests/hors-ligne.test.js)
+.nojekyll                 GitHub Pages sert les fichiers tels quels
 icons/
 css/app.css               tokens du §4, composants
 js/
@@ -87,7 +88,9 @@ js/
   donnees.js              abonnements onSnapshot → état central ; écritures
   notifications.js        envoi ntfy
   ui/                     un module par écran (semaine, courses, plats, fiche, decouvrir, batch, congelateur, demandes, reglages, import)
+                          + dom.js (outils DOM), connexion.js (écrans avant l'app), profil.js (avatar, panneau du profil)
   coeur/                  logique pure : ni DOM ni Firebase
+    roles.js              rôle de la personne connectée, écrans permis
     compatibilite.js      règles, variantes, substitutions
     liste.js
     proposition.js
@@ -105,7 +108,8 @@ package.json              uniquement "type": "module" et le script de test
 |---|---|
 | `reglages/foyer` | `versionSchema: 1`, `gestionnaire` (e-mail), `debutSemaine`, `nbPlats {min, max}`, `dessertParSemaine` (0 ou 1), `frigoJoursDefaut` (3), `dureeBatchMaxMin`, `rayons[]` (ordre du parcours en magasin), `appareils[]`, `apero {actif, jour, nbSuggestions, incontournables[]}`, `drive {nom, urlRecherche}` (modèle contenant `{q}`), `notifications {ntfySujet}` |
 | `profils/{id}` | `nom`, `email` (facultatif, sert à reconnaître la personne connectée), `ordre`, `repas {midis: [jours], soirs: [jours]}`, `coefPortion` (1 adulte, 0,5 enfant), `regles[]` (§7) |
-| `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil), `derniereFois`, `majPar`, `majLe` |
+| `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe` |
+| `photos/{platId}` | `image` (JPEG compressé dans le navigateur, 1024 px max, ~200 Ko max), `majPar`, `majLe` ; lu seulement à l'ouverture de la fiche, pour que la liste des plats reste légère |
 | `produits/{id}` | `nom`, `rayon`, `uniteDefaut`, `marqueurs[]`, `habituel {actif, qte, unite}`, `rechercheDrive` (terme de recherche personnalisé, facultatif), `achats[]` (dates, V2) |
 | `semaines/{dimancheISO}` | `statut` (`brouillon` → `validee` → `courses_faites` → `batch_fait`), `plats [{platId, portionsACuire, portionsACongeler}]`, `affectations {profilId: {"lun-soir": {platId, variante} ou {congelId}}}`, `apero {jour, platIds[]}`, `majPar`, `majLe` |
 | `semaines/{dimancheISO}/lignes/{cle}` | `produitId`, `libelle`, `qte`, `unite`, `rayon`, `sources [{type: plat, apero, habituel ou manuel, ref, pour}]`, `special` (vrai si lié aux plats ou à l'apéro de la semaine), `coche`, `manuel` |
@@ -123,6 +127,7 @@ Règles Firestore (version réelle collée dans la console, jamais commitée ave
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Adresses en minuscules : la comparaison tient compte de la casse.
     function membre() {
       return request.auth != null
         && request.auth.token.email_verified == true
@@ -263,7 +268,7 @@ Vocabulaires fermés :
 - `forme` (viande) : `hachee` `fine` `morceaux` `effilochable`
 - `role` (légume) : `principal` `incorpore`
 
-`coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients.
+`coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients. Les photos (`photos/`, `vignette`) ne font pas partie de `paquet@1` : ni import ni export (taille).
 
 Textes copiés par les boutons « Demander à Claude » (gestionnaire uniquement) :
 
@@ -323,13 +328,13 @@ besoin: sans_viande | avec_proteine
 | | Contenu | Fini quand |
 |---|---|---|
 | T0 Socle | PWA installable, connexion Google, refus propre si adresse non autorisée, rôles, tokens et navigation du §4, indicateur hors ligne | Installée sur les 2 téléphones ; l'app s'ouvre en mode avion ; l'utilisatrice des courses trouve l'écran beau |
-| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom, notes 0–5, écran Découvrir, édition simple d'une fiche, import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
+| T1 Plats, import & Découvrir | Profils, bibliothèque, fiche, ajout par nom, notes 0–5, écran Découvrir, édition simple d'une fiche, photo de la fiche (prise ou choisie, compressée), import (collage ou fichier) et export, « Demander à Claude » | Catalogue de départ importé ; les deux adultes ont trié des plats dans Découvrir ; une note posée sur un téléphone apparaît en direct sur l'autre |
 | T2 Compatibilité & variantes | Règles des profils, substitutions, `compatibilite.js` + tests, badges, demandes, notification ntfy | Un plat aux lardons passe en ⚠️ « version saumon » pour le profil concerné ; une variante manquante déclenche une demande et une notification |
 | T3 Semaine, liste & apéro | Sélection manuelle, choix des variantes, apéro, `liste.js` + tests, modes Drive et Magasin, « Courses terminées » | Une vraie commande drive préparée avec l'app |
 | T4 Congélateur & proposition | Stock, `congelateur.js` et `proposition.js` + tests, « Proposer » (repas et apéro) + ajustements | « Proposer » couvre tous les repas de chacun, fin de semaine par le congélateur |
 | T5 Batch | `batch.js` + tests, vue par appareil, « Batch terminé » | Un vrai dimanche préparé avec l'écran batch |
 
-V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » (rythme d'achat par produit), plan de cuisson minuté, statistiques, photos des plats prises dans l'app (compressées, stockées dans Firestore).
+V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » (rythme d'achat par produit), plan de cuisson minuté, statistiques.
 
 ## 12. Conventions
 
@@ -345,13 +350,13 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 
 1. GitHub : créer le dépôt public avec un README, puis Settings → Pages → *Deploy from a branch* → `main` / racine.
 2. console.firebase.google.com : créer un projet (Analytics inutile) → ajouter une application Web → copier `firebaseConfig` (public par nature ; il va dans `js/firebase.js`).
-3. Firestore Database : créer la base en mode production, région Europe ; onglet Règles : coller les règles du §6 avec les deux adresses réelles.
+3. Firestore Database : créer la base en mode production, région Europe ; onglet Règles : coller les règles du §6 avec les deux adresses réelles, en minuscules.
 4. Authentication : activer le fournisseur Google ; Paramètres → Domaines autorisés → ajouter `<pseudo>.github.io`.
 5. Facultatif (T2) : installer l'app ntfy sur le téléphone du gestionnaire, s'abonner à un sujet long et aléatoire, saisir ce sujet dans Réglages.
 
 ## 14. Statut
 
-- [ ] T0 Socle
+- [ ] T0 Socle — code livré le 2026-10-05 (branche `claude/tender-einstein-k1vfq9`) ; à cocher après les tests sur les deux téléphones
 - [ ] T1 Plats, import & Découvrir
 - [ ] T2 Compatibilité & variantes
 - [ ] T3 Semaine, liste & apéro
@@ -361,3 +366,6 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 Décisions :
 - 2026-10-04 — Stack validée : PWA vanilla + Firestore + GitHub Pages. Recettes produites par un Projet Claude au format `paquet@1`.
 - 2026-10-05 — Apéro hebdomadaire ; variantes automatiques par substitution et demandes de variante notifiées (ntfy) ; mode Drive sans API (lien de recherche) ; direction visuelle « cuisine familiale » ; écran Découvrir ; vue simplifiée pour l'utilisatrice des courses.
+- 2026-10-05 — Gestionnaire désigné à la première ouverture : tant que `reglages/foyer` n'existe pas, « C'est moi qui planifie » le crée (transaction, jamais d'écrasement). Mise en ligne : pull request de la branche de travail vers `main`, fusionnée par le propriétaire.
+- 2026-10-05 — Photo par recette avancée de V2 à T1 : image compressée dans `photos/{platId}` (Firestore ; Firebase Storage demanderait le forfait payant Blaze), vignette légère dans la fiche ; photos hors `paquet@1`.
+- 2026-10-05 — Socle : connexion par fenêtre uniquement (`initializeAuth` sans résolveur au démarrage, pour ne pas ralentir l'ouverture sur téléphone) ; service worker en cache d'abord, mise à jour d'un bloc via `VERSION` = empreinte des fichiers (vérifiée par `npm test`) ; caches préfixés `repas-courses-` et réparés à l'ouverture, car le domaine github.io est partagé avec d'autres apps du compte ; un compte jamais confirmé par le serveur ne voit pas la copie locale.
