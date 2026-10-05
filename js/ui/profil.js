@@ -13,8 +13,8 @@ export function initialeDe(utilisateur) {
 }
 
 const LIBELLES_ROLE = {
-  gestionnaire: 'Planification des repas',
-  courses: 'Courses',
+  gestionnaire: 'Recettes et réglages',
+  courses: 'Repas et courses',
 };
 
 /** Remplit et ouvre le panneau du profil. */

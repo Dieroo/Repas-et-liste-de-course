@@ -6,7 +6,7 @@ export function afficher({ reglages }) {
     enteteVue('Réglages'),
     el('section', { class: 'carte' },
       el('dl', { class: 'ligne-info' },
-        el('dt', {}, 'Planification des repas'),
+        el('dt', {}, 'Recettes et réglages'),
         el('dd', {}, reglages?.gestionnaire ?? ''),
       ),
     ),
