@@ -6,6 +6,7 @@ import {
   roleDe,
   routeAutorisee,
   resoudreRoute,
+  gestionnaireADesigner,
 } from '../js/coeur/roles.js';
 
 const reglages = { gestionnaire: 'planif@example.com' };
@@ -77,4 +78,12 @@ test('resoudreRoute renvoie vers l’accueil si l’écran est inconnu ou interd
   assert.equal(resoudreRoute('#/reglages', 'courses'), 'semaine');
   assert.equal(resoudreRoute('#/reglages', 'gestionnaire'), 'reglages');
   assert.equal(resoudreRoute('#/semaine', null), 'semaine');
+});
+
+test('gestionnaireADesigner : vrai tant que personne n’est gestionnaire', () => {
+  assert.equal(gestionnaireADesigner(undefined), true);
+  assert.equal(gestionnaireADesigner({}), true);
+  assert.equal(gestionnaireADesigner({ versionSchema: 1 }), true);
+  assert.equal(gestionnaireADesigner({ gestionnaire: '  ' }), true);
+  assert.equal(gestionnaireADesigner(reglages), false);
 });

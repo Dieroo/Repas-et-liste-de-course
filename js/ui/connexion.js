@@ -1,4 +1,5 @@
 // Écrans plein écran affichés avant l'app : chargement, connexion, refus, première ouverture…
+// Typographie : espace insécable avant « : » (\u00A0), espace fine insécable avant « ! » et « ? » (\u202F).
 import { el, logo, pastille } from './dom.js';
 
 function pleinEcran(...enfants) {
@@ -49,7 +50,7 @@ export function ecranRefus({ email, onChangerCompte }) {
   return pleinEcran(
     pastille('🔒', 'ocre', true),
     texte('Cette adresse n’a pas accès',
-      el('p', {}, 'Compte utilisé : ', el('span', { class: 'email' }, email || 'adresse inconnue')),
+      el('p', {}, 'Compte utilisé\u00A0: ', el('span', { class: 'email' }, email || 'adresse inconnue')),
       'Seuls les comptes du foyer peuvent ouvrir l’application.',
     ),
     el('div', { class: 'plein-ecran-actions' },
@@ -62,10 +63,10 @@ export function ecranRefus({ email, onChangerCompte }) {
 export function ecranPremiereOuverture({ email, enCours, messageErreur, onDevenirGestionnaire, onDeconnecter }) {
   return pleinEcran(
     pastille('👋', '', true),
-    texte('Bienvenue !',
-      'Une seule question avant de commencer : qui planifie les repas ?',
+    texte('Bienvenue\u202F!',
+      'Une seule question avant de commencer\u00A0: qui planifie les repas\u202F?',
       'Cette personne aura accès aux réglages et à l’ajout de recettes. L’autre aura une vue simplifiée, pensée pour les courses.',
-      el('p', {}, 'Compte utilisé : ', el('span', { class: 'email' }, email)),
+      el('p', {}, 'Compte utilisé\u00A0: ', el('span', { class: 'email' }, email)),
     ),
     el('div', { class: 'plein-ecran-actions' },
       el('button', {
@@ -74,8 +75,8 @@ export function ecranPremiereOuverture({ email, enCours, messageErreur, onDeveni
         disabled: enCours,
         onclick: onDevenirGestionnaire,
       }, enCours ? 'Un instant…' : 'C’est moi qui planifie'),
-      el('button', { class: 'bouton bouton-texte', type: 'button', onclick: onDeconnecter },
-        'Ce n’est pas moi : me déconnecter'),
+      el('button', { class: 'bouton bouton-texte', type: 'button', disabled: enCours, onclick: onDeconnecter },
+        'Ce n’est pas moi\u00A0: me déconnecter'),
     ),
     erreur(messageErreur),
   );
@@ -93,15 +94,17 @@ export function ecranConnexionNecessaire({ onDeconnecter }) {
   );
 }
 
-export function ecranErreur({ code, onReessayer }) {
+/** Données injoignables (sans code) ou erreur Firestore (avec code). */
+export function ecranErreur({ code, onReessayer, onDeconnecter }) {
   return pleinEcran(
     pastille('😕', 'ocre', true),
     texte('Impossible de charger les données',
       'Vérifiez le réseau, puis réessayez.',
-      code ? el('p', { class: 'texte-doux' }, `Code : ${code}`) : null,
+      code ? el('p', { class: 'texte-doux' }, `Code\u00A0: ${code}`) : null,
     ),
     el('div', { class: 'plein-ecran-actions' },
       el('button', { class: 'bouton bouton-principal bouton-plein', type: 'button', onclick: onReessayer }, 'Réessayer'),
+      el('button', { class: 'bouton bouton-texte', type: 'button', onclick: onDeconnecter }, 'Se déconnecter'),
     ),
   );
 }

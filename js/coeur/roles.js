@@ -22,6 +22,11 @@ export function roleDe(email, reglages) {
   return gestionnaire !== '' && moi === gestionnaire ? 'gestionnaire' : 'courses';
 }
 
+/** Vrai tant que personne n'est gestionnaire (document absent, ou sans adresse) : écran de première ouverture. */
+export function gestionnaireADesigner(reglages) {
+  return normaliserEmail(reglages?.gestionnaire) === '';
+}
+
 /** Vrai si l'écran existe et que ce rôle peut l'ouvrir. */
 export function routeAutorisee(route, role) {
   if (role !== 'gestionnaire' && role !== 'courses') return false;

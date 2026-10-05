@@ -4,11 +4,10 @@ import {
   surChangementUtilisateur,
   connecter,
   deconnecter,
-  retourDeRedirection,
   messageErreurConnexion,
 } from './firebase.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
-import { roleDe, resoudreRoute } from './coeur/roles.js';
+import { roleDe, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -35,6 +34,14 @@ const ECRANS = {
 
 const NOM_APP = 'Repas & Courses';
 
+// Délai avant d'annoncer que les données sont injoignables alors que le téléphone a du réseau.
+const DELAI_INJOIGNABLE_MS = 4000;
+
+// Comptes déjà confirmés par le serveur sur ce téléphone. Le cache Firestore est commun à tous les comptes :
+// pour un compte jamais confirmé, la copie locale n'est pas montrée (un compte non autorisé ne voit rien).
+// Le stockage local est partagé avec les autres sites du même domaine github.io, d'où le préfixe.
+const CLE_COMPTES_CONFIRMES = 'repas-courses:comptes-confirmes';
+
 const zone = document.getElementById('ecran');
 const marque = document.querySelector('.marque');
 const onglets = document.getElementById('onglets');
@@ -44,7 +51,8 @@ const panneauProfil = document.getElementById('panneau-profil');
 
 const etat = {
   utilisateur: undefined, // undefined : pas encore connu ; null : déconnecté
-  donnees: { statut: 'attente' },
+  donnees: { statut: 'chargement' },
+  abonnementDepuis: 0,
   connexionEnCours: false,
   erreurConnexion: null,
   creationEnCours: false,
@@ -52,6 +60,30 @@ const etat = {
 };
 
 let cleAffichee = '';
+let minuteurInjoignable = null;
+
+// ——— Comptes confirmés ———
+
+function comptesConfirmes() {
+  try {
+    return JSON.parse(localStorage.getItem(CLE_COMPTES_CONFIRMES) ?? '[]');
+  } catch {
+    return [];
+  }
+}
+
+function compteConfirme(uid) {
+  return comptesConfirmes().includes(uid);
+}
+
+function confirmerCompte(uid) {
+  try {
+    const comptes = comptesConfirmes();
+    if (!comptes.includes(uid)) localStorage.setItem(CLE_COMPTES_CONFIRMES, JSON.stringify([...comptes, uid]));
+  } catch {
+    // Sans stockage local, l'app demandera simplement du réseau à l'ouverture.
+  }
+}
 
 // ——— Rendu ———
 
@@ -65,15 +97,14 @@ function monter(cle, fabriquer, { dansApp = false, titre = NOM_APP } = {}) {
   if (cle === cleAffichee) return;
 
   const changementDEcran = cle.split('|')[0] !== cleAffichee.split('|')[0];
+  const focusDansLEcran = zone.contains(document.activeElement);
   cleAffichee = cle;
   document.title = titre;
   const vue = fabriquer();
   if (changementDEcran) vue.classList.add('entree');
   zone.replaceChildren(vue);
-  if (changementDEcran && dansApp) {
-    window.scrollTo(0, 0);
-    zone.focus({ preventScroll: true });
-  }
+  if (changementDEcran && dansApp) window.scrollTo(0, 0);
+  if ((changementDEcran && dansApp) || focusDansLEcran) zone.focus({ preventScroll: true });
 }
 
 function rendre() {
@@ -101,28 +132,55 @@ function rendre() {
   }
 
   switch (donnees.statut) {
-    case 'attente':
-      if (navigator.onLine) monter('chargement', ecranChargement);
-      else monter('reseau-necessaire', () => ecranConnexionNecessaire({ onDeconnecter: seDeconnecter }));
+    case 'chargement':
+      monter('chargement', ecranChargement);
+      return;
+    case 'injoignable':
+      rendreInjoignable();
       return;
     case 'refuse':
       monter(`refus|${utilisateur.email}`, () => ecranRefus({ email: utilisateur.email, onChangerCompte: seDeconnecter }));
       return;
-    case 'absent':
-      monter(`premiere|${etat.creationEnCours}|${etat.erreurCreation}`, () => ecranPremiereOuverture({
-        email: utilisateur.email,
-        enCours: etat.creationEnCours,
-        messageErreur: etat.erreurCreation,
-        onDevenirGestionnaire: lancerCreation,
+    case 'erreur':
+      monter(`erreur|${donnees.code}`, () => ecranErreur({
+        code: donnees.code,
+        onReessayer: suivreDonnees,
         onDeconnecter: seDeconnecter,
       }));
       return;
-    case 'erreur':
-      monter(`erreur|${donnees.code}`, () => ecranErreur({ code: donnees.code, onReessayer: suivreDonnees }));
+    case 'absent':
+      rendrePremiereOuverture();
       return;
     default:
-      rendreApp();
+      if (gestionnaireADesigner(donnees.reglages)) rendrePremiereOuverture();
+      else rendreApp();
   }
+}
+
+/** Rien en cache et pas de réponse : « du réseau » si le téléphone n'en a pas, sinon attente puis erreur. */
+function rendreInjoignable() {
+  if (!navigator.onLine) {
+    monter('reseau-necessaire', () => ecranConnexionNecessaire({ onDeconnecter: seDeconnecter }));
+    return;
+  }
+  const reste = etat.abonnementDepuis + DELAI_INJOIGNABLE_MS - Date.now();
+  if (reste > 0) {
+    monter('chargement', ecranChargement);
+    clearTimeout(minuteurInjoignable);
+    minuteurInjoignable = setTimeout(rendre, reste);
+    return;
+  }
+  monter('injoignable', () => ecranErreur({ onReessayer: suivreDonnees, onDeconnecter: seDeconnecter }));
+}
+
+function rendrePremiereOuverture() {
+  monter(`premiere|${etat.creationEnCours}|${etat.erreurCreation}`, () => ecranPremiereOuverture({
+    email: etat.utilisateur.email,
+    enCours: etat.creationEnCours,
+    messageErreur: etat.erreurCreation,
+    onDevenirGestionnaire: lancerCreation,
+    onDeconnecter: seDeconnecter,
+  }));
 }
 
 function rendreApp() {
@@ -138,8 +196,11 @@ function rendreApp() {
   }
   boutonProfil.dataset.initiale = initialeDe(utilisateur);
 
+  // La date et la salutation font partie de la clé : l'écran se met à jour si l'app reprend plus tard.
+  const maintenant = new Date();
+  const moment = `${maintenant.toDateString()}-${maintenant.getHours() >= 18 || maintenant.getHours() < 5}`;
   const { titre, module } = ECRANS[route];
-  const cle = `${route}|${role}|${utilisateur.uid}|${reglagesFoyer?.gestionnaire ?? ''}`;
+  const cle = `${route}|${role}|${utilisateur.uid}|${reglagesFoyer?.gestionnaire ?? ''}|${moment}`;
   monter(cle, () => module.afficher({ utilisateur, role, reglages: reglagesFoyer }), {
     dansApp: true,
     titre: `${titre} · ${NOM_APP}`,
@@ -149,6 +210,7 @@ function rendreApp() {
 // ——— Actions ———
 
 async function lancerConnexion() {
+  if (etat.connexionEnCours) return;
   etat.connexionEnCours = true;
   etat.erreurConnexion = null;
   rendre();
@@ -164,37 +226,48 @@ async function lancerConnexion() {
 
 async function seDeconnecter() {
   arreterReglages();
-  etat.donnees = { statut: 'attente' };
+  etat.donnees = { statut: 'chargement' };
   try {
     await deconnecter();
   } catch {
-    // Rien à faire : l'état de connexion reste celui annoncé par Firebase.
+    // La déconnexion a échoué : on reprend là où on en était.
+    if (etat.utilisateur) suivreDonnees();
   }
 }
 
 async function lancerCreation() {
+  if (etat.creationEnCours) return;
   if (!navigator.onLine) {
     etat.erreurCreation = 'Cette étape demande du réseau. Réessayez quand il revient.';
     rendre();
     return;
   }
+  const uid = etat.utilisateur.uid;
   etat.creationEnCours = true;
   etat.erreurCreation = null;
   rendre();
   try {
     await devenirGestionnaire(etat.utilisateur.email);
   } catch {
-    etat.erreurCreation = 'L’enregistrement n’a pas abouti. Réessayez.';
+    if (etat.utilisateur?.uid === uid) etat.erreurCreation = 'L’enregistrement n’a pas abouti. Réessayez.';
   } finally {
-    etat.creationEnCours = false;
-    rendre();
+    if (etat.utilisateur?.uid === uid) {
+      etat.creationEnCours = false;
+      rendre();
+    }
   }
 }
 
 function suivreDonnees() {
-  etat.donnees = { statut: 'attente' };
+  const uid = etat.utilisateur.uid;
+  etat.donnees = { statut: 'chargement' };
+  etat.abonnementDepuis = Date.now();
   rendre();
   suivreReglages((donnees) => {
+    if (donnees.statut === 'ok') {
+      if (!donnees.depuisCache) confirmerCompte(uid);
+      else if (!compteConfirme(uid)) donnees = { statut: 'injoignable' };
+    }
     etat.donnees = donnees;
     rendre();
   });
@@ -215,10 +288,15 @@ function demarrer() {
       // Sans service worker, l'app marche quand même en ligne.
     });
   }
+  // Demande à Chrome de ne pas effacer les données de l'app quand le téléphone manque de place.
+  navigator.storage?.persist?.().catch(() => {});
 
   window.addEventListener('online', majHorsLigne);
   window.addEventListener('offline', majHorsLigne);
   window.addEventListener('hashchange', rendre);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') rendre();
+  });
   pastilleHorsLigne.hidden = navigator.onLine;
 
   fermerAuToucherDuVoile(panneauProfil);
@@ -235,20 +313,16 @@ function demarrer() {
   rendre();
   if (!configuree) return;
 
-  retourDeRedirection().catch((erreur) => {
-    etat.erreurConnexion = messageErreurConnexion(erreur);
-    rendre();
-  });
-
   surChangementUtilisateur((utilisateur) => {
     etat.utilisateur = utilisateur;
+    etat.creationEnCours = false;
     etat.erreurCreation = null;
     if (utilisateur) {
       etat.erreurConnexion = null;
       suivreDonnees();
     } else {
       arreterReglages();
-      etat.donnees = { statut: 'attente' };
+      etat.donnees = { statut: 'chargement' };
       rendre();
     }
   });
