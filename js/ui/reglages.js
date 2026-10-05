@@ -3,7 +3,9 @@ import { el, enteteVue, etatVide, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
 
-function ouvrirFicheProfil(ctx, existant) {
+/** `lireCtx()` donne l'état à jour au moment d'enregistrer (les profils ont pu changer entre-temps). */
+function ouvrirFicheProfil(lireCtx, existant) {
+  const nomAffiche = existant?.nom || 'ce profil';
   ouvrirFeuille(existant ? 'Modifier le profil' : 'Ajouter un profil', (fermer) => {
     let retraitAConfirmer = false;
     const erreurs = {};
@@ -37,11 +39,12 @@ function ouvrirFicheProfil(ctx, existant) {
         onclick: () => {
           if (!retraitAConfirmer) {
             retraitAConfirmer = true;
-            boutonRetrait.textContent = `Confirmer\u00A0: retirer ${existant.nom}`;
+            boutonRetrait.textContent = `Confirmer\u00A0: retirer ${nomAffiche}`;
+            annoncer('Touchez à nouveau pour confirmer.');
             return;
           }
-          ctx.actions.retirerProfil(existant.id);
-          annoncer(`Profil «\u00A0${existant.nom}\u00A0» retiré.`);
+          lireCtx().actions.retirerProfil(existant.id);
+          annoncer(`Profil «\u00A0${nomAffiche}\u00A0» retiré.`);
           fermer();
         },
       }, 'Retirer ce profil')
@@ -53,6 +56,7 @@ function ouvrirFicheProfil(ctx, existant) {
       onsubmit: (evenement) => {
         evenement.preventDefault();
         const choisi = portions.map((l) => l.querySelector('input')).find((i) => i.checked);
+        const ctx = lireCtx();
         const resultat = preparerProfil(
           { nom: nom.value, email: email.value, coefPortion: choisi ? Number(choisi.value) : null },
           { profils: ctx.profils, id: existant?.id ?? null },
@@ -92,14 +96,24 @@ export function creer(ctx) {
   const gestionnaire = el('dd', {});
   const listeProfils = el('div', { class: 'section' });
 
+  const lireCtx = () => courant;
+
   function remplir() {
     gestionnaire.textContent = courant.reglages?.gestionnaire ?? '';
     const profils = trierProfils(courant.profils);
+    const cleFocus = listeProfils.contains(document.activeElement) ? document.activeElement.dataset.cle : null;
+    if (!courant.profilsCharges) {
+      listeProfils.replaceChildren(
+        el('div', { class: 'section-titre' }, el('h2', {}, 'Profils du foyer')),
+        el('p', { class: 'texte-doux', role: 'status' }, 'Chargement des profils…'),
+      );
+      return;
+    }
     listeProfils.replaceChildren(
       el('div', { class: 'section-titre' }, el('h2', {}, 'Profils du foyer')),
       profils.length
         ? el('ul', { class: 'liste-profils' }, profils.map((profil) => el('li', {},
-          el('button', { class: 'carte-plat', type: 'button', onclick: () => ouvrirFicheProfil(courant, profil) },
+          el('button', { class: 'carte-plat', type: 'button', 'data-cle': profil.id, onclick: () => ouvrirFicheProfil(lireCtx, profil) },
             el('span', { class: 'avatar', 'data-initiale': Array.from(profil.nom || '?')[0].toLocaleUpperCase('fr-FR'), 'aria-hidden': 'true' }),
             el('span', { class: 'carte-plat-texte' },
               el('span', { class: 'carte-plat-nom' }, profil.nom),
@@ -112,9 +126,12 @@ export function creer(ctx) {
       el('button', {
         class: 'bouton bouton-secondaire bouton-plein',
         type: 'button',
-        onclick: () => ouvrirFicheProfil(courant, null),
+        'data-cle': 'ajouter',
+        onclick: () => ouvrirFicheProfil(lireCtx, null),
       }, '＋ Ajouter un profil'),
     );
+    // Le bouton qui avait le focus (rendu par la feuille à sa fermeture) le retrouve après la mise à jour.
+    if (cleFocus) listeProfils.querySelector(`[data-cle="${CSS.escape(cleFocus)}"]`)?.focus();
   }
 
   remplir();

@@ -11,6 +11,7 @@
   --sur-accent: #FFFFFF;
   --olive: #4F6E4A;
   --bordure: #E9E1D6;
+  --bordure-champ: #958879; /* contour des champs : 3:1 au moins sur le fond et la surface */
 
   /* Teintes des pastilles (emoji des plats, états vides) */
   --accent-doux: #F6E4DC;
@@ -39,6 +40,7 @@
     --sur-accent: #1C1917;
     --olive: #8FB089;
     --bordure: #3A332E;
+    --bordure-champ: #7D7167;
 
     --accent-doux: #43291F;
     --olive-doux: #2A3527;
@@ -218,7 +220,9 @@ body:not(.dans-app) main {
   gap: 20px;
 }
 
-.vue.entree { animation: entree 0.22s ease-out; }
+/* Animation d'entrée sur les enfants : une transformation de .vue décalerait le bouton flottant (position: fixed). */
+.vue.entree > :not(.bouton-flottant) { animation: entree 0.22s ease-out; }
+.vue.entree > .bouton-flottant { animation: apparait 0.22s ease-out; }
 
 .vue-entete {
   display: flex;
@@ -548,7 +552,7 @@ body:not(.dans-app) main {
   width: 100%;
   min-height: 52px;
   padding: 12px 16px;
-  border: 1px solid var(--bordure);
+  border: 1px solid var(--bordure-champ);
   border-radius: 14px;
   background: var(--surface);
   color: var(--texte);
@@ -580,7 +584,14 @@ body:not(.dans-app) main {
   font-size: 0.875rem;
 }
 
-.formulaire .message-erreur { max-width: none; }
+.formulaire .message-erreur {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: none;
+}
+
+.lien-erreur { background: var(--surface); }
 
 .actions-feuille {
   display: flex;
@@ -608,7 +619,7 @@ body:not(.dans-app) main {
   align-items: center;
   justify-content: center;
   min-height: 52px;
-  border: 1px solid var(--bordure);
+  border: 1px solid var(--bordure-champ);
   border-radius: 14px;
   background: var(--surface);
   font-weight: 600;
@@ -644,20 +655,16 @@ body:not(.dans-app) main {
   background-size: 20px;
 }
 
+/* Les filtres passent à la ligne : tous visibles, même à 360 px. */
 .puces {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 0 calc(-1 * max(20px, env(safe-area-inset-left))) ;
-  padding: 2px max(20px, env(safe-area-inset-left));
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-
-.puces::-webkit-scrollbar { display: none; }
 
 .puce {
   flex: none;
-  min-height: 44px;
+  min-height: 48px;
   padding: 0 16px;
   border: 1px solid var(--bordure);
   border-radius: 999px;
@@ -895,7 +902,7 @@ body:not(.dans-app) main {
 
 .bandeau-apercu {
   position: sticky;
-  top: calc(64px + env(safe-area-inset-top));
+  top: max(64px, calc(env(safe-area-inset-top) + 56px)); /* hauteur réelle de l'en-tête */
   z-index: 9;
   display: flex;
   align-items: center;
@@ -912,7 +919,7 @@ body:not(.dans-app) main {
 }
 
 .bandeau-apercu-bouton {
-  min-height: 44px;
+  min-height: 48px;
   padding: 0 16px;
   border: none;
   border-radius: 10px;

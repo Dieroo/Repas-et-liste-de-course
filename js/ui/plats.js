@@ -1,11 +1,12 @@
 // Écran Plats : recherche, filtres, liste, ajout d'un plat par son nom.
 import { el, etatVide, pastille } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
-import { FILTRES, LIBELLES_TYPE, STATUTS, NOM_MAX, filtrerPlats, visuelDuPlat } from '../coeur/plats.js';
+import { FILTRES, LIBELLES_TYPE, STATUTS, NOM_MAX, filtrerPlats, visuelDuPlat, statutDe, typeDe } from '../coeur/plats.js';
 
-// Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste.
+// Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
 let recherche = '';
 let filtre = 'tous';
+let defilement = 0;
 
 /** Vignette du plat, ou son emoji sur pastille teintée. */
 export function vignetteDuPlat(plat, grande = false) {
@@ -23,11 +24,11 @@ export function vignetteDuPlat(plat, grande = false) {
 }
 
 function carteDuPlat(plat) {
-  const statut = plat.statutRecette !== 'validee' ? STATUTS[plat.statutRecette] : null;
-  const detail = [LIBELLES_TYPE[plat.type] ?? 'Plat', statut ? `${statut.emoji}\u00A0${statut.libelle}` : null]
+  const statut = statutDe(plat) !== 'validee' ? STATUTS[statutDe(plat)] : null;
+  const detail = [LIBELLES_TYPE[typeDe(plat)] ?? 'Plat', statut ? `${statut.emoji}\u00A0${statut.libelle}` : null]
     .filter(Boolean).join(' · ');
   return el('li', {},
-    el('a', { class: 'carte-plat', href: `#/plat/${encodeURIComponent(plat.id)}` },
+    el('a', { class: 'carte-plat', href: `#/plat/${encodeURIComponent(plat.id)}`, 'data-cle': plat.id },
       vignetteDuPlat(plat),
       el('span', { class: 'carte-plat-texte' },
         el('span', { class: 'carte-plat-nom' }, plat.nom),
@@ -59,9 +60,13 @@ function ouvrirAjout(ctx) {
         const resultat = ctx.actions.ajouterPlat(entree.value);
         if (resultat.erreur) {
           erreur.replaceChildren(
-            resultat.erreur,
+            el('span', {}, resultat.erreur),
             ...(resultat.existant
-              ? [' ', el('a', { href: `#/plat/${encodeURIComponent(resultat.existant)}`, onclick: fermer }, 'Voir sa fiche')]
+              ? [el('a', {
+                class: 'bouton bouton-secondaire bouton-plein lien-erreur',
+                href: `#/plat/${encodeURIComponent(resultat.existant)}`,
+                onclick: fermer,
+              }, 'Voir sa fiche')]
               : []),
           );
           erreur.hidden = false;
@@ -87,7 +92,7 @@ function ouvrirAjout(ctx) {
 
 export function creer(ctx) {
   let courant = ctx;
-  const compteur = el('p', { class: 'sous-titre' });
+  const compteur = el('p', { class: 'sous-titre', role: 'status' });
   const zoneMessage = el('div');
   const liste = el('ul', { class: 'liste-plats' });
 
@@ -114,6 +119,10 @@ export function creer(ctx) {
       recherche = evenement.target.value;
       remplir();
     },
+    // Touche « Rechercher » du clavier : la liste est déjà filtrée, on referme le clavier.
+    onkeydown: (evenement) => {
+      if (evenement.key === 'Enter') champRecherche.blur();
+    },
   });
 
   function toutAfficher() {
@@ -122,9 +131,12 @@ export function creer(ctx) {
     champRecherche.value = '';
     for (const [i, bouton] of boutonsFiltre.entries()) bouton.setAttribute('aria-pressed', String(FILTRES[i].id === filtre));
     remplir();
+    champRecherche.focus();
   }
 
   function remplir() {
+    // Pas d'ajout avant le chargement : sans la liste, un doublon ne serait pas repéré.
+    boutonAjouter.disabled = !courant.platsCharges;
     if (!courant.platsCharges) {
       compteur.textContent = '';
       zoneMessage.replaceChildren(el('p', { class: 'texte-doux', role: 'status' }, 'Chargement des plats…'));
@@ -132,8 +144,11 @@ export function creer(ctx) {
       return;
     }
     const tous = courant.plats;
-    compteur.textContent = tous.length ? `${tous.length} plat${tous.length > 1 ? 's' : ''}` : '';
     const resultat = filtrerPlats(tous, { recherche, filtre });
+    const pluriel = (n) => `${n}\u00A0plat${n > 1 ? 's' : ''}`;
+    compteur.textContent = !tous.length ? ''
+      : resultat.length === tous.length ? pluriel(tous.length)
+        : `${pluriel(resultat.length)} sur ${tous.length}`;
     if (!tous.length) {
       zoneMessage.replaceChildren(etatVide({
         emoji: '🥘',
@@ -149,8 +164,17 @@ export function creer(ctx) {
     } else {
       zoneMessage.replaceChildren();
     }
+    // Une carte qui avait le focus le retrouve après la mise à jour.
+    const cleFocus = liste.contains(document.activeElement) ? document.activeElement.dataset.cle : null;
     liste.replaceChildren(...resultat.map(carteDuPlat));
+    if (cleFocus) liste.querySelector(`[data-cle="${CSS.escape(cleFocus)}"]`)?.focus();
   }
+
+  const boutonAjouter = el('button', {
+    class: 'bouton bouton-principal bouton-flottant',
+    type: 'button',
+    onclick: () => ouvrirAjout(courant),
+  }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Ajouter un plat');
 
   remplir();
 
@@ -161,15 +185,15 @@ export function creer(ctx) {
       el('div', { class: 'puces', role: 'group', 'aria-label': 'Afficher' }, boutonsFiltre),
       zoneMessage,
       liste,
-      el('button', {
-        class: 'bouton bouton-principal bouton-flottant',
-        type: 'button',
-        onclick: () => ouvrirAjout(courant),
-      }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Ajouter un plat'),
+      boutonAjouter,
     ),
+    defilement,
     maj(nouveau) {
       courant = nouveau;
       remplir();
+    },
+    detruire() {
+      defilement = window.scrollY;
     },
   };
 }

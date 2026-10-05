@@ -25,10 +25,13 @@ export function ouvrirFeuille(titre, construire) {
   const fermer = () => dialogue.close();
   dialogue.addEventListener('close', () => dialogue.remove());
   fermerAuToucherDuVoile(dialogue);
+  const entete = el('h2', { id: idTitre, tabindex: '-1' }, titre);
   dialogue.append(
     el('div', { class: 'feuille-poignee', 'aria-hidden': 'true' }),
-    el('div', { class: 'feuille-contenu' }, el('h2', { id: idTitre }, titre), construire(fermer)),
+    el('div', { class: 'feuille-contenu' }, entete, construire(fermer)),
   );
+  // Sans champ désigné, le focus va au titre : pas de clavier qui s'ouvre pour une simple consultation.
+  if (!dialogue.querySelector('[autofocus]')) entete.setAttribute('autofocus', '');
   document.body.append(dialogue);
   dialogue.showModal();
   return { fermer };
