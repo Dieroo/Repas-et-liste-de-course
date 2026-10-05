@@ -6,8 +6,10 @@ import {
   deconnecter,
   messageErreurConnexion,
 } from './firebase.js';
+import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
-import { roleDe, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
+import { roleDe, roleEffectif, lireHash, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
+import { nouveauPlatParNom } from './coeur/plats.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -17,19 +19,25 @@ import {
   ecranErreur,
   ecranNonConfigure,
 } from './ui/connexion.js';
-import { ouvrirProfil, fermerAuToucherDuVoile, initialeDe } from './ui/profil.js';
+import { ouvrirProfil, initialeDe } from './ui/profil.js';
+import { fermerAuToucherDuVoile } from './ui/feuille.js';
+import { annoncer } from './ui/dom.js';
 import * as semaine from './ui/semaine.js';
 import * as courses from './ui/courses.js';
 import * as plats from './ui/plats.js';
+import * as fiche from './ui/fiche.js';
 import * as decouvrir from './ui/decouvrir.js';
 import * as reglages from './ui/reglages.js';
 
+// Écrans de l'app. `onglet` : onglet surligné. Un module expose creer(ctx) → { noeud, maj?, detruire? }
+// (mis à jour en direct) ou afficher(ctx) → nœud (reconstruit seulement si l'écran change).
 const ECRANS = {
-  semaine: { titre: 'Semaine', module: semaine },
-  courses: { titre: 'Courses', module: courses },
-  plats: { titre: 'Plats', module: plats },
-  decouvrir: { titre: 'Découvrir', module: decouvrir },
-  reglages: { titre: 'Réglages', module: reglages },
+  semaine: { titre: 'Semaine', module: semaine, onglet: 'semaine' },
+  courses: { titre: 'Courses', module: courses, onglet: 'courses' },
+  plats: { titre: 'Plats', module: plats, onglet: 'plats' },
+  plat: { titre: 'Plat', module: fiche, onglet: 'plats' },
+  decouvrir: { titre: 'Découvrir', module: decouvrir, onglet: 'decouvrir' },
+  reglages: { titre: 'Réglages', module: reglages, onglet: null },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -48,6 +56,7 @@ const onglets = document.getElementById('onglets');
 const boutonProfil = document.getElementById('bouton-profil');
 const pastilleHorsLigne = document.getElementById('hors-ligne');
 const panneauProfil = document.getElementById('panneau-profil');
+const bandeauApercu = document.getElementById('bandeau-apercu');
 
 const etat = {
   utilisateur: undefined, // undefined : pas encore connu ; null : déconnecté
@@ -57,10 +66,19 @@ const etat = {
   erreurConnexion: null,
   creationEnCours: false,
   erreurCreation: null,
+  collectionsSuivies: false,
+  profils: [],
+  profilsCharges: false,
+  plats: [],
+  platsCharges: false,
+  apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
 };
 
 let cleAffichee = '';
+let vueCourante = null;
 let minuteurInjoignable = null;
+let routeAffichee = '';
+let routePrecedente = '';
 
 // ——— Comptes confirmés ———
 
@@ -87,23 +105,33 @@ function confirmerCompte(uid) {
 
 // ——— Rendu ———
 
-/** Remplace le contenu de l'écran, sauf si rien n'a changé (évite de rejouer l'animation). */
-function monter(cle, fabriquer, { dansApp = false, titre = NOM_APP } = {}) {
+/**
+ * Affiche un écran. Même clé : l'écran en place est seulement mis à jour (s'il sait le faire), sans rejouer
+ * l'animation ni perdre la saisie. `fabriquer()` renvoie un nœud ou { noeud, maj?, detruire? }.
+ */
+function monter(cle, fabriquer, { dansApp = false, titre = NOM_APP, ctx = null } = {}) {
   document.body.classList.toggle('dans-app', dansApp);
   marque.hidden = !dansApp;
   onglets.hidden = !dansApp;
   boutonProfil.hidden = !dansApp;
+  if (!dansApp) bandeauApercu.hidden = true;
   if (!dansApp && panneauProfil.open) panneauProfil.close();
-  if (cle === cleAffichee) return;
+  document.title = titre;
+  if (cle === cleAffichee) {
+    if (ctx) vueCourante?.maj?.(ctx);
+    return;
+  }
 
   const changementDEcran = cle.split('|')[0] !== cleAffichee.split('|')[0];
   const focusDansLEcran = zone.contains(document.activeElement);
+  // L'ancien écran note ce qu'il veut retrouver (défilement…) avant que le nouveau soit construit.
+  vueCourante?.detruire?.();
+  const fabrique = fabriquer();
+  vueCourante = fabrique instanceof Node ? { noeud: fabrique } : fabrique;
   cleAffichee = cle;
-  document.title = titre;
-  const vue = fabriquer();
-  if (changementDEcran) vue.classList.add('entree');
-  zone.replaceChildren(vue);
-  if (changementDEcran && dansApp) window.scrollTo(0, 0);
+  if (changementDEcran) vueCourante.noeud.classList.add('entree');
+  zone.replaceChildren(vueCourante.noeud);
+  if (changementDEcran && dansApp) window.scrollTo(0, vueCourante.defilement ?? 0);
   if ((changementDEcran && dansApp) || focusDansLEcran) zone.focus({ preventScroll: true });
 }
 
@@ -186,25 +214,96 @@ function rendrePremiereOuverture() {
 function rendreApp() {
   const { utilisateur } = etat;
   const reglagesFoyer = etat.donnees.reglages;
-  const role = roleDe(utilisateur.email, reglagesFoyer);
+  const roleReel = roleDe(utilisateur.email, reglagesFoyer);
+  if (roleReel !== 'gestionnaire') etat.apercu = false;
+  const role = roleEffectif(roleReel, etat.apercu);
   const route = resoudreRoute(location.hash, role);
-  if (location.hash !== `#/${route}`) history.replaceState(null, '', `#/${route}`);
+  const parametre = route === 'plat' ? lireHash(location.hash).parametre : '';
+  const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
+  if (location.hash !== hashAttendu) history.replaceState(null, '', hashAttendu);
 
+  if (route !== routeAffichee) {
+    routePrecedente = routeAffichee;
+    routeAffichee = route;
+  }
+
+  const { titre, module, onglet: ongletActif } = ECRANS[route];
   for (const onglet of onglets.querySelectorAll('[data-route]')) {
-    if (onglet.dataset.route === route) onglet.setAttribute('aria-current', 'page');
+    if (onglet.dataset.route === ongletActif) onglet.setAttribute('aria-current', 'page');
     else onglet.removeAttribute('aria-current');
   }
   boutonProfil.dataset.initiale = initialeDe(utilisateur);
+  bandeauApercu.hidden = !etat.apercu;
 
-  // La date et la salutation font partie de la clé : l'écran se met à jour si l'app reprend plus tard.
+  const ctx = {
+    utilisateur,
+    role,
+    roleReel,
+    reglages: reglagesFoyer,
+    profils: etat.profils,
+    profilsCharges: etat.profilsCharges,
+    plats: etat.plats,
+    platsCharges: etat.platsCharges,
+    parametre,
+    routePrecedente,
+    actions,
+  };
+
+  // Semaine : la date et la salutation font partie de la clé, l'écran se met à jour si l'app reprend plus tard.
   const maintenant = new Date();
-  const moment = `${maintenant.toDateString()}-${maintenant.getHours() >= 18 || maintenant.getHours() < 5}`;
-  const { titre, module } = ECRANS[route];
-  const cle = `${route}|${role}|${utilisateur.uid}|${reglagesFoyer?.gestionnaire ?? ''}|${moment}`;
-  monter(cle, () => module.afficher({ utilisateur, role, reglages: reglagesFoyer }), {
+  const moment = route === 'semaine'
+    ? `${maintenant.toDateString()}-${maintenant.getHours() >= 18 || maintenant.getHours() < 5}`
+    : '';
+  const cle = `${route}/${parametre}|${role}|${roleReel}|${utilisateur.uid}|${moment}`;
+  const titrePage = route === 'plat' ? etat.plats.find((p) => p.id === parametre)?.nom ?? titre : titre;
+  monter(cle, () => (module.creer ? module.creer(ctx) : module.afficher(ctx)), {
     dansApp: true,
-    titre: `${titre} · ${NOM_APP}`,
+    titre: `${titrePage} · ${NOM_APP}`,
+    ctx,
   });
+}
+
+// ——— Actions des écrans ———
+
+/** Les écritures s'appliquent tout de suite sur le téléphone ; en cas d'échec au serveur, on le dit. */
+function ecrire(promesse, messageEchec) {
+  promesse.catch(() => annoncer(messageEchec));
+}
+
+const actions = {
+  ajouterPlat(nom) {
+    const resultat = nouveauPlatParNom(nom, etat.plats);
+    if (resultat.erreur) return resultat;
+    const demanderRecette = roleDe(etat.utilisateur.email, etat.donnees.reglages) !== 'gestionnaire';
+    ecrire(donnees.ajouterPlat(resultat.plat, etat.utilisateur.email, { demanderRecette }),
+      'Le plat n’a pas pu être enregistré. Réessayez.');
+    // Affiché tout de suite ; la copie de Firestore remplace cette version dès son arrivée.
+    etat.plats = [...etat.plats, resultat.plat];
+    annoncer(demanderRecette
+      ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée.`
+      : `«\u00A0${resultat.plat.nom}\u00A0» ajouté.`);
+    return { id: resultat.plat.id };
+  },
+  suivrePhoto: donnees.suivrePhoto,
+  enregistrerPhoto(platId, photo) {
+    ecrire(donnees.enregistrerPhoto(platId, photo, etat.utilisateur.email),
+      'La photo n’a pas pu être enregistrée. Réessayez.');
+  },
+  retirerPhoto(platId) {
+    ecrire(donnees.retirerPhoto(platId, etat.utilisateur.email), 'La photo n’a pas pu être retirée. Réessayez.');
+  },
+  enregistrerProfil(profil) {
+    ecrire(donnees.enregistrerProfil(profil), 'Le profil n’a pas pu être enregistré. Réessayez.');
+  },
+  retirerProfil(profilId) {
+    ecrire(donnees.retirerProfil(profilId), 'Le profil n’a pas pu être retiré. Réessayez.');
+  },
+};
+
+function changerApercu(actif) {
+  etat.apercu = actif;
+  rendre();
+  annoncer(actif ? 'Aperçu de la vue «\u00A0Repas et courses\u00A0».' : 'Retour à votre vue.');
 }
 
 // ——— Actions ———
@@ -224,9 +323,22 @@ async function lancerConnexion() {
   }
 }
 
-async function seDeconnecter() {
+function oublierDonnees() {
   arreterReglages();
-  etat.donnees = { statut: 'chargement' };
+  donnees.arreterCollections();
+  Object.assign(etat, {
+    donnees: { statut: 'chargement' },
+    collectionsSuivies: false,
+    profils: [],
+    profilsCharges: false,
+    plats: [],
+    platsCharges: false,
+    apercu: false,
+  });
+}
+
+async function seDeconnecter() {
+  oublierDonnees();
   try {
     await deconnecter();
   } catch {
@@ -263,12 +375,30 @@ function suivreDonnees() {
   etat.donnees = { statut: 'chargement' };
   etat.abonnementDepuis = Date.now();
   rendre();
-  suivreReglages((donnees) => {
-    if (donnees.statut === 'ok') {
-      if (!donnees.depuisCache) confirmerCompte(uid);
-      else if (!compteConfirme(uid)) donnees = { statut: 'injoignable' };
+  suivreReglages((recu) => {
+    let suivi = recu;
+    if (suivi.statut === 'ok') {
+      if (!suivi.depuisCache) confirmerCompte(uid);
+      else if (!compteConfirme(uid)) suivi = { statut: 'injoignable' };
     }
-    etat.donnees = donnees;
+    etat.donnees = suivi;
+    if (suivi.statut === 'ok' && !etat.collectionsSuivies) {
+      etat.collectionsSuivies = true;
+      donnees.suivreCollections((maj) => {
+        Object.assign(etat, maj);
+        if (maj.plats) etat.platsCharges = true;
+        if (maj.profils) etat.profilsCharges = true;
+        rendre();
+      }, (code) => {
+        donnees.arreterCollections();
+        etat.collectionsSuivies = false;
+        etat.donnees = { statut: 'erreur', code };
+        rendre();
+      });
+    } else if ((suivi.statut === 'refuse' || suivi.statut === 'erreur') && etat.collectionsSuivies) {
+      donnees.arreterCollections();
+      etat.collectionsSuivies = false;
+    }
     rendre();
   });
 }
@@ -305,10 +435,13 @@ function demarrer() {
     ouvrirProfil(panneauProfil, {
       utilisateur: etat.utilisateur,
       role,
+      apercu: etat.apercu,
       onReglages: () => { location.hash = '#/reglages'; },
+      onApercu: changerApercu,
       onDeconnecter: seDeconnecter,
     });
   });
+  document.getElementById('quitter-apercu').addEventListener('click', () => changerApercu(false));
 
   rendre();
   if (!configuree) return;
@@ -321,8 +454,7 @@ function demarrer() {
       etat.erreurConnexion = null;
       suivreDonnees();
     } else {
-      arreterReglages();
-      etat.donnees = { statut: 'chargement' };
+      oublierDonnees();
       rendre();
     }
   });

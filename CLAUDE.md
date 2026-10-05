@@ -272,7 +272,7 @@ Vocabulaires fermés :
 - `forme` (viande) : `hachee` `fine` `morceaux` `effilochable`
 - `role` (légume) : `principal` `incorpore`
 
-`coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients. Les photos (`photos/`, `vignette`) ne font pas partie de `paquet@1` : ni import ni export (taille).
+`coeur/paquet.js` valide tout (types, bornes, vocabulaires) et renvoie des erreurs en français, ingrédient par ingrédient ; l'app affiche un aperçu avant d'enregistrer. Un plat `attente` est accepté sans ingrédients. Les photos (`photos/`, `vignette`) ne font pas partie de `paquet@1` : ni import ni export (taille). Un plat ajouté par son nom n'enregistre que `id` et `nom` (écriture fusionnée, pour ne jamais écraser une recette créée entre-temps sur l'autre téléphone) : les champs absents valent leur défaut (`type` plat, `statutRecette` attente, `recurrence` aucune) et l'export les complète. Doublons repérés par le nom (slug du nom), pas par l'identifiant.
 
 Textes copiés par les boutons « Demander à Claude » (gestionnaire uniquement) :
 
@@ -360,7 +360,7 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 
 ## 14. Statut
 
-- [ ] T0 Socle — code livré le 2026-10-05 (branche `claude/tender-einstein-k1vfq9`) ; à cocher après les tests sur les deux téléphones
+- [x] T0 Socle — validé le 2026-10-05 sur le téléphone du gestionnaire (connexion, rôles, installation, mode avion) ; installation et avis sur le téléphone de l'utilisatrice des courses reportés à la fin du projet (décision du propriétaire)
 - [ ] T1 Plats, import & Découvrir
 - [ ] T2 Compatibilité & variantes
 - [ ] T3 Semaine, liste & apéro
@@ -375,3 +375,4 @@ Décisions :
 - 2026-10-05 — Socle : connexion par fenêtre uniquement (`initializeAuth` sans résolveur au démarrage, pour ne pas ralentir l'ouverture sur téléphone) ; service worker en cache d'abord, mise à jour d'un bloc via `VERSION` = empreinte des fichiers (vérifiée par `npm test`) ; caches préfixés `repas-courses-` et réparés à l'ouverture, car le domaine github.io est partagé avec d'autres apps du compte ; un compte jamais confirmé par le serveur ne voit pas la copie locale.
 - 2026-10-05 — Rôles réels du foyer : l'utilisatrice des courses planifie aussi la semaine, ajoute les plats par leur nom et les photos ; le gestionnaire ajoute les recettes (import, « Demander à Claude »), traite les demandes et règle l'app. Les deux peuvent organiser la semaine. Un plat ajouté par son nom crée une demande de recette, notifiée au gestionnaire (ntfy, T2). Libellés : « Recettes et réglages » et « Repas et courses ».
 - 2026-10-05 — Filet de sécurité si l'app n'est pas adoptée : « Imprimer » sur Semaine (T3), menu + liste de courses en PDF via l'impression du navigateur, sans bibliothèque.
+- 2026-10-05 — T0 clos. L'utilisatrice des courses ne testera l'app qu'une fois terminée (décision du propriétaire) : risque d'adoption découvert tard, assumé.

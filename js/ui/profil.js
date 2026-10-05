@@ -17,10 +17,15 @@ const LIBELLES_ROLE = {
   courses: 'Repas et courses',
 };
 
-/** Remplit et ouvre le panneau du profil. */
-export function ouvrirProfil(dialogue, { utilisateur, role, onReglages, onDeconnecter }) {
+/** Remplit et ouvre le panneau du profil. `role` est le rôle réel ; `apercu` : vue « Repas et courses » affichée. */
+export function ouvrirProfil(dialogue, { utilisateur, role, apercu, onReglages, onApercu, onDeconnecter }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
+  const bouton = (texte, action, classe = 'bouton-secondaire') => el('button', {
+    class: `bouton ${classe} bouton-plein`,
+    type: 'button',
+    onclick: () => { fermer(); action(); },
+  }, texte);
 
   dialogue.replaceChildren(
     el('div', { class: 'feuille-poignee', 'aria-hidden': 'true' }),
@@ -33,32 +38,14 @@ export function ouvrirProfil(dialogue, { utilisateur, role, onReglages, onDeconn
         ),
       ),
       el('p', { class: 'etiquette' }, LIBELLES_ROLE[role] ?? ''),
+      role === 'gestionnaire' && !apercu ? bouton('⚙️ Réglages', onReglages) : null,
       role === 'gestionnaire'
-        ? el('button', {
-          class: 'bouton bouton-secondaire bouton-plein',
-          type: 'button',
-          onclick: () => { fermer(); onReglages(); },
-        }, '⚙️ Réglages')
+        ? bouton(apercu ? 'Quitter l’aperçu' : `👀 Aperçu de la vue «\u00A0${LIBELLES_ROLE.courses}\u00A0»`, () => onApercu(!apercu))
         : null,
-      el('button', {
-        class: 'bouton bouton-secondaire bouton-plein',
-        type: 'button',
-        onclick: () => { fermer(); onDeconnecter(); },
-      }, 'Se déconnecter'),
+      bouton('Se déconnecter', onDeconnecter),
       el('button', { class: 'bouton bouton-texte', type: 'button', onclick: fermer }, 'Fermer'),
     ),
   );
 
   if (!dialogue.open) dialogue.showModal();
-}
-
-/** Ferme le panneau quand on touche le voile autour. À appeler une fois. */
-export function fermerAuToucherDuVoile(dialogue) {
-  dialogue.addEventListener('click', (evenement) => {
-    if (evenement.target !== dialogue) return;
-    const cadre = dialogue.getBoundingClientRect();
-    const dedans = evenement.clientX >= cadre.left && evenement.clientX <= cadre.right
-      && evenement.clientY >= cadre.top && evenement.clientY <= cadre.bottom;
-    if (!dedans) dialogue.close();
-  });
 }
