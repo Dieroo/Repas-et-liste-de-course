@@ -59,7 +59,8 @@ function ouvrirFicheProfil(lireCtx, existant) {
         const ctx = lireCtx();
         const resultat = preparerProfil(
           { nom: nom.value, email: email.value, coefPortion: choisi ? Number(choisi.value) : null },
-          { profils: ctx.profils, id: existant?.id ?? null },
+          // Adresse non touchée : pas réécrite (une liaison « C'est moi » faite entre-temps ailleurs reste).
+          { profils: ctx.profils, id: existant?.id ?? null, emailOuverture: existant ? existant.email ?? '' : undefined },
         );
         for (const [cle, zone] of Object.entries(erreurs)) {
           zone.textContent = resultat.erreurs?.[cle] ?? '';

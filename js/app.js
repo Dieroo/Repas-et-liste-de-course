@@ -10,6 +10,8 @@ import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
 import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
 import { nouveauPlatParNom } from './coeur/plats.js';
+import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from './coeur/profils.js';
+import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -21,6 +23,7 @@ import {
 } from './ui/connexion.js';
 import { ouvrirProfil, initialeDe } from './ui/profil.js';
 import { fermerAuToucherDuVoile } from './ui/feuille.js';
+import { ouvrirQuiEtesVous } from './ui/relier.js';
 import { annoncer } from './ui/dom.js';
 import * as semaine from './ui/semaine.js';
 import * as courses from './ui/courses.js';
@@ -144,7 +147,21 @@ function monter(cle, fabriquer, { dansApp = false, sansOnglets = false, titre = 
   if ((changementDEcran && dansApp) || focusDansLEcran) zone.focus({ preventScroll: true });
 }
 
+/** Feuille « Qui êtes-vous ? » ouverte (fiche, panneau du profil), mise à jour à chaque rendu ; null sinon. */
+let feuilleQuiEtesVous = null;
+/** Vrai si le dernier rendu a affiché l'app elle-même (et non la connexion, une erreur, la première ouverture…). */
+let appRendue = false;
+
 function rendre() {
+  appRendue = false;
+  rendreEcran();
+  // Hors de l'app (déconnexion, erreur…), la feuille n'a plus lieu d'être ; dans l'app, prénoms et adresses à jour.
+  if (!feuilleQuiEtesVous) return;
+  if (appRendue) feuilleQuiEtesVous.maj(contexteCourant());
+  else feuilleQuiEtesVous.fermer();
+}
+
+function rendreEcran() {
   if (!configuree) {
     monter('non-configure', ecranNonConfigure);
     return;
@@ -220,14 +237,45 @@ function rendrePremiereOuverture() {
   }));
 }
 
-function rendreApp() {
-  const { utilisateur } = etat;
-  const reglagesFoyer = etat.donnees.reglages;
-  const roleReel = roleDe(utilisateur.email, reglagesFoyer);
-  if (roleReel !== 'gestionnaire') etat.apercu = false;
+/** Rôle réel, rôle affiché (aperçu compris), écran demandé et son paramètre, d'après l'état et l'adresse. */
+function routeCourante() {
+  const roleReel = roleDe(etat.utilisateur.email, etat.donnees.reglages);
   const role = roleEffectif(roleReel, etat.apercu);
   const route = resoudreRoute(location.hash, role);
-  const parametre = parametreDe(location.hash, route);
+  return { roleReel, role, route, parametre: parametreDe(location.hash, route) };
+}
+
+/**
+ * Contexte passé aux écrans, et aux feuilles ouvertes hors du rendu (panneau du profil, « Qui êtes-vous ? ») : il
+ * est recalculé à chaque appel, pour des profils et des plats à jour.
+ * `moi` : profil relié à l'adresse connectée, ou null ; en aperçu « Repas et courses », celui du gestionnaire.
+ */
+function contexteCourant() {
+  const { utilisateur } = etat;
+  const { role, roleReel, parametre } = routeCourante();
+  return {
+    utilisateur,
+    role,
+    roleReel,
+    reglages: etat.donnees.reglages,
+    profils: etat.profils,
+    profilsCharges: etat.profilsCharges,
+    moi: profilDeLEmail(etat.profils, utilisateur.email),
+    plats: etat.plats,
+    platsCharges: etat.platsCharges,
+    demandes: etat.demandes,
+    demandesChargees: etat.demandesChargees,
+    parametre,
+    routePrecedente,
+    actions,
+  };
+}
+
+function rendreApp() {
+  appRendue = true;
+  const { utilisateur } = etat;
+  if (roleDe(utilisateur.email, etat.donnees.reglages) !== 'gestionnaire') etat.apercu = false;
+  const { role, roleReel, route, parametre } = routeCourante();
   const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
   if (location.hash !== hashAttendu) history.replaceState(history.state, '', hashAttendu);
 
@@ -250,21 +298,8 @@ function rendreApp() {
   boutonProfil.dataset.initiale = initialeDe(utilisateur);
   bandeauApercu.hidden = !etat.apercu;
 
-  const ctx = {
-    utilisateur,
-    role,
-    roleReel,
-    reglages: reglagesFoyer,
-    profils: etat.profils,
-    profilsCharges: etat.profilsCharges,
-    plats: etat.plats,
-    platsCharges: etat.platsCharges,
-    demandes: etat.demandes,
-    demandesChargees: etat.demandesChargees,
-    parametre,
-    routePrecedente,
-    actions,
-  };
+  // Après la mise à jour de routePrecedente, que le contexte reprend.
+  const ctx = contexteCourant();
 
   // Semaine : la date et la salutation font partie de la clé, l'écran se met à jour si l'app reprend plus tard.
   const maintenant = new Date();
@@ -357,7 +392,100 @@ const actions = {
     });
     cloreDemandes(demandesAClore);
   },
+  /**
+   * Note d'un profil (0 à 5, ou null pour l'effacer). Affichée tout de suite, hors ligne compris (les écrans en place
+   * sont mis à jour pendant l'appel) ; l'envoi n'est jamais attendu. Deux notes de suite : Firestore garde l'ordre des
+   * écritures d'un même téléphone, la dernière gagne. Refus du serveur : surEchec('supprime') si le plat n'existe
+   * plus, surEchec('echec') sinon ; sans surEchec, une annonce.
+   */
+  noter(platId, profilId, note, { surEchec } = {}) {
+    const echouer = (erreur) => {
+      if (surEchec) surEchec(erreur?.code === 'not-found' ? 'supprime' : 'echec');
+      else annoncer('La note n’a pas pu être enregistrée. Réessayez.');
+    };
+    // Chemin ou note refusés : rien n'est écrit ni affiché. Signalé après coup, comme un refus du serveur.
+    if (!cheminNote(profilId) || (note !== null && !noteValide(note))) {
+      Promise.reject(new Error('note refusée')).catch(echouer);
+      return;
+    }
+    // Affichée avant l'envoi : un instantané reçu pendant l'envoi voit déjà le plat noté.
+    etat.plats = etat.plats.map((plat) => (plat.id === platId ? avecNote(plat, profilId, note) : plat));
+    try {
+      donnees.noterPlat(platId, profilId, note).catch(echouer);
+    } catch (erreur) {
+      Promise.reject(erreur).catch(echouer);
+    }
+    rendre();
+  },
+  /**
+   * « C'est moi : <Prénom> » : relie le profil à l'adresse connectée. Demande du réseau.
+   * `attendu` : adresse du profil que l'écran a montrée ('' : sans adresse) ; si elle n'est plus la sienne, rien n'est
+   * écrit (« change ») : on ne remplace pas une adresse que la personne n'a pas vue.
+   * → promesse de { code, nom? } : ok, change, adresse_prise (nom du profil qui porte déjà l'adresse), reseau, echec,
+   * inconnu, enfant, gestionnaire.
+   */
+  async relierProfil(profilId, { attendu } = {}) {
+    if (!navigator.onLine) return { code: 'reseau' };
+    const { uid, email } = etat.utilisateur;
+    const prepare = preparerReliure(etat.profils, profilId, email, {
+      gestionnaire: etat.donnees.reglages?.gestionnaire,
+      vu: attendu,
+    });
+    if (prepare.erreur) {
+      return prepare.erreur === 'adresse_prise'
+        ? { code: 'adresse_prise', nom: prepare.nom ?? profilDeLEmail(etat.profils, email)?.nom ?? '' }
+        : { code: prepare.erreur };
+    }
+    return changerAdresse(uid, prepare.id, prepare.email,
+      () => donnees.relierProfil(prepare, etat.profils.map((profil) => profil.id)));
+  },
+  /**
+   * « Ce n'est pas moi » : retire l'adresse connectée de son profil. Demande du réseau.
+   * → promesse de { code, nom? } : ok (nom du profil quitté), change, reseau, echec, non_relie, inconnu.
+   */
+  async delierProfil() {
+    if (!navigator.onLine) return { code: 'reseau' };
+    const { uid, email } = etat.utilisateur;
+    const prepare = preparerDeliure(etat.profils, email);
+    if (prepare.erreur) return { code: prepare.erreur };
+    const nom = etat.profils.find((profil) => profil.id === prepare.id)?.nom ?? '';
+    const resultat = await changerAdresse(uid, prepare.id, '', () => donnees.delierProfil(prepare));
+    return resultat.code === 'ok' ? { ...resultat, nom } : resultat;
+  },
+  /**
+   * Feuille « Qui êtes-vous ? » (fiche, panneau du profil), ouverte avec le contexte à jour ; l'app la met à jour à
+   * chaque rendu tant qu'elle est ouverte. Options : celles de ui/relier.js › ouvrirQuiEtesVous.
+   */
+  ouvrirQuiEtesVous(options = {}) {
+    feuilleQuiEtesVous?.fermer();
+    const feuille = ouvrirQuiEtesVous(contexteCourant(), {
+      ...options,
+      surFermer: () => {
+        if (feuilleQuiEtesVous === feuille) feuilleQuiEtesVous = null;
+      },
+    });
+    feuilleQuiEtesVous = feuille;
+  },
 };
+
+/**
+ * Écrit l'adresse d'un profil par une transaction (`ecrire()` → promesse de { code, nom? }). Réussie : l'adresse est
+ * appliquée tout de suite sur ce téléphone, pour que `moi` change sans attendre la copie de Firestore.
+ * Toute erreur (réseau coupé en route, refus) → { code: 'echec' }.
+ */
+async function changerAdresse(uid, profilId, email, ecrire) {
+  let resultat;
+  try {
+    resultat = await ecrire();
+  } catch {
+    return { code: 'echec' };
+  }
+  if (resultat?.code === 'ok' && etat.utilisateur?.uid === uid) {
+    etat.profils = etat.profils.map((profil) => (profil.id === profilId ? { ...profil, email } : profil));
+    rendre();
+  }
+  return resultat ?? { code: 'echec' };
+}
 
 /** Demandes satisfaites : closes tout de suite sur ce téléphone (l'envoi suit). */
 function cloreDemandes(demandesAClore) {
@@ -365,6 +493,29 @@ function cloreDemandes(demandesAClore) {
   etat.demandes = etat.demandes.map((demande) => (demandesAClore.includes(demande.id)
     ? { ...demande, statut: 'traitee' }
     : demande));
+}
+
+/** Panneau du profil, rempli avec le contexte à jour (la personne reconnue, les prénoms à relier). */
+function ouvrirPanneauProfil() {
+  if (!etat.utilisateur) return;
+  const ctx = contexteCourant();
+  ouvrirProfil(panneauProfil, {
+    utilisateur: ctx.utilisateur,
+    role: ctx.roleReel,
+    apercu: etat.apercu,
+    moi: ctx.moi,
+    aRelier: profilsARelier(ctx.profils, { gestionnaire: ctx.reglages?.gestionnaire }),
+    avecProfils: ctx.profils.length > 0,
+    onReglages: () => { location.hash = '#/reglages'; },
+    onAjouterRecettes: () => { location.hash = '#/import'; },
+    onApercu: changerApercu,
+    onDeconnecter: seDeconnecter,
+    onQuiEtesVous: () => {
+      if (panneauProfil.open) panneauProfil.close();
+      actions.ouvrirQuiEtesVous();
+    },
+    onDelier: () => actions.delierProfil(),
+  });
 }
 
 function changerApercu(actif) {
@@ -503,18 +654,7 @@ function demarrer() {
   pastilleHorsLigne.hidden = navigator.onLine;
 
   fermerAuToucherDuVoile(panneauProfil);
-  boutonProfil.addEventListener('click', () => {
-    const role = roleDe(etat.utilisateur?.email, etat.donnees.reglages);
-    ouvrirProfil(panneauProfil, {
-      utilisateur: etat.utilisateur,
-      role,
-      apercu: etat.apercu,
-      onReglages: () => { location.hash = '#/reglages'; },
-      onAjouterRecettes: () => { location.hash = '#/import'; },
-      onApercu: changerApercu,
-      onDeconnecter: seDeconnecter,
-    });
-  });
+  boutonProfil.addEventListener('click', ouvrirPanneauProfil);
   document.getElementById('quitter-apercu').addEventListener('click', () => changerApercu(false));
 
   rendre();

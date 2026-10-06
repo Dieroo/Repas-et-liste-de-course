@@ -9,8 +9,9 @@ import {
   deleteField,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { db } from './firebase.js';
-import { gestionnaireADesigner } from './coeur/roles.js';
+import { gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
 import { demandeDeRecette } from './coeur/plats.js';
+import { cheminNote, noteValide } from './coeur/notes.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -204,6 +205,62 @@ export function modifierPlat(id, { champs, supprimer = [] }, demandesAClore, aut
   }
   cloreDemandes(demandesAClore);
   return envoi;
+}
+
+/**
+ * Note d'un profil sur un plat (0 à 5), ou `null` pour l'effacer. Un seul chemin, `notes.<profilId>`, en `update` :
+ * les notes des autres profils restent, la recette n'est pas marquée comme modifiée (ni `majPar` ni `majLe`), et une
+ * fiche supprimée entre-temps n'est jamais recréée (refus `not-found`). 0 (« Jamais ») est une vraie note.
+ * Lève une erreur avant tout envoi si l'identifiant du profil ne forme pas un chemin sûr, ou si la note est illisible.
+ * → promesse de l'envoi.
+ */
+export function noterPlat(platId, profilId, note) {
+  const chemin = cheminNote(profilId);
+  if (!chemin) throw new Error('Identifiant de profil refusé pour une note.');
+  if (note !== null && !noteValide(note)) throw new Error('Note refusée : un entier de 0 à 5, ou null pour l’effacer.');
+  const lot = writeBatch(db);
+  lot.update(doc(db, 'plats', platId), { [chemin]: note ?? deleteField() });
+  return lot.commit();
+}
+
+/**
+ * « C'est moi » : relie le profil `id` à l'adresse de la personne connectée (`email`, préparée par
+ * coeur/profils.js › preparerReliure). Transaction, qui n'écrit que `email`, et seulement si l'adresse du profil vaut
+ * encore `attendu` et qu'aucun autre profil ne porte déjà cette adresse : deux téléphones ne peuvent pas prendre le
+ * même profil. Les profils connus (`idsProfils`) sont lus par référence : une transaction ne fait pas de requête, et
+ * le foyer en compte moins de 5. Demande du réseau.
+ * → promesse de { code: 'ok' | 'change' | 'inconnu' }, ou { code: 'adresse_prise', nom } (prénom du profil qui porte
+ * déjà l'adresse).
+ */
+export async function relierProfil({ id, email, attendu }, idsProfils) {
+  const reference = doc(db, 'profils', id);
+  const autres = [...new Set(idsProfils ?? [])].filter((autre) => autre !== id).map((autre) => doc(db, 'profils', autre));
+  return runTransaction(db, async (transaction) => {
+    // Toutes les lectures avant toute écriture, comme l'exige une transaction.
+    const [vise, ...lus] = await Promise.all([reference, ...autres].map((ref) => transaction.get(ref)));
+    if (!vise.exists()) return { code: 'inconnu' };
+    if (normaliserEmail(vise.data().email) !== attendu) return { code: 'change' };
+    const pris = lus.find((lu) => lu.exists() && normaliserEmail(lu.data().email) === email);
+    if (pris) return { code: 'adresse_prise', nom: String(pris.data().nom ?? '') };
+    transaction.update(reference, { email });
+    return { code: 'ok' };
+  });
+}
+
+/**
+ * « Ce n'est pas moi » : retire l'adresse du profil `id` (préparé par coeur/profils.js › preparerDeliure).
+ * Transaction, qui n'écrit `email: ''` que si l'adresse du profil vaut encore `attendu`. Demande du réseau.
+ * → promesse de { code: 'ok' | 'change' | 'inconnu' }.
+ */
+export async function delierProfil({ id, attendu }) {
+  const reference = doc(db, 'profils', id);
+  return runTransaction(db, async (transaction) => {
+    const vise = await transaction.get(reference);
+    if (!vise.exists()) return { code: 'inconnu' };
+    if (normaliserEmail(vise.data().email) !== attendu) return { code: 'change' };
+    transaction.update(reference, { email: '' });
+    return { code: 'ok' };
+  });
 }
 
 export function enregistrerProfil(profil) {
