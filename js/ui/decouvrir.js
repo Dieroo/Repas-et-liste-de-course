@@ -37,10 +37,10 @@ const CLASSES_GESTE = { 0: 'geste-jamais', 3: 'geste-pourquoi-pas', 5: 'geste-ad
 
 const mouvementReduit = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
-/** Vibration légère (CLAUDE.md §4) ; ❤️ vibre deux fois. */
+/** Vibration légère (CLAUDE.md §4) ; ❤️ vibre deux fois. 40 ms : plus court, beaucoup de téléphones ne vibrent pas. */
 function vibrer(note) {
   try {
-    navigator.vibrate?.(note === 5 ? [15, 60, 15] : 15);
+    navigator.vibrate?.(note === 5 ? [40, 80, 40] : 40);
   } catch {
     // Vibration refusée ou absente : le geste compte quand même.
   }
