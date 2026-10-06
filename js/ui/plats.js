@@ -3,6 +3,7 @@ import { el, etatVide, pastille } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { modeDeCuisson } from './pictos.js';
 import { FILTRES, LIBELLES_TYPE, STATUTS, NOM_MAX, filtrerPlats, visuelDuPlat, statutDe, typeDe } from '../coeur/plats.js';
+import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
 let recherche = '';
@@ -24,7 +25,19 @@ export function vignetteDuPlat(plat, grande = false) {
   return pastille(emoji, teinte, grande);
 }
 
-function carteDuPlat(plat) {
+/**
+ * Qui aime quoi : « Adulte A ❤️ Enfant 👎 Adulte B ★4 », un bloc insécable par profil, retour à la ligne entre deux
+ * profils. Le texte lu dit aussi qui n'a pas encore noté. Rien si personne n'a noté.
+ */
+function ligneDeNotes(plat, profils) {
+  const resume = resumeNotes(plat, profils);
+  if (!resume) return null;
+  return el('span', { class: 'carte-plat-notes' },
+    resume.morceaux.map(({ texte }) => el('span', { class: 'note-profil', 'aria-hidden': 'true' }, texte)),
+    el('span', { class: 'visuellement-masque' }, resume.accessible));
+}
+
+function carteDuPlat(plat, profils) {
   const statut = statutDe(plat) !== 'validee' ? STATUTS[statutDe(plat)] : null;
   // « Plat · [pictogramme] Four · 📝 Recette à vérifier » : type, mode de cuisson principal, statut.
   const morceaux = [
@@ -39,6 +52,7 @@ function carteDuPlat(plat) {
       el('span', { class: 'carte-plat-texte' },
         el('span', { class: 'carte-plat-nom' }, plat.nom),
         el('span', { class: 'carte-plat-detail' }, detail),
+        ligneDeNotes(plat, profils),
       ),
       el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'),
     ),
@@ -101,6 +115,12 @@ export function creer(ctx) {
   const compteur = el('p', { class: 'sous-titre', role: 'status' });
   const zoneMessage = el('div');
   const liste = el('ul', { class: 'liste-plats' });
+  // Invitation (§4) : seulement tant que la personne connectée n'a noté aucun plat.
+  const invitation = el('section', { class: 'carte carte-invitation', hidden: true },
+    el('h2', {}, 'Aucun plat noté'),
+    el('p', {}, 'Découvrez-en 10 en une minute\u00A0: un geste par plat. Sans réponse, un plat compte comme «\u00A0Pourquoi pas\u00A0».'),
+    el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/decouvrir' },
+      el('span', { 'aria-hidden': 'true' }, '❤️'), 'Découvrir'));
 
   const boutonsFiltre = FILTRES.map((f) => el('button', {
     class: 'puce',
@@ -143,6 +163,9 @@ export function creer(ctx) {
   function remplir() {
     // Pas d'ajout avant le chargement : sans la liste, un doublon ne serait pas repéré.
     boutonAjouter.disabled = !courant.platsCharges;
+    const moi = courant.moi;
+    invitation.hidden = !(courant.platsCharges && moi && nombreANoter(courant.plats, moi.id) > 0
+      && !courant.plats.some((plat) => estNote(plat, moi.id)));
     if (!courant.platsCharges) {
       compteur.textContent = '';
       zoneMessage.replaceChildren(el('p', { class: 'texte-doux', role: 'status' }, 'Chargement des plats…'));
@@ -172,7 +195,7 @@ export function creer(ctx) {
     }
     // Une carte qui avait le focus le retrouve après la mise à jour.
     const cleFocus = liste.contains(document.activeElement) ? document.activeElement.dataset.cle : null;
-    liste.replaceChildren(...resultat.map(carteDuPlat));
+    liste.replaceChildren(...resultat.map((plat) => carteDuPlat(plat, courant.profils)));
     if (cleFocus) liste.querySelector(`[data-cle="${CSS.escape(cleFocus)}"]`)?.focus();
   }
 
@@ -193,6 +216,7 @@ export function creer(ctx) {
         ? el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/import' }, '📋 Ajouter des recettes')
         : null,
       el('div', { class: 'puces', role: 'group', 'aria-label': 'Afficher' }, boutonsFiltre),
+      invitation,
       zoneMessage,
       liste,
       boutonAjouter,

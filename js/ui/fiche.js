@@ -4,6 +4,7 @@ import { choisirImage, preparerPhoto } from './photo.js';
 import { copier } from './presse-papiers.js';
 import { modeDeCuisson } from './pictos.js';
 import { lireBrouillon } from './brouillon.js';
+import { sectionNotes } from './notes.js';
 import { texteDemandeRecette } from '../coeur/paquet.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
@@ -87,6 +88,9 @@ export function creer(ctx) {
         el('h2', {}, 'Modifications pas encore enregistrées'),
         el('p', {}, 'Reprenez là où vous en étiez.'))),
     el('a', { class: 'bouton bouton-principal bouton-plein', href: `#/modifier/${encodeURIComponent(id)}` }, 'Reprendre'));
+
+  // Notes de chaque profil : section gardée d'un rendu à l'autre, mise à jour en place (focus conservé).
+  const notes = sectionNotes(ctx, id);
 
   const platCourant = () => courant.plats.find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
@@ -195,8 +199,10 @@ export function creer(ctx) {
       congelable === true ? 'se congèle' : congelable === false ? 'ne se congèle pas' : null,
     ].filter(Boolean).join(' · ');
 
+    // Mise à jour des notes d'abord : si ses lignes sont reconstruites, l'élément qui reprend le focus est le nouveau.
+    notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
-    const focusGarde = [actionsRecette, lienModifier, carteReprise].some((n) => n.contains(document.activeElement))
+    const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud].some((n) => n.contains(document.activeElement))
       ? document.activeElement
       : null;
     majActionsRecette();
@@ -233,6 +239,9 @@ export function creer(ctx) {
             )),
           gestionnaire ? actionsRecette : null)
         : null,
+
+      // Absente tant qu'aucun profil n'existe ; aussi pour un plat ⏳ (le nom suffit pour donner un avis).
+      (courant.profils ?? []).length ? notes.noeud : null,
 
       ingredients.length
         ? section('Ingrédients', el('ul', { class: 'liste-ingredients' }, ingredients.map((ingredient) => el('li', {},

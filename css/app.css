@@ -29,6 +29,7 @@
   --largeur: 560px;
   --hauteur-onglets: 68px;
   --hauteur-barre: 72px; /* barre « Enregistrer » de l'écran Modifier (sans sa ligne d'erreur) */
+  --hauteur-gestes: 121px; /* barre des gestes de Découvrir ; remplacée par sa hauteur mesurée */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -518,33 +519,408 @@ html:has(> body.sans-onglets .lien-erreurs:not([hidden])) {
 
 .jour.aujourdhui .jour-nom { color: inherit; }
 
-/* ——— Découvrir : les trois gestes ——— */
+/* ——— Découvrir : un plat à la fois, trois gestes ——— */
 
-.gestes {
+.vue.decouvrir { gap: 10px; }
+
+/* Titre et compteur sur une ligne. */
+.decouvrir-entete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding-top: 4px;
+}
+
+.decouvrir-entete h1 { font-size: 1.5rem; }
+
+.decouvrir-compteur {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.decouvrir-aide {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+/* « Je note pour » : une puce par profil, prénom au-dessus du nombre de plats à noter. */
+.je-note-pour { min-width: 0; }
+
+.legende-je-note-pour {
+  padding: 0;
+  color: var(--texte-doux);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.choix-profils {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.choix.choix-profil {
+  min-height: 48px;
+  padding: 4px 12px;
+}
+
+.choix-profil-texte {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.choix-nom {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.choix-compte {
+  color: var(--texte-doux);
+  font-size: 0.8125rem;
+}
+
+/* La scène déborde sur les marges de l'écran : l'ombre de la carte reste entière, et la carte qui sort est coupée
+   sur les côtés au lieu de créer un défilement horizontal. */
+.scene-decouverte {
+  margin: 0 -16px;
+  padding: 0 16px 4px;
+  overflow-x: clip;
+}
+
+.carte-decouverte {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "visuel" "nom" "detail" "ingredients";
+  row-gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+}
+
+.decouverte-visuel {
+  display: flex;
+  grid-area: visuel;
+  justify-self: start;
+  margin-bottom: 8px;
+}
+
+/* Vignette ou pastille : 96 px au plus (nette sans lire la photo), moins sur un écran bas. */
+.decouverte-visuel .pastille,
+.decouverte-visuel .vignette {
+  width: 96px;
+  height: 96px;
+  border-radius: 28px;
+  font-size: 3rem;
+}
+
+/* « Pour Enfant » : ruban posé sur le bas du visuel, quand on note pour un autre que soi. */
+.ruban-profil {
+  z-index: 1;
+  grid-area: visuel;
+  align-self: end;
+  justify-self: start;
+  max-width: calc(100% - 8px);
+  margin-left: 8px;
+  padding: 3px 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ocre-doux);
+  box-shadow: 0 0 0 2px var(--surface);
+  color: var(--texte);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Nom coupé à deux lignes à l'écran ; le titre garde le nom entier pour les lecteurs d'écran. */
+.decouverte-nom {
+  display: -webkit-box;
+  grid-area: nom;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.decouverte-detail {
+  grid-area: detail;
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+.decouverte-ingredients {
+  grid-area: ingredients;
+  overflow: hidden;
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* La carte notée part vers le bouton touché ; la suivante entre ; « Annuler » la ramène d'où elle était partie.
+   Seuls transform et opacity bougent ; mouvement réduit : échange immédiat. */
+.carte-decouverte.sort-gauche { animation: sort-gauche 0.2s ease-in forwards; }
+.carte-decouverte.sort-haut { animation: sort-haut 0.2s ease-in forwards; }
+.carte-decouverte.sort-droite { animation: sort-droite 0.2s ease-in forwards; }
+.carte-decouverte.entre { animation: entre-carte 0.18s ease-out; }
+.carte-decouverte.revient-gauche { animation: sort-gauche 0.2s ease-in reverse; }
+.carte-decouverte.revient-haut { animation: sort-haut 0.2s ease-in reverse; }
+.carte-decouverte.revient-droite { animation: sort-droite 0.2s ease-in reverse; }
+
+@keyframes sort-gauche {
+  to { opacity: 0; transform: translateX(-110%) rotate(-6deg); }
+}
+
+@keyframes sort-haut {
+  to { opacity: 0; transform: translateY(-24%) scale(0.96); }
+}
+
+@keyframes sort-droite {
+  to { opacity: 0; transform: translateX(110%) rotate(6deg); }
+}
+
+@keyframes entre-carte {
+  from { opacity: 0; transform: scale(0.96); }
+}
+
+/* Barre des gestes : fixée juste au-dessus des onglets, toujours visible, comme la barre « Enregistrer ». */
+.barre-gestes {
+  position: fixed;
+  right: 0;
+  bottom: calc(var(--hauteur-onglets) + 4px + env(safe-area-inset-bottom)); /* 4 px : marge haute des onglets */
+  left: 0;
+  z-index: 9;
+  padding: 8px max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left));
+  border-top: 1px solid var(--bordure);
+  background: var(--fond);
+}
+
+.vue.entree > .barre-gestes { animation: apparait 0.22s ease-out; }
+
+.barre-gestes-contenu {
+  max-width: calc(var(--largeur) - 40px);
+  margin: 0 auto;
+}
+
+.gestes-boutons {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  width: 100%;
+}
+
+button.geste {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 64px;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  color: var(--texte);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.12s ease, opacity 0.2s ease;
+}
+
+button.geste:active { transform: scale(0.96); }
+
+.geste-jamais {
+  border-color: var(--bordure-champ);
+  background: var(--surface);
+}
+
+.geste-pourquoi-pas { background: var(--olive-doux); }
+.geste-adore { background: var(--accent-doux); }
+
+.geste-emoji {
+  font-size: 24px;
+  line-height: 1;
+}
+
+/* Verrou après un geste : les touchers sont ignorés ; les boutons ne sont jamais désactivés (TalkBack garde le
+   focus). */
+.barre-gestes.en-pause button.geste { opacity: 0.6; }
+
+/* Sous les gestes, une ligne de 48 px : l'aide avant le premier geste, puis « Annuler ». */
+.sous-gestes {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+}
+
+.aide-gestes {
+  color: var(--texte-doux);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.bouton.bouton-annuler-geste {
+  gap: 4px;
+  max-width: 100%;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.bouton-annuler-geste > span { flex: none; }
+
+.bouton-annuler-geste > .annuler-nom {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* La page réserve la hauteur de la barre (--hauteur-gestes, mesurée par l'écran). */
+body:has(.barre-gestes:not([hidden])) main {
+  padding-bottom: calc(var(--hauteur-onglets) + 4px + var(--hauteur-gestes) + 24px + env(safe-area-inset-bottom));
+}
+
+/* Le bandeau d'annonce descend du haut, juste sous l'en-tête : il ne recouvre ni les gestes, toujours actifs, ni
+   la carte (texte agrandi compris), seulement le titre de l'écran pendant 3,5 s. */
+body:has(.barre-gestes:not([hidden])) .annonce {
+  top: calc(max(64px, calc(env(safe-area-inset-top) + 56px)) + 4px); /* hauteur réelle de l'en-tête */
+  bottom: auto;
+  width: calc(100% - 32px);
+  max-width: calc(var(--largeur) - 32px);
+  padding: 8px 14px;
+  font-size: 0.875rem;
+  line-height: 1.3;
+  transform: translate(-50%, -8px);
+}
+
+body:has(.barre-gestes:not([hidden])):has(.bandeau-apercu:not([hidden])) .annonce {
+  top: calc(max(64px, calc(env(safe-area-inset-top) + 56px)) + 66px); /* sous le bandeau d'aperçu */
+}
+
+body:has(.barre-gestes:not([hidden])) .annonce.visible { transform: translate(-50%, 0); }
+
+/* Écran bas et un seul profil (pas de « Je note pour ») : la carte suit de près le titre ; le bandeau passe sur
+   l'en-tête plutôt que sur le nom du plat. */
+@media (max-height: 600px) {
+  body:has(.barre-gestes:not([hidden])):has(.je-note-pour[hidden]):not(:has(.bandeau-apercu:not([hidden]))) .annonce {
+    top: calc(env(safe-area-inset-top) + 4px);
+  }
+}
+
+/* Fin de file : bilan et liste « Pendant cette visite ». */
+.fin-decouverte .visite {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+  text-align: left;
+}
+
+.liste-visite {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.geste {
+.liste-visite li {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 14px 4px;
-  border-radius: 14px;
-  background: var(--fond);
-  font-size: 0.875rem;
-  font-weight: 600;
+  gap: 10px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--bordure);
 }
 
-.geste-emoji {
-  font-size: 1.75rem;
-  line-height: 1;
+.visite-geste { flex: none; }
+
+.visite-nom {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lien-changer {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 4px 0 8px;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* Écran moyen ou bas (petit téléphone, texte agrandi à 130 %) : visuel de 80 px à gauche du nom, ruban au-dessus
+   du nom, ingrédients sur toute la largeur ; le nom et les trois boutons restent visibles sans défiler. */
+@media (max-height: 700px) {
+  .vue.decouvrir { gap: 8px; }
+
+  .carte-decouverte {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto 1fr auto;
+    grid-template-areas: "visuel ruban" "visuel nom" "visuel detail" "visuel ." "ingredients ingredients";
+    column-gap: 14px;
+    row-gap: 4px;
+  }
+
+  .decouverte-visuel { margin-bottom: 0; }
+
+  .decouverte-visuel .pastille,
+  .decouverte-visuel .vignette {
+    width: 80px;
+    height: 80px;
+    border-radius: 24px;
+    font-size: 2.5rem;
+  }
+
+  .ruban-profil {
+    grid-area: ruban;
+    align-self: start;
+    max-width: 100%;
+    margin-left: 0;
+    box-shadow: none;
+  }
+}
+
+/* Écran bas : visuel de 72 px, ingrédients et phrase d'aide masqués ; « Je note pour » reste lu par TalkBack. */
+@media (max-height: 600px) {
+  .decouverte-visuel .pastille,
+  .decouverte-visuel .vignette {
+    width: 72px;
+    height: 72px;
+    border-radius: 22px;
+    font-size: 2.25rem;
+  }
+
+  .decouverte-ingredients,
+  .decouvrir-aide { display: none; }
+
+  .legende-je-note-pour {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .choix-profils { margin-top: 0; }
 }
 
 /* ——— Réglages ——— */
@@ -771,6 +1147,28 @@ html:has(> body.sans-onglets .lien-erreurs:not([hidden])) {
   overflow-wrap: anywhere;
 }
 
+/* Qui aime quoi : un bloc insécable par profil, retour à la ligne entre deux profils, jamais de points de
+   suspension. */
+.carte-plat-notes {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 12px;
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+.note-profil { white-space: nowrap; }
+
+/* « Aucun plat noté » : carte compacte sous les filtres. */
+.carte-invitation {
+  gap: 10px;
+  padding: 16px 20px;
+}
+
+.carte-invitation h2 { font-size: 1.125rem; }
+
+.carte-invitation p { color: var(--texte-doux); }
+
 .chevron {
   color: var(--texte-doux);
   font-size: 1.5rem;
@@ -973,6 +1371,160 @@ html:has(> body.sans-onglets .lien-erreurs:not([hidden])) {
   flex-direction: column;
   gap: 12px;
   margin: 0;
+}
+
+/* ——— Notes d'un plat (fiche) ——— */
+
+.notes-relier {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  color: var(--texte-doux);
+}
+
+.notes-relier .bouton {
+  min-height: 48px;
+  padding: 0 16px;
+}
+
+/* Une ligne par profil, séparées par un filet. */
+.notes-profil {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+}
+
+.notes-profil + .notes-profil { border-top: 1px solid var(--bordure); }
+
+.notes-choix {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+/* Ligne 1 : prénom à gauche, « Jamais » à droite (jamais à côté d'une étoile). */
+.notes-haut {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.notes-nom {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.notes-vous {
+  color: var(--texte-doux);
+  font-weight: 600;
+}
+
+.option-jamais {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--bordure-champ);
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.option-jamais input,
+.etoile input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Option choisie : contour appuyé, jamais de fond teinté (les étoiles n'auraient plus leur contraste). */
+.option-jamais:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.option-jamais:has(input:focus-visible),
+.etoile:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Ligne 2 : cinq étoiles de même largeur (56 px au moins sur un écran de 360 px). */
+.etoiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.etoile {
+  --remplissage: none;
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 56px;
+  border-radius: 12px;
+  color: var(--bordure-champ); /* contour de l'étoile vide : 3:1 au moins sur le fond */
+  cursor: pointer;
+}
+
+.etoile-forme {
+  width: 34px;
+  height: 34px;
+  fill: var(--remplissage);
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+/* Étoiles remplies jusqu'à la note : la forme porte l'information, pas la couleur seule. */
+.etoiles[data-note="1"] .etoile:nth-child(-n+1),
+.etoiles[data-note="2"] .etoile:nth-child(-n+2),
+.etoiles[data-note="3"] .etoile:nth-child(-n+3),
+.etoiles[data-note="4"] .etoile:nth-child(-n+4),
+.etoiles[data-note="5"] .etoile {
+  --remplissage: currentColor;
+  color: var(--accent);
+}
+
+/* Ligne 3 : l'état à gauche, « Effacer » à droite. */
+.notes-bas {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+}
+
+.notes-etat {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+}
+
+.notes-bas .bouton-texte {
+  flex: none;
+  padding: 0 12px;
+}
+
+/* Autre adulte : lecture seule. */
+.notes-profil.notes-lecture {
+  display: block;
+  padding: 12px 0;
+}
+
+.etoiles-texte {
+  color: var(--accent);
+  letter-spacing: 0.06em;
 }
 
 /* ——— Bandeau d'aperçu et annonces ——— */
@@ -1733,3 +2285,20 @@ select.champ {
 }
 
 .deplacer .bouton { min-height: 48px; padding: 0 12px; }
+
+/* ——— « Qui êtes-vous ? » ——— */
+
+/* Prénoms proposés empilés, à 12 px d'écart. */
+.carte-relier { gap: 12px; }
+
+.carte-relier .message-erreur { max-width: none; }
+
+.carte-relier .bouton-texte { align-self: center; }
+
+/* Dans une feuille du bas : la feuille porte déjà le fond et le titre. */
+.carte-relier.dans-feuille {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
