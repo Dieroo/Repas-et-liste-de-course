@@ -527,13 +527,20 @@ function idLibre(base, pris) {
   return id;
 }
 
+/** Vrai si la fiche a été modifiée à la main (« Modifier ») depuis son dernier ajout par Claude. */
+function modifieeALaMain(plat) {
+  return Boolean(plat?.modifieePar) || plat?.modifieeLe != null;
+}
+
 /**
  * Plat visé par chaque recette valide, écritures et demandes à clore (CLAUDE.md §8).
  * `valides` : `donnees` des plats validés. `cible` : plat depuis lequel on a touché « Coller la recette ».
- * → { elements: [{ id, nom, statut, ancienNom?, ingredients, etapes, avertissements }], ecritures: [{ id, donnees }],
- *     demandesAClore: [id], erreurs, avertissements }
+ * → { elements: [{ id, nom, statut, ancienNom?, modifieeA?, ingredients, etapes, avertissements }],
+ *     ecritures: [{ id, donnees, effacerModification? }], demandesAClore: [id], erreurs, avertissements }
  *   statut ∈ nouveau, complete (⏳ complété), remplace (recette existante remplacée), inchange (pas d'ingrédients
  *   reçus pour un plat existant : sa recette reste).
+ *   Fiche modifiée à la main, complétée ou remplacée : `modifieeA` (secondes de `modifieeLe`, ou true tant que
+ *   l'écriture n'est pas confirmée) et `effacerModification: true` (la marque de modification est retirée).
  */
 export function preparerImport(valides, { plats = [], demandes = [], cible = null } = {}) {
   const erreurs = [];
@@ -554,8 +561,9 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
   const demandesAClore = [];
   for (const donnees of valides) {
     const avertissementsPlat = [];
-    // Plat visé : la cible, sinon le même identifiant s'il s'agit bien du même plat, sinon le même nom (doublons
-    // repérés par le nom, §8), sinon un nouveau plat (identifiant libre si un autre plat utilise déjà le sien).
+    // Plat visé : la cible, sinon le même identifiant s'il s'agit bien du même plat (même nom, ⏳, demande ouverte,
+    // ou fiche modifiée à la main, qui a pu être renommée), sinon le même nom (doublons repérés par le nom, §8),
+    // sinon un nouveau plat (identifiant libre si un autre plat utilise déjà le sien).
     let vise;
     const memeId = parId.get(donnees.id);
     const memeNom = parNom.get(slug(donnees.nom));
@@ -571,7 +579,9 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       vise = cible;
     } else if (memeId && (slug(memeId.nom) === slug(donnees.nom)
       || statutDe(memeId) === 'attente'
-      || ouvertes.has(`${memeId.id}__recette`))) {
+      || ouvertes.has(`${memeId.id}__recette`)
+      || (modifieeALaMain(memeId) && !(memeNom && memeNom.id !== memeId.id
+        && (statutDe(memeNom) === 'attente' || ouvertes.has(`${memeNom.id}__recette`)))))) {
       vise = memeId.id;
     } else if (memeNom) {
       vise = memeNom.id;
@@ -602,16 +612,20 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     if (!recue && existant && statutDe(existant) !== 'attente') delete ecriture.statutRecette;
     let statut = 'nouveau';
     if (existant) statut = !recue ? 'inchange' : statutDe(existant) === 'attente' ? 'complete' : 'remplace';
+    // Modifications faites à la main remplacées : l'aperçu le dit, l'écriture efface leur marque.
+    const effacerModification = (statut === 'remplace' || statut === 'complete') && modifieeALaMain(existant);
+    const secondes = existant?.modifieeLe?.seconds;
     elements.push({
       id: vise,
       nom: donnees.nom,
       statut,
       ...(existant && slug(existant.nom) !== slug(donnees.nom) ? { ancienNom: existant.nom } : {}),
+      ...(effacerModification ? { modifieeA: typeof secondes === 'number' && Number.isFinite(secondes) ? secondes : true } : {}),
       ingredients: donnees.ingredients?.length ?? 0,
       etapes: donnees.etapes?.length ?? 0,
       avertissements: avertissementsPlat,
     });
-    ecritures.push({ id: vise, donnees: ecriture });
+    ecritures.push({ id: vise, donnees: ecriture, ...(effacerModification ? { effacerModification: true } : {}) });
 
     if (ecriture.ingredients?.length && ouvertes.has(`${vise}__recette`)) demandesAClore.push(`${vise}__recette`);
     for (const variante of ecriture.variantes ?? []) {

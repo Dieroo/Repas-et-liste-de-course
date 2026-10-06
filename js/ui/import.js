@@ -31,6 +31,22 @@ const MESSAGE_COPIE = 'Copié. Collez-le dans votre projet Claude, puis collez i
 
 const pluriel = (n, singulier, plurielTexte) => `${n}\u00A0${n > 1 ? plurielTexte : singulier}`;
 
+/**
+ * Recette qui remplace une fiche modifiée à la main (« Modifier ») : `modifieeA` donne la date en secondes, ou
+ * true tant que la modification n'est pas confirmée par le serveur. Date au fuseau du téléphone.
+ */
+function avertissementModification(modifieeA) {
+  if (typeof modifieeA === 'number') {
+    const date = new Date(modifieeA * 1000);
+    if (!Number.isNaN(date.getTime())) {
+      const jour = date.getDate();
+      const mois = date.toLocaleDateString('fr-FR', { month: 'long' });
+      return `Remplace les modifications faites à la main le ${jour === 1 ? '1er' : jour} ${mois}.`;
+    }
+  }
+  return modifieeA ? 'Remplace des modifications faites à la main.' : null;
+}
+
 export function creer(ctx) {
   let courant = ctx;
   const cible = ctx.parametre || null;
@@ -262,9 +278,10 @@ export function creer(ctx) {
         : null,
       el('ul', { class: 'liste-apercu' }, prepares.elements.map((element, i) => {
         const avertissements = [
+          avertissementModification(element.modifieeA),
           ...(validation.plats[i]?.avertissements ?? []).map((a) => a.message),
           ...element.avertissements,
-        ];
+        ].filter(Boolean);
         return el('li', { class: 'apercu-plat' },
           el('p', { class: 'apercu-nom' }, element.nom),
           el('p', { class: 'badges' }, el('span', { class: `badge badge-${element.statut}` }, LIBELLES_STATUT[element.statut])),

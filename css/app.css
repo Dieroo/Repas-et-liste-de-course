@@ -28,6 +28,7 @@
   --police-texte: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --largeur: 560px;
   --hauteur-onglets: 68px;
+  --hauteur-barre: 72px; /* barre « Enregistrer » de l'écran Modifier (sans sa ligne d'erreur) */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -212,6 +213,24 @@ main {
 
 body:not(.dans-app) main {
   padding-bottom: calc(32px + env(safe-area-inset-bottom));
+}
+
+/* Écran sans onglets (Modifier) : la barre « Enregistrer » remplace les onglets en bas de l'écran. */
+body.sans-onglets main {
+  padding-bottom: calc(var(--hauteur-barre) + 32px + env(safe-area-inset-bottom));
+}
+
+body.sans-onglets:has(.lien-erreurs:not([hidden])) main {
+  padding-bottom: calc(var(--hauteur-barre) + 84px + env(safe-area-inset-bottom));
+}
+
+/* Un champ atteint au clavier ou par « N points à corriger » ne se cache ni sous l'en-tête ni sous la barre. */
+html:has(> body.sans-onglets) {
+  scroll-padding: 80px 0 calc(var(--hauteur-barre) + 24px + env(safe-area-inset-bottom));
+}
+
+html:has(> body.sans-onglets .lien-erreurs:not([hidden])) {
+  scroll-padding-bottom: calc(var(--hauteur-barre) + 76px + env(safe-area-inset-bottom));
 }
 
 .vue {
@@ -620,6 +639,9 @@ body:not(.dans-app) main {
   align-items: center;
   justify-content: center;
   min-height: 52px;
+  padding: 6px 10px;
+  line-height: 1.25;
+  text-align: center;
   border: 1px solid var(--bordure-champ);
   border-radius: 14px;
   background: var(--surface);
@@ -788,7 +810,17 @@ body:not(.dans-app) main {
   text-decoration: none;
 }
 
-.retour span { font-size: 1.5rem; line-height: 1; }
+.retour > [aria-hidden="true"] { font-size: 1.5rem; line-height: 1; }
+
+/* Nom du plat dans le lien retour : une seule ligne. */
+.retour-texte {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retour:has(.retour-texte) { max-width: 100%; }
 
 .photo-plat {
   display: grid;
@@ -1002,6 +1034,12 @@ body:not(.dans-app) main {
 
 body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom)); }
 
+body.sans-onglets .annonce { bottom: calc(var(--hauteur-barre) + 16px + env(safe-area-inset-bottom)); }
+
+body.sans-onglets:has(.lien-erreurs:not([hidden])) .annonce {
+  bottom: calc(var(--hauteur-barre) + 68px + env(safe-area-inset-bottom));
+}
+
 /* ——— Barre d'onglets ——— */
 
 .onglets {
@@ -1066,14 +1104,51 @@ body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom));
 .feuille {
   width: 100%;
   max-width: var(--largeur);
-  max-height: calc(100dvh - 48px);
-  margin: auto auto 0;
+  /* --clavier : hauteur du clavier Android, posée par feuille.js ; la feuille remonte au-dessus. */
+  max-height: calc(100dvh - 48px - var(--clavier, 0px));
+  margin: auto auto var(--clavier, 0px);
   padding: 12px 20px calc(20px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: none;
   border-radius: 24px 24px 0 0;
   background: var(--surface);
   color: var(--texte);
   box-shadow: var(--ombre);
+}
+
+/* Feuille à bouton principal collé en bas : la marge du bas passe sous ce bouton (rien ne défile dessous), et un
+   champ qui reçoit le focus ne se cache pas derrière lui. */
+.feuille:has(.feuille-pied) {
+  padding-bottom: 0;
+  scroll-padding-bottom: 96px;
+}
+
+/* Bouton principal d'une feuille longue : toujours visible en bas, même clavier ouvert. */
+.feuille-pied {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 4px 0 0;
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  background: var(--surface);
+}
+
+/* Fondu au-dessus du bouton : le texte qui défile dessous s'efface au lieu d'être coupé net. */
+.feuille-pied::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 12px;
+  background: linear-gradient(to top, var(--surface), transparent);
+  pointer-events: none;
+}
+
+.feuille-pied + .actions-feuille {
+  margin-top: 0;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
 }
 
 .feuille[open] { animation: monte 0.24s ease-out; }
@@ -1182,8 +1257,8 @@ body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom));
 /* Flèche de dépliage (le marqueur natif disparaît avec display: flex). */
 .collage-manuel summary { list-style: none; }
 .collage-manuel summary::-webkit-details-marker { display: none; }
-.collage-manuel summary::before { content: '▸'; width: 1.25em; }
-.collage-manuel[open] > summary::before { content: '▾'; }
+.collage-manuel summary::before { content: '▸' / ''; width: 1.25em; }
+.collage-manuel[open] > summary::before { content: '▾' / ''; }
 
 .zone-collage {
   min-height: 140px;
@@ -1246,3 +1321,415 @@ body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom));
 }
 
 .apercu-plat .badges { margin-top: 0; }
+
+/* ——— Modifier une recette ——— */
+
+.carte-reprise { border-color: var(--accent); }
+
+/* Messages sous le titre : sans message affiché, ils ne laissent aucun espace. */
+.modifier-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modifier-messages:not(:has(> :not([hidden]))) { margin-top: -20px; }
+
+/* Choix aux libellés de longueurs inégales (type de plat) : chacun prend la place de son texte. */
+.choix-souple {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.choix-souple .choix { flex: 1 1 auto; padding: 6px 16px; }
+
+.modifier-formulaire {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.carte-edition { gap: 10px; }
+
+.carte-edition > .etiquette-champ:first-child,
+.carte-edition > .groupe-choix:first-child .etiquette-champ { margin-top: 0; }
+
+.bandeau {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: var(--olive-doux);
+  color: var(--texte);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.bandeau-alerte { background: var(--ocre-doux); }
+
+/* Message d'erreur sous le champ concerné (relié par aria-describedby). */
+.erreur-champ {
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.champ[aria-invalid="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Listes déroulantes : même allure que les champs, flèche dessinée. */
+select.champ {
+  appearance: none;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a7d72' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 14px center;
+  background-repeat: no-repeat;
+  background-size: 18px;
+  text-overflow: ellipsis;
+}
+
+/* Compteur [−] N [+] : portions, jours au frigo. */
+.ligne-compteur {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.etiquette-compteur { font-weight: 600; }
+
+.compteur {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--bordure-champ);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.compteur:focus-visible { outline-offset: 2px; border-radius: 999px; }
+
+.compteur-bouton {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-doux);
+  color: var(--texte);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.12s ease, opacity 0.2s ease;
+}
+
+.compteur-bouton:active { transform: scale(0.94); }
+
+.compteur-bouton:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.compteur-valeur {
+  min-width: 6.5em;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Lignes d'ingrédients et d'étapes : chaque ligne ouvre sa feuille. */
+.lignes-edition {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lignes-edition li + li { border-top: 1px solid var(--bordure); }
+
+.ligne-edition {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 2px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.ligne-edition:active { background: var(--fond); }
+
+.ligne-quantite {
+  flex: none;
+  min-width: 84px;
+  color: var(--texte-doux);
+  font-variant-numeric: tabular-nums;
+}
+
+.ligne-texte {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Étape : texte sur deux lignes au plus, la feuille montre le reste. */
+.ligne-etape { align-items: flex-start; }
+
+.ligne-etape .ligne-texte {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.ligne-etape .chevron { align-self: center; }
+
+.numero-etape {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-doux);
+  color: var(--texte);
+  font-family: var(--police-titre);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  line-height: 1;
+}
+
+/* Cuisson principale : tuiles des appareils, pictogramme au-dessus du nom. */
+.choix-appareils {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.choix.choix-appareil {
+  flex-direction: column;
+  gap: 6px;
+  min-height: 80px;
+  padding: 10px 4px;
+  font-size: 0.875rem;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.choix-appareil .picto,
+.choix-appareil .sans-picto {
+  width: 26px;
+  height: 26px;
+}
+
+.sans-picto {
+  display: grid;
+  place-items: center;
+  color: var(--texte-doux);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.ligne-duree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.champ-avec-unite {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.champ-avec-unite .champ {
+  flex: none;
+  width: 7em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* « Recette vérifiée ✅ » : grande cible. */
+.case-verifiee {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  font-family: var(--police-titre);
+  font-size: 1.125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.case-verifiee input {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+
+.erreurs-recette { border-color: var(--accent); }
+
+.erreurs-recette:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.bouton-annuler { align-self: center; }
+
+/* Barre fixe « Enregistrer » : la seule action principale de l'écran. */
+.barre-enregistrer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  padding: 10px max(20px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  background: var(--surface);
+  box-shadow: var(--ombre-haute);
+}
+
+.vue.entree > .barre-enregistrer { animation: apparait 0.22s ease-out; }
+
+.barre-enregistrer-contenu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: calc(var(--largeur) - 40px);
+  margin: 0 auto;
+}
+
+.lien-erreurs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent-doux);
+  color: var(--texte);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ——— Feuilles de l'écran Modifier ——— */
+
+.ligne-champs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+
+.champ-groupe {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--fond);
+  color: var(--texte);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.suggestion-nom {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.suggestion-detail {
+  flex: none;
+  color: var(--texte-doux);
+}
+
+.bloc-nouveau-produit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 12px 14px 14px;
+  border-radius: 14px;
+  background: var(--ocre-doux);
+}
+
+.bloc-nouveau-produit .etiquette-champ { margin-top: 4px; }
+
+.aide-forte { font-weight: 600; }
+
+/* « Plus de précisions » : repliées par défaut. */
+.depliable summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  color: var(--texte-doux);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.depliable summary::-webkit-details-marker { display: none; }
+.depliable summary::before { content: '▸' / ''; width: 1.25em; }
+.depliable[open] > summary::before { content: '▾' / ''; }
+
+.depliable-contenu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+
+.zone-etape {
+  min-height: 120px;
+  resize: vertical;
+}
+
+/* Monter, Descendre : côte à côte. */
+.deplacer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.deplacer .bouton { min-height: 48px; padding: 0 12px; }

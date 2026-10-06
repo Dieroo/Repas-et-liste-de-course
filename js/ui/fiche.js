@@ -3,6 +3,7 @@ import { el, pastille, annoncer } from './dom.js';
 import { choisirImage, preparerPhoto } from './photo.js';
 import { copier } from './presse-papiers.js';
 import { modeDeCuisson } from './pictos.js';
+import { lireBrouillon } from './brouillon.js';
 import { texteDemandeRecette } from '../coeur/paquet.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
@@ -76,6 +77,16 @@ export function creer(ctx) {
   const lienColler = el('a', { class: 'bouton bouton-plein', href: `#/import/${encodeURIComponent(id)}` }, 'Coller la recette');
   const messageCopie = el('p', { class: 'aide', role: 'status' });
   const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, boutonDemander, lienColler);
+
+  // « Modifier la recette » (les deux membres), ou « Reprendre » si une modification attend sur ce téléphone.
+  const lienModifier = el('a', { class: 'bouton bouton-secondaire bouton-plein', href: `#/modifier/${encodeURIComponent(id)}` });
+  const carteReprise = el('section', { class: 'carte carte-reprise' },
+    el('div', { class: 'carte-ligne' },
+      pastille('✏️', 'ocre'),
+      el('div', { class: 'carte-texte' },
+        el('h2', {}, 'Modifications pas encore enregistrées'),
+        el('p', {}, 'Reprenez là où vous en étiez.'))),
+    el('a', { class: 'bouton bouton-principal bouton-plein', href: `#/modifier/${encodeURIComponent(id)}` }, 'Reprendre'));
 
   const platCourant = () => courant.plats.find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
@@ -184,8 +195,16 @@ export function creer(ctx) {
       congelable === true ? 'se congèle' : congelable === false ? 'ne se congèle pas' : null,
     ].filter(Boolean).join(' · ');
 
-    const focusRecette = actionsRecette.contains(document.activeElement) ? document.activeElement : null;
+    // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
+    const focusGarde = [actionsRecette, lienModifier, carteReprise].some((n) => n.contains(document.activeElement))
+      ? document.activeElement
+      : null;
     majActionsRecette();
+    const brouillon = lireBrouillon(courant.utilisateur?.uid, id);
+    lienModifier.replaceChildren(
+      el('span', { 'aria-hidden': 'true' }, '✏️'),
+      statut === 'attente' ? 'Écrire la recette moi-même' : 'Modifier la recette',
+    );
     // replaceChildren écrirait « null » : les blocs absents sont retirés.
     contenu.replaceChildren(...[
       el('header', { class: 'vue-entete' },
@@ -200,6 +219,8 @@ export function creer(ctx) {
         ),
       ),
 
+      brouillon ? carteReprise : lienModifier,
+
       statut === 'attente'
         ? el('section', { class: 'carte' },
           el('div', { class: 'carte-ligne' },
@@ -208,7 +229,7 @@ export function creer(ctx) {
               el('h2', {}, 'Recette à ajouter'),
               el('p', {}, gestionnaire
                 ? 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'
-                : 'Elle a été demandée. Elle apparaîtra ici dès qu’elle sera ajoutée.'),
+                : 'Elle a été demandée. Vous pouvez aussi l’écrire vous-même.'),
             )),
           gestionnaire ? actionsRecette : null)
         : null,
@@ -245,11 +266,12 @@ export function creer(ctx) {
         : null,
 
       gestionnaire && statut !== 'attente'
-        ? section('Nouvelle version', el('p', { class: 'texte-doux' }, 'Pour corriger la recette, demandez-en une nouvelle version à votre projet Claude.'), actionsRecette)
+        ? section('Nouvelle version', el('p', { class: 'texte-doux' },
+          'Pour une recette entièrement refaite, demandez une nouvelle version à votre projet Claude. Elle remplacera vos modifications.'),
+        actionsRecette)
         : null,
     ].filter(Boolean));
-    // Bouton de la recette qui avait le focus : il le retrouve après la mise à jour.
-    if (focusRecette && !actionsRecette.contains(document.activeElement)) focusRecette.focus({ preventScroll: true });
+    if (focusGarde?.isConnected && document.activeElement !== focusGarde) focusGarde.focus({ preventScroll: true });
   }
 
   function toutDessiner() {

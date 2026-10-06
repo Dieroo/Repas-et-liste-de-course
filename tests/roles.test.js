@@ -6,6 +6,7 @@ import {
   roleDe,
   routeAutorisee,
   resoudreRoute,
+  parametreDe,
   gestionnaireADesigner,
 } from '../js/coeur/roles.js';
 
@@ -86,4 +87,21 @@ test('gestionnaireADesigner : vrai tant que personne n’est gestionnaire', () =
   assert.equal(gestionnaireADesigner({ versionSchema: 1 }), true);
   assert.equal(gestionnaireADesigner({ gestionnaire: '  ' }), true);
   assert.equal(gestionnaireADesigner(reglages), false);
+});
+
+test('routes : « Modifier la recette » pour les deux rôles, identifiant obligatoire', () => {
+  for (const role of ['gestionnaire', 'courses']) {
+    assert.equal(routeAutorisee('modifier', role), true, role);
+    assert.equal(resoudreRoute('#/modifier/risotto-test', role), 'modifier', role);
+    // Sans identifiant valide : la liste des plats, comme pour la fiche.
+    assert.equal(resoudreRoute('#/modifier', role), 'plats', role);
+    assert.equal(resoudreRoute('#/modifier/', role), 'plats', role);
+    assert.equal(resoudreRoute('#/modifier/Majuscules', role), 'plats', role);
+    assert.equal(resoudreRoute('#/modifier/a%2Fb', role), 'plats', role);
+  }
+  assert.equal(resoudreRoute('#/modifier/risotto-test', null), 'semaine');
+  assert.equal(parametreDe('#/modifier/risotto-test', 'modifier'), 'risotto-test');
+  assert.equal(parametreDe('#/modifier/Abc!', 'modifier'), '');
+  assert.equal(parametreDe('#/modifier/risotto-test', 'plat'), '');
+  assert.equal(parametreDe('#/plat/risotto-test', 'modifier'), '');
 });

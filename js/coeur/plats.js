@@ -12,7 +12,7 @@ export const LIBELLES_TYPE = {
 export const STATUTS = {
   attente: { emoji: '⏳', libelle: 'Recette à ajouter' },
   brouillon: { emoji: '📝', libelle: 'Recette à vérifier' },
-  validee: { emoji: '✅', libelle: 'Recette validée' },
+  validee: { emoji: '✅', libelle: 'Recette vérifiée' },
 };
 
 export const FILTRES = [
@@ -131,7 +131,7 @@ const UNITES = {
 /** « 400 g », « 2 tranches », « 1 » (pièce) ; « » si la quantité manque. */
 export function quantiteLisible(qte, unite) {
   if (typeof qte !== 'number' || !Number.isFinite(qte)) return '';
-  const [singulier, pluriel] = UNITES[unite] ?? [unite ?? '', unite ?? ''];
+  const [singulier, pluriel] = Object.hasOwn(UNITES, unite ?? '') ? UNITES[unite] : [unite ?? '', unite ?? ''];
   const mot = qte > 1 ? pluriel : singulier;
   return mot ? `${nombre.format(qte)}\u00A0${mot}` : nombre.format(qte);
 }

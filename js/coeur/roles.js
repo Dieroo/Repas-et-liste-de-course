@@ -3,11 +3,13 @@
 export const ROUTE_PAR_DEFAUT = 'semaine';
 
 // Écrans connus, et ceux réservés au gestionnaire.
-const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'decouvrir', 'reglages', 'import'];
+const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'modifier', 'decouvrir', 'reglages', 'import'];
 const ROUTES_GESTIONNAIRE = ['reglages', 'import'];
 
-// Écrans qui reçoivent l'identifiant d'un plat : « #/plat/<id> » (obligatoire), « #/import/<id> » (facultatif).
-export const ROUTES_AVEC_PARAMETRE = ['plat', 'import'];
+// Écrans qui reçoivent l'identifiant d'un plat : « #/plat/<id> » et « #/modifier/<id> » (obligatoire),
+// « #/import/<id> » (facultatif).
+export const ROUTES_AVEC_PARAMETRE = ['plat', 'modifier', 'import'];
+const ROUTES_PARAMETRE_OBLIGATOIRE = ['plat', 'modifier'];
 const PARAMETRE_VALIDE = /^[a-z0-9-]+$/;
 
 /** Adresse comparable : sans espaces autour, en minuscules ; '' si absente. */
@@ -58,8 +60,10 @@ export function lireHash(hash) {
 /** Écran à afficher pour un hash (« #/courses ») : l'écran demandé s'il est permis, sinon l'accueil. */
 export function resoudreRoute(hash, role) {
   const { route, parametre } = lireHash(hash);
-  // Fiche d'un plat : identifiant au format slug seulement (sinon la liste des plats).
-  if (route === 'plat' && !PARAMETRE_VALIDE.test(parametre)) return routeAutorisee('plats', role) ? 'plats' : ROUTE_PAR_DEFAUT;
+  // Fiche d'un plat et sa modification : identifiant au format slug seulement (sinon la liste des plats).
+  if (ROUTES_PARAMETRE_OBLIGATOIRE.includes(route) && !PARAMETRE_VALIDE.test(parametre)) {
+    return routeAutorisee('plats', role) ? 'plats' : ROUTE_PAR_DEFAUT;
+  }
   return routeAutorisee(route, role) ? route : ROUTE_PAR_DEFAUT;
 }
 
