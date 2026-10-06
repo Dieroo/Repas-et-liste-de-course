@@ -25,7 +25,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 - 2 adultes, Android + Chrome, comptes Google. 3 profils : les 2 adultes et 1 jeune enfant (noté par ses parents).
 - Deux rôles, déduits de l'adresse e-mail connectée (`reglages/foyer.gestionnaire`) :
   - le **gestionnaire** (« Recettes et réglages ») : ajoute les recettes (import, « Demander à Claude », « Coller la recette »), traite les demandes, règle l'app ; peut aussi tout ce que fait l'autre membre ;
-  - l'**utilisatrice des courses** (« Repas et courses ») : planifie la semaine (choix des plats, « Proposer », variantes, apéro, validation), fait les courses, ajoute des plats par leur nom, prend ou choisit les photos des plats, note les plats, modifie les recettes (ingrédients, quantités, unités, étapes, portions, conservation).
+  - l'**utilisatrice des courses** (« Repas et courses ») : planifie la semaine (choix des plats, « Proposer », variantes, apéro, validation), fait les courses, ajoute des plats par leur nom, prend ou choisit les photos des plats, note les plats, modifie les recettes (nom, type, ingrédients, quantités, unités, étapes, portions, cuisson principale, conservation, « Recette vérifiée »).
 - Les deux peuvent organiser la semaine ; c'est surtout l'utilisatrice des courses qui le fait.
 - Courses le samedi, commandées au **drive** depuis l'application de l'enseigne (pas d'API disponible) ; parfois en magasin. Batch cooking le dimanche.
 - Apéro chaque week-end, avec des incontournables récurrents (boisson).
@@ -100,7 +100,8 @@ js/
   ui/                     un module par écran (semaine, courses, plats, fiche, decouvrir, batch, congelateur, demandes, reglages, import)
                           + dom.js (outils DOM), connexion.js (écrans avant l'app), profil.js (avatar, panneau du profil),
                           feuille.js (feuilles du bas), photo.js (choix et compression), presse-papiers.js (copier, coller),
-                          pictos.js (pictogrammes des appareils de cuisson)
+                          pictos.js (pictogrammes des appareils de cuisson), modifier.js (écran « Modifier la recette »),
+                          brouillon.js (modification en cours gardée sur le téléphone)
   coeur/                  logique pure : ni DOM ni Firebase
     roles.js              rôle de la personne connectée, écrans permis
     slug.js               identifiants et recherche sans accents
@@ -113,6 +114,7 @@ js/
     batch.js
     congelateur.js
     paquet.js             format d'import : extraction, validation, plat visé, textes pour Claude
+    edition.js            « Modifier » : libellés, natures, catalogue des produits connus, saisie d'un ingrédient, écritures
 tests/                    node:test, fixtures génériques
 firestore.rules           adresses en espaces réservés (<EMAIL_1>, <EMAIL_2>)
 package.json              uniquement "type": "module" et le script de test
@@ -124,7 +126,7 @@ package.json              uniquement "type": "module" et le script de test
 |---|---|
 | `reglages/foyer` | `versionSchema: 1`, `gestionnaire` (e-mail), `debutSemaine`, `nbPlats {min, max}`, `dessertParSemaine` (0 ou 1), `frigoJoursDefaut` (3), `dureeBatchMaxMin`, `rayons[]` (ordre du parcours en magasin), `appareils[]`, `apero {actif, jour, nbSuggestions, incontournables[]}`, `drive {nom, urlRecherche}` (modèle contenant `{q}`), `notifications {ntfySujet}` |
 | `profils/{id}` | `nom`, `email` (facultatif, sert à reconnaître la personne connectée), `ordre`, `repas {midis: [jours], soirs: [jours]}`, `coefPortion` (1 adulte, 0,5 enfant), `regles[]` (§7) |
-| `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe`, `modifieeLe` et `modifieePar` (posés par « Modifier », effacés par un nouvel ajout depuis Claude) |
+| `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe`, `modifieeLe` et `modifieePar` (posés par « Modifier », effacés quand une recette de Claude remplace ou complète la fiche). « Modifier » écrit par `update` les seuls champs touchés : portions et ingrédients toujours ensemble, `conservation` sous-champ par sous-champ |
 | `photos/{platId}` | `image` (JPEG compressé dans le navigateur, 1024 px max, ~200 Ko max), `majPar`, `majLe` ; lu seulement à l'ouverture de la fiche, pour que la liste des plats reste légère |
 | `produits/{id}` | `nom`, `rayon`, `uniteDefaut`, `marqueurs[]`, `habituel {actif, qte, unite}`, `rechercheDrive` (terme de recherche personnalisé, facultatif), `placard {actif, seuil, unite}` (§9 ; `seuil` vide = toujours proposé), `achats[]` (dates, V2) |
 | `semaines/{dimancheISO}` | `statut` (`brouillon` → `validee` → `courses_faites` → `batch_fait`), `plats [{platId, adultes, enfants, repas, portionsACuire, portionsACongeler}]` (`portionsACuire` = (`adultes` + `enfants` × `coefPortion` enfant, soit 0,5) × `repas`), `affectations {profilId: {"lun-soir": {platId, variante} ou {congelId}}}`, `apero {jour, platIds[]}`, `majPar`, `majLe` |
@@ -205,7 +207,7 @@ Sens inverse : un plat sans viande ni poisson affecté à un profil qui a `prote
 
 **Demandes et notification**
 - Badge « Demandes » sur l'accueil du gestionnaire, mis à jour en temps réel ; écran Demandes avec bouton « Demander à Claude » (texte §8).
-- Plat ajouté par son nom (⏳) par l'utilisatrice des courses → `demande` `type: "recette"` ; elle passe `traitee` dès que la fiche reçoit ses ingrédients (import).
+- Plat ajouté par son nom (⏳) par l'utilisatrice des courses → `demande` `type: "recette"` ; elle passe `traitee` dès que la fiche reçoit ses ingrédients (import ou « Modifier »).
 - Si `notifications.ntfySujet` est défini et que la demande vient d'un autre membre que le gestionnaire : `fetch('https://ntfy.sh/' + sujet, { method: 'POST', body })` avec `body` = `Recette à ajouter : <plat> — version <profil>` (variante) ou `Recette à ajouter : <plat>` (recette). Message minimal, rien d'autre. Échec silencieux (la demande reste visible dans l'app).
 - Une demande passe `traitee` dès que la fiche reçoit la variante (import).
 
@@ -265,7 +267,7 @@ Un seul format pour le catalogue de départ, l'import unitaire (recette produite
 | `nom` | nom affiché |
 | `type` | `plat` · `dessert` · `accompagnement` · `preparation` (ex. yaourts maison) · `apero` |
 | `recurrence` | `aucune` · `hebdo` (ajoutée chaque semaine, ses ingrédients vont dans la liste) |
-| `statutRecette` | `attente` (⏳ nom seul, sans ingrédients) · `brouillon` (📝 version classique à faire corriger) · `validee` (✅) |
+| `statutRecette` | `attente` (⏳ nom seul, sans ingrédients) · `brouillon` (📝 version classique à faire corriger) · `validee` (✅ « Recette vérifiée ») |
 | `portionsBase` | entier > 0, en portions adultes |
 | `ingredients[]` | `produit` (minuscules, singulier, sans marque), `qte` > 0, `unite`, `rayon`, `marqueurs[]` ; `forme` obligatoire si `viande` ; `role` obligatoire si `legume` |
 | `etapes[]` | phrases courtes |
@@ -291,9 +293,9 @@ Vocabulaires fermés :
 - Le gestionnaire colle la **réponse entière** de Claude : l'app y retrouve chaque objet `paquet@1` (prose, blocs de code, plusieurs blocs réunis). Elle distingue texte vide, demande recollée par erreur (`DEMANDE-…`), réponse coupée et absence de recette.
 - Tolérances : casse, accents et séparateurs des vocabulaires fermés (`Incorporé` → `incorpore`), nombres écrits en texte (`"0,5"`), `produit` mis en minuscules. Champs inconnus, `notes`, `derniereFois` et clés autres que `plats` ignorés avec un avertissement (repris dans la tranche qui les utilise : notes et sauvegarde en T1d, réglages et profils ensuite).
 - Grille : `id` et `nom` toujours ; `portionsBase` et `ingredients` sauf plat sans recette ; avec des ingrédients, le statut devient au moins `brouillon` ; `tempC` conseillé pour four et airfryer.
-- Plat visé : la cible (une seule recette collée), sinon le même `id` s'il s'agit du même plat (même nom, plat ⏳ ou demande ouverte), sinon le même nom, sinon un nouveau plat (identifiant libre `-2` si un autre plat, déjà rempli, utilise le sien). Deux recettes visant le même plat : erreur.
+- Plat visé : la cible (une seule recette collée), sinon le même `id` s'il s'agit du même plat (même nom, plat ⏳, demande ouverte, ou fiche modifiée à la main, donc peut-être renommée, sauf si un plat ⏳ ou une demande ouverte porte exactement le nom collé), sinon le même nom, sinon un nouveau plat (identifiant libre `-2` si un autre plat, déjà rempli, utilise le sien). Deux recettes visant le même plat : erreur.
 - Écriture : seulement les champs présents (`mergeFields`), jamais `vignette` ni `notes`, jamais de table vide ni de valeur `undefined` ; demandes satisfaites closes dans un second lot (`update`, `statut: traitee`, `traiteeLe`).
-- Fiche modifiée à la main (`modifieeLe`) : l'aperçu annonce « Remplace les modifications faites à la main le … ».
+- Fiche modifiée à la main (`modifieePar`) : l'aperçu annonce « Remplace les modifications faites à la main le … » ; la recette remplacée ou complétée efface `modifieeLe` et `modifieePar`.
 - Tout ou rien : la moindre erreur bloque l'enregistrement ; « Copier les corrections pour Claude » copie un texte avec les codes exacts. Les messages affichés n'emploient aucun mot technique (§4) ; le texte collé n'est jamais affiché.
 
 ```
@@ -373,8 +375,9 @@ besoin: sans_viande | avec_proteine
 3. **Plats** : recherche, filtres (type, statut, compatibilité), ★ par profil, pictogramme du mode de cuisson principal, ajout par nom (→ ⏳ et demande de recette).
 4. **Découvrir** : §4.
 5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges (dont le mode de cuisson principal et sa durée) et variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
-   - Fiche en lecture, un seul bouton « Modifier » (les deux membres) : ingrédients (ajouter, retirer, quantité, unité), étapes, portions, conservation.
-   - Ajout d'un ingrédient : suggestions dès les premières lettres, tirées de tous les ingrédients déjà connus, unité, rayon et nature préremplis ; pour un produit jamais vu, unité, rayon et une question « Viande / Poisson / Légume / Autre », une fois pour toutes.
+   - Fiche en lecture, un seul bouton « ✏️ Modifier la recette » (les deux membres ; « Écrire la recette moi-même » sur un plat ⏳) → écran `#/modifier/<id>` : nom, type, portions (« Ces quantités sont pour N portions »), ingrédients (ajouter, retirer, quantité, unité, nature), étapes (ajouter, déplacer, retirer), cuisson principale (« Cuit surtout au » + durée), jours au frigo, congélation, boîte à emporter, « Recette vérifiée ». Restent à Claude : variantes, temps de travail, source, récurrence, étapes de cuisson secondaires.
+   - Une seule barre « Enregistrer » (onglets masqués). Seuls les champs touchés sont écrits ; un bandeau prévient si l'autre téléphone a changé l'un d'eux entre-temps. La modification en cours est gardée sur le téléphone (`localStorage`, par compte et par plat) jusqu'à l'enregistrement, l'annulation ou la déconnexion : la fiche propose alors « Reprendre ».
+   - Ajout d'un ingrédient : suggestions dès les premières lettres, tirées de tous les ingrédients déjà connus, unité, rayon et nature préremplis ; pour un produit jamais vu, une question « Viande / Poisson / Légume / Autre » (viande « en morceaux », légume « fondu dans le plat » par défaut, modifiables dans « Plus de précisions »).
 6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, sauvegarde).
 
 ## 11. Tranches
@@ -414,8 +417,8 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 - [ ] T1 Plats, import & Découvrir — en trois livraisons :
   - [x] T1a profils, bibliothèque, fiche, ajout par nom (+ demande de recette), photo (appareil ou galerie), aperçu de la vue « Repas et courses » — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
   - [x] T1b « Ajouter des recettes » (coller la réponse de Claude, aperçu, enregistrement), « Demander à Claude » et « Coller la recette » sur la fiche — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
-  - [ ] T1c-1 pictogramme du mode de cuisson principal (liste des plats, fiche)
-  - [ ] T1c-2 « Modifier » une recette (les deux membres) et « Recette vérifiée »
+  - [ ] T1c-1 pictogramme du mode de cuisson principal (liste des plats, fiche) — fusionné le 2026-10-05 ; mise en ligne retardée par un incident GitHub Actions, essai sur téléphone à faire
+  - [ ] T1c-2 « Modifier » une recette (les deux membres) et « Recette vérifiée » — pull request ouverte le 2026-10-06, essai sur téléphone à faire
   - [ ] T1d notes 0–5, Découvrir, sauvegarde et restauration par fichier ; le critère « Fini quand » de T1 se vérifie ici
 - [ ] T2 Compatibilité & variantes
 - [ ] T3 Semaine, liste & apéro
@@ -434,4 +437,5 @@ Décisions :
 - 2026-10-05 — T1 redécoupé pour que chaque livraison se teste seule sur le téléphone du gestionnaire : T1b = ajout de recettes par collage ; T1c = notes, Découvrir, modification, sauvegarde et import de fichier. L'écran Demandes et les badges restent en T2, comme au §11 (le gestionnaire ne crée pas de demande lui-même). À trancher en T2 : en aperçu « Repas et courses », le gestionnaire crée une demande comme l'autre membre, pour pouvoir tester seul. Le critère « Fini quand » de T1 sera adapté en T1c.
 - 2026-10-05 — Maîtres mots du propriétaire (§1). Recettes modifiables par les deux membres (T1c) : ingrédients, quantités, unités, étapes, portions ; suggestions tirées des ingrédients connus, question « Viande / Poisson / Légume / Autre » pour un produit jamais vu ; un nouvel ajout depuis Claude signale qu'il remplace des modifications faites à la main. Personnes (adultes, enfants) et repas par plat, réglables depuis la semaine, et placard avec seuils (T3, §9).
 - 2026-10-05 — T1c redécoupé : « Modifier » d'abord (T1c), notes, Découvrir et sauvegarde ensuite (T1d). Un produit jamais vu ne demande que sa nature (« Viande / Poisson / Légume / Autre ») : une viande est « en morceaux » et un légume « fondu dans le plat » par défaut, modifiables ensuite.
+- 2026-10-06 — « Modifier » : la modification en cours est gardée dans `localStorage` (Android vide `sessionStorage` quand l'app est fermée depuis les applis récentes) ; portions et ingrédients s'écrivent toujours ensemble (les quantités valent pour le nombre de portions affiché) ; `conservation` est écrite sous-champ par sous-champ (l'autre sous-champ, changé ailleurs, reste) ; la cuisson principale se règle sur l'étape la plus longue de la fiche, les autres étapes restent celles de Claude. Les bancs d'essai navigateur (Playwright, faux Firebase) vivent dans la session de travail, hors du dépôt ; ils sont rejoués à chaque livraison (T0, T1a, T1b, T1c-1, T1c-2).
 - 2026-10-05 — Pictogramme du mode de cuisson principal à côté de chaque plat, puis sur les plats de la semaine et les suggestions de « Proposer » (§4). Dessins au trait propres à l'app, validés par le propriétaire sur description, toujours accompagnés du nom de l'appareil ; livrés à part (T1c-1), avant « Modifier ».

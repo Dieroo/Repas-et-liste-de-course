@@ -26,17 +26,21 @@ import * as semaine from './ui/semaine.js';
 import * as courses from './ui/courses.js';
 import * as plats from './ui/plats.js';
 import * as fiche from './ui/fiche.js';
+import * as modifier from './ui/modifier.js';
 import * as decouvrir from './ui/decouvrir.js';
 import * as reglages from './ui/reglages.js';
 import * as importRecettes from './ui/import.js';
+import { effacerBrouillons } from './ui/brouillon.js';
 
-// Écrans de l'app. `onglet` : onglet surligné. Un module expose creer(ctx) → { noeud, maj?, detruire? }
-// (mis à jour en direct) ou afficher(ctx) → nœud (reconstruit seulement si l'écran change).
+// Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
+// accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
+// ou afficher(ctx) → nœud (reconstruit seulement si l'écran change).
 const ECRANS = {
   semaine: { titre: 'Semaine', module: semaine, onglet: 'semaine' },
   courses: { titre: 'Courses', module: courses, onglet: 'courses' },
   plats: { titre: 'Plats', module: plats, onglet: 'plats' },
   plat: { titre: 'Plat', module: fiche, onglet: 'plats' },
+  modifier: { titre: 'Modifier la recette', module: modifier, onglet: 'plats', sansOnglets: true },
   decouvrir: { titre: 'Découvrir', module: decouvrir, onglet: 'decouvrir' },
   reglages: { titre: 'Réglages', module: reglages, onglet: null },
   import: { titre: 'Ajouter des recettes', module: importRecettes, onglet: 'plats' },
@@ -113,10 +117,11 @@ function confirmerCompte(uid) {
  * Affiche un écran. Même clé : l'écran en place est seulement mis à jour (s'il sait le faire), sans rejouer
  * l'animation ni perdre la saisie. `fabriquer()` renvoie un nœud ou { noeud, maj?, detruire? }.
  */
-function monter(cle, fabriquer, { dansApp = false, titre = NOM_APP, ctx = null } = {}) {
+function monter(cle, fabriquer, { dansApp = false, sansOnglets = false, titre = NOM_APP, ctx = null } = {}) {
   document.body.classList.toggle('dans-app', dansApp);
+  document.body.classList.toggle('sans-onglets', dansApp && sansOnglets);
   marque.hidden = !dansApp;
-  onglets.hidden = !dansApp;
+  onglets.hidden = !dansApp || sansOnglets;
   boutonProfil.hidden = !dansApp;
   if (!dansApp) bandeauApercu.hidden = true;
   if (!dansApp && panneauProfil.open) panneauProfil.close();
@@ -224,14 +229,20 @@ function rendreApp() {
   const route = resoudreRoute(location.hash, role);
   const parametre = parametreDe(location.hash, route);
   const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
-  if (location.hash !== hashAttendu) history.replaceState(null, '', hashAttendu);
+  if (location.hash !== hashAttendu) history.replaceState(history.state, '', hashAttendu);
 
   if (route !== routeAffichee) {
-    routePrecedente = routeAffichee;
+    // Écran d'où l'on venait, gardé dans l'entrée d'historique : un retour arrière (après « Enregistrer », par
+    // exemple) le retrouve, et le lien retour de la fiche n'ajoute pas d'entrée.
+    const memorisee = history.state?.precedente;
+    routePrecedente = typeof memorisee === 'string' ? memorisee : routeAffichee;
+    if (typeof memorisee !== 'string') {
+      history.replaceState({ ...(history.state ?? {}), precedente: routePrecedente }, '', location.hash);
+    }
     routeAffichee = route;
   }
 
-  const { titre, module, onglet: ongletActif } = ECRANS[route];
+  const { titre, module, onglet: ongletActif, sansOnglets = false } = ECRANS[route];
   for (const onglet of onglets.querySelectorAll('[data-route]')) {
     if (onglet.dataset.route === ongletActif) onglet.setAttribute('aria-current', 'page');
     else onglet.removeAttribute('aria-current');
@@ -261,9 +272,13 @@ function rendreApp() {
     ? `${maintenant.toDateString()}-${maintenant.getHours() >= 18 || maintenant.getHours() < 5}`
     : '';
   const cle = `${route}/${parametre}|${role}|${roleReel}|${utilisateur.uid}|${moment}`;
-  const titrePage = route === 'plat' ? etat.plats.find((p) => p.id === parametre)?.nom ?? titre : titre;
+  // Fiche : « <nom du plat> · Repas & Courses » ; modification : « <nom du plat> · Modifier · Repas & Courses ».
+  const nomPlat = route === 'plat' || route === 'modifier' ? etat.plats.find((p) => p.id === parametre)?.nom : undefined;
+  let titrePage = titre;
+  if (nomPlat) titrePage = route === 'modifier' ? `${nomPlat} · Modifier` : nomPlat;
   monter(cle, () => (module.creer ? module.creer(ctx) : module.afficher(ctx)), {
     dansApp: true,
+    sansOnglets,
     titre: `${titrePage} · ${NOM_APP}`,
     ctx,
   });
@@ -309,15 +324,48 @@ const actions = {
     ecrire(donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email),
       'Les recettes n’ont pas pu être enregistrées. Réessayez.');
     const recus = new Map(ecritures.map(({ id, donnees: champs }) => [id, champs]));
+    // Recette qui remplace des modifications faites à la main : leur marque disparaît aussi.
+    const effacees = new Set(ecritures.filter((ecriture) => ecriture.effacerModification).map(({ id }) => id));
     etat.plats = [
-      ...etat.plats.map((plat) => (recus.has(plat.id) ? { ...plat, ...recus.get(plat.id) } : plat)),
+      ...etat.plats.map((plat) => {
+        if (!recus.has(plat.id)) return plat;
+        const maj = { ...plat, ...recus.get(plat.id) };
+        if (effacees.has(plat.id)) {
+          delete maj.modifieeLe;
+          delete maj.modifieePar;
+        }
+        return maj;
+      }),
       ...ecritures.filter(({ id }) => !etat.plats.some((plat) => plat.id === id)).map(({ donnees: champs }) => champs),
     ];
-    etat.demandes = etat.demandes.map((demande) => (demandesAClore.includes(demande.id)
-      ? { ...demande, statut: 'traitee' }
-      : demande));
+    cloreDemandes(demandesAClore);
+  },
+  /**
+   * Recette modifiée à la main, préparée par coeur/edition.js › preparerModification. Affichée tout de suite
+   * (l'écran revient à la fiche), envoyée dès que possible. `modifieeLe` reste null jusqu'à la confirmation.
+   */
+  modifierPlat(id, { champs, supprimer = [], demandesAClore = [] }) {
+    const email = etat.utilisateur.email;
+    ecrire(donnees.modifierPlat(id, { champs, supprimer }, demandesAClore, email),
+      'La recette n’a pas pu être enregistrée. Réessayez.');
+    etat.plats = etat.plats.map((plat) => {
+      if (plat.id !== id) return plat;
+      const maj = { ...plat, ...champs, modifieePar: email, modifieeLe: null };
+      if (champs.conservation) maj.conservation = { ...(plat.conservation ?? {}), ...champs.conservation };
+      for (const champ of supprimer) delete maj[champ];
+      return maj;
+    });
+    cloreDemandes(demandesAClore);
   },
 };
+
+/** Demandes satisfaites : closes tout de suite sur ce téléphone (l'envoi suit). */
+function cloreDemandes(demandesAClore) {
+  if (!demandesAClore?.length) return;
+  etat.demandes = etat.demandes.map((demande) => (demandesAClore.includes(demande.id)
+    ? { ...demande, statut: 'traitee' }
+    : demande));
+}
 
 function changerApercu(actif) {
   etat.apercu = actif;
@@ -365,7 +413,10 @@ async function seDeconnecter() {
   } catch {
     // La déconnexion a échoué : on reprend là où on en était.
     if (etat.utilisateur) suivreDonnees();
+    return;
   }
+  // Les modifications pas encore enregistrées ne restent pas sur le téléphone après la déconnexion.
+  effacerBrouillons();
 }
 
 async function lancerCreation() {
@@ -478,7 +529,9 @@ function demarrer() {
       suivreDonnees();
     } else {
       oublierDonnees();
+      // L'écran en place (une modification en cours) est fermé avant l'effacement des brouillons.
       rendre();
+      effacerBrouillons();
     }
   });
 }

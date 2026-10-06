@@ -138,34 +138,71 @@ export function retirerPhoto(platId, auteur) {
 }
 
 /**
+ * Clôt les demandes satisfaites, dans un lot à part, par `update` : son échec ne touche pas à la recette et ne
+ * peut pas recréer une demande disparue. Échec silencieux : la demande reste ouverte, elle sera close au prochain
+ * ajout ou à la prochaine modification de la recette.
+ */
+function cloreDemandes(demandesAClore) {
+  if (!demandesAClore?.length) return;
+  try {
+    const lot = writeBatch(db);
+    for (const id of demandesAClore) lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
+    lot.commit().catch(() => {});
+  } catch {
+    // Échec silencieux, comme ci-dessus.
+  }
+}
+
+/**
  * Enregistre des recettes (CLAUDE.md §8). Seuls les champs présents sont écrits (`mergeFields`) : les autres
- * (notes, photo, champs absents de la recette) restent intacts. Les demandes satisfaites sont closes dans un
- * second lot, par `update` : son échec ne touche pas aux recettes et ne peut pas recréer une demande disparue.
+ * (notes, photo, champs absents de la recette) restent intacts. Une recette qui remplace des modifications faites
+ * à la main (`effacerModification`) efface aussi leur marque (`modifieeLe`, `modifieePar`).
+ * Les demandes satisfaites sont closes dans un second lot.
  * → promesse de l'envoi des recettes (rejetée aussi si le lot n'a pas pu être construit).
  */
 export function importer({ ecritures, demandesAClore }, auteur) {
   let envoi;
   try {
     const lot = writeBatch(db);
-    for (const { id, donnees } of ecritures) {
+    for (const { id, donnees, effacerModification } of ecritures) {
       const document = { ...donnees, id, ...trace(auteur) };
+      if (effacerModification) Object.assign(document, { modifieeLe: deleteField(), modifieePar: deleteField() });
       lot.set(doc(db, 'plats', id), document, { mergeFields: Object.keys(document) });
     }
     envoi = lot.commit();
   } catch (erreur) {
     return Promise.reject(erreur);
   }
-  if (demandesAClore.length) {
-    try {
-      const lot = writeBatch(db);
-      for (const id of demandesAClore) lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
-      lot.commit().catch(() => {
-        // La demande reste ouverte ; elle sera close au prochain ajout de la recette.
-      });
-    } catch {
-      // Idem.
-    }
+  cloreDemandes(demandesAClore);
+  return envoi;
+}
+
+/**
+ * Enregistre une recette modifiée à la main (« Modifier », les deux membres). `champs` : seuls les champs touchés,
+ * préparés par coeur/edition.js › preparerModification ; `supprimer` : champs à effacer (toutes les étapes
+ * retirées…). `update` : échoue proprement si la fiche a été supprimée entre-temps, sans la recréer à moitié.
+ * Les demandes satisfaites (recette ⏳ écrite à la main) sont closes dans un second lot.
+ * → promesse de l'envoi de la recette (rejetée aussi si le lot n'a pas pu être construit).
+ */
+export function modifierPlat(id, { champs, supprimer = [] }, demandesAClore, auteur) {
+  let envoi;
+  try {
+    const { conservation, ...document } = champs;
+    // Conservation : un chemin par sous-champ touché (update remplacerait sinon la table entière).
+    for (const [cle, valeur] of Object.entries(conservation ?? {})) document[`conservation.${cle}`] = valeur;
+    for (const champ of supprimer) document[champ] = deleteField();
+    const lot = writeBatch(db);
+    lot.update(doc(db, 'plats', id), {
+      ...document,
+      modifieeLe: serverTimestamp(),
+      modifieePar: auteur,
+      ...trace(auteur),
+    });
+    envoi = lot.commit();
+  } catch (erreur) {
+    return Promise.reject(erreur);
   }
+  cloreDemandes(demandesAClore);
   return envoi;
 }
 
