@@ -15,6 +15,9 @@ import {
   LIBELLES_FORME,
   LIBELLES_ROLE,
   NATURES,
+  REPERES,
+  natureProposee,
+  reperesDe,
   PORTIONS_MAX,
   FRIGO_JOURS_MAX,
   natureDe,
@@ -437,6 +440,8 @@ export function creer(ctx) {
     const feuille = ouvrirFeuille(nouveau ? 'Nouvel ingrédient' : majuscule(existant.produit), (fermer) => {
       // Choix faits dans cette feuille ; sans choix, ils suivent l'ingrédient, puis le produit connu.
       const touches = { nature: null, forme: null, role: null };
+      // Repères (« Bouillon de viande »…) : null tant que rien n'est retiré, ils suivent alors le produit saisi.
+      let reperesTouches = null;
       let rayonTouche = false;
       let uniteTouchee = false;
       let suggestionChoisie = false;
@@ -456,6 +461,7 @@ export function creer(ctx) {
         autofocus: nouveau,
         oninput: () => {
           suggestionChoisie = false;
+          reperesTouches = null;
           masquerErreur('produit');
           majPrecisions();
         },
@@ -504,6 +510,14 @@ export function creer(ctx) {
       const blocNouveau = el('div', { class: 'bloc-nouveau-produit', hidden: true },
         el('p', { class: 'aide-forte' }, 'Nouveau produit\u00A0: dites-nous ce que c’est.'));
       const emplacementNature = el('div', {});
+      // Repères lisibles, avec « Retirer » : sous la question de la nature pour un produit jamais vu, sinon dans
+      // « Plus de précisions ».
+      const listeReperes = el('ul', { class: 'liste-reperes' });
+      const blocReperes = el('div', { class: 'bloc-reperes', hidden: true },
+        el('p', { class: 'etiquette-champ', id: 'ingredient-reperes' }, 'Repéré comme'),
+        listeReperes);
+      const emplacementReperes = el('div', {});
+      let cleReperes = '';
 
       const radiosForme = Object.entries(LIBELLES_FORME).map(([valeur, libelle]) => choixRadio('ingredient-forme', valeur, el('span', {}, libelle), {
         surChoix: () => { touches.forme = valeur; },
@@ -523,6 +537,7 @@ export function creer(ctx) {
         el('summary', {}, 'Plus de précisions'),
         el('div', { class: 'depliable-contenu' },
           emplacementNature,
+          emplacementReperes,
           groupeForme,
           groupeRole,
           el('label', { class: 'etiquette-champ', for: 'ingredient-rayon' }, 'Rayon du magasin'),
@@ -561,6 +576,7 @@ export function creer(ctx) {
         uniteTouchee = false;
         if (typeof element.qte === 'number' && !champQte.value.trim()) champQte.value = qteSaisie(element.qte);
         Object.assign(touches, { nature: null, forme: null, role: null });
+        reperesTouches = null;
         rayonTouche = false;
         suggestionChoisie = true;
         masquerErreur('produit');
@@ -579,6 +595,45 @@ export function creer(ctx) {
         listeSuggestions.hidden = !proposees.length;
       }
 
+      /** Nature et repère que le nom d'un produit jamais vu laisse attendre (« bouillon de volaille »), ou null. */
+      function proposition(etat) {
+        return etat === 'inconnu' ? natureProposee(champProduit.value, catalogue) : null;
+      }
+
+      /** Repères affichés : ceux gardés après un « Retirer », sinon ceux du produit, sinon celui que son nom annonce. */
+      function reperesAffiches(etat, ref) {
+        if (reperesTouches) return reperesTouches;
+        if (ref) return reperesDe(ref);
+        const repere = proposition(etat)?.repere;
+        return repere ? [repere] : [];
+      }
+
+      /** Une ligne par libellé (« Gélatine animale » couvre les deux marqueurs de gélatine), avec « Retirer ». */
+      function dessinerReperes(reperes) {
+        const libelles = new Set(reperes.map((marqueur) => REPERES[marqueur]).filter(Boolean));
+        const cle = [...libelles].join('|');
+        if (cle !== cleReperes) {
+          cleReperes = cle;
+          listeReperes.replaceChildren(...[...libelles].map((libelle) => el('li', { class: 'ligne-repere' },
+            el('span', {}, libelle),
+            el('button', {
+              class: 'bouton bouton-texte',
+              type: 'button',
+              'aria-label': `Retirer «\u00A0${libelle}\u00A0»`,
+              onclick: () => {
+                // Repères affichés au moment du toucher : le même libellé peut couvrir un autre marqueur
+                // qu'au dessin (« gélatine » puis « gélatine végétale »), la liste n'étant pas redessinée.
+                const { etat, ref } = reference();
+                reperesTouches = reperesAffiches(etat, ref).filter((m) => REPERES[m] !== libelle);
+                majPrecisions();
+                annoncer(`«\u00A0${libelle}\u00A0» retiré.`);
+                (listeReperes.querySelector('button') ?? champProduit).focus();
+              },
+            }, 'Retirer'))));
+        }
+        blocReperes.hidden = !libelles.size;
+      }
+
       /** Met à jour suggestions, nature, coupe, rôle et rayon affichés selon le produit saisi et les choix faits. */
       function majPrecisions() {
         const { etat, ref } = reference();
@@ -590,7 +645,8 @@ export function creer(ctx) {
         // Nouvel ingrédient tapé en entier : il prend l'unité habituelle du produit connu ; « g » sinon.
         if (nouveau && !uniteTouchee) choixUnite.value = UNITES_EDITION.includes(ref?.unite) ? ref.unite : 'g';
 
-        const nature = touches.nature ?? ref?.nature ?? null;
+        // Produit jamais vu dont le nom parle de viande, de bouillon de viande… : sa nature arrive présélectionnée.
+        const nature = touches.nature ?? ref?.nature ?? proposition(etat)?.nature ?? null;
         for (const radio of radiosNature) radio.input.checked = radio.input.value === nature;
 
         // Produit jamais vu : la question de sa nature est posée en évidence (une fois pour toutes).
@@ -603,6 +659,9 @@ export function creer(ctx) {
           emplacementNature.append(groupeNature);
         }
         blocNouveau.hidden = !demander;
+        dessinerReperes(reperesAffiches(etat, ref));
+        const parentReperes = demander ? blocNouveau : emplacementReperes;
+        if (blocReperes.parentNode !== parentReperes) parentReperes.append(blocReperes);
 
         groupeForme.hidden = nature !== 'viande';
         groupeRole.hidden = nature !== 'legume';
@@ -643,7 +702,8 @@ export function creer(ctx) {
           && champQte.value === qteSaisie(existant.qte)
           && choixUnite.value === existant.unite
           && choixRayon.value === existant.rayon
-          && !rayonTouche && touches.nature === null && touches.forme === null && touches.role === null;
+          && !rayonTouche && touches.nature === null && touches.forme === null && touches.role === null
+          && reperesTouches === null;
         if (inchange) {
           fermer();
           return;
@@ -653,9 +713,10 @@ export function creer(ctx) {
           qte: champQte.value,
           unite: choixUnite.value,
           rayon: choixRayon.value,
-          nature: touches.nature ?? '',
+          nature: touches.nature ?? proposition(reference().etat)?.nature ?? '',
           forme: touches.forme ?? '',
           role: touches.role ?? '',
+          ...(reperesTouches ? { reperes: reperesTouches } : {}),
         }, { catalogue, ingredients: saisie.ingredients, index });
         if (resultat.erreurs) {
           montrerErreurs(resultat.erreurs);

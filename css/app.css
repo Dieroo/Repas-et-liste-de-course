@@ -2432,3 +2432,163 @@ select.champ {
 }
 
 .bouton[aria-busy="true"] { opacity: 0.75; cursor: progress; }
+
+/* ——— Ce que chacun mange (T2a) ——— */
+
+/* Ligne sous les notes d'un plat : un morceau par profil, toujours un texte (jamais la couleur seule). Contrastes
+   mesurés : olive sur surface 5,7:1 (clair) et 6,6:1 (sombre) ; texte sur accent doux 12:1 et 11:1 ; texte doux
+   sur surface 6,3:1 et 6,8:1. */
+.compat {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.compat-morceau { overflow-wrap: anywhere; }
+
+.compat-version { color: var(--olive); }
+
+.compat-exclu {
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: var(--accent-doux);
+  color: var(--texte);
+}
+
+.compat-discret {
+  color: var(--texte-doux);
+  font-weight: 400;
+}
+
+/* Fiche : section « Version pour <Prénom> ». */
+.section-version p { margin: 0; }
+
+.section-version .version-consigne { font-weight: 600; }
+
+.compat-texte.compat-exclu {
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.compat-douteux .lien-fiche { align-self: flex-start; }
+
+/* Bandeau sur plusieurs lignes (texte puis bouton ou lien). */
+.bandeau-colonne {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bandeau-colonne p { margin: 0; }
+
+/* Découvrir : « 🌿 Votre version : Part au thon ». */
+.decouverte-version {
+  margin: 0;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* Écran « Ce que <Prénom> mange » : cartes radio de 56 px, choix marqué par une bordure de 2 px et une coche. */
+.choix-cartes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choix-carte {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 8px 16px;
+  border: 2px solid var(--bordure-champ);
+  border-radius: 14px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.choix-carte input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choix-carte-emoji { flex: none; font-size: 1.5rem; line-height: 1; }
+
+.choix-carte-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.choix-carte-libelle { font-weight: 600; }
+
+.choix-carte-aide {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+.choix-carte-coche {
+  flex: none;
+  visibility: hidden;
+  color: var(--accent);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.choix-carte:has(input:checked) { border-color: var(--accent); }
+
+.choix-carte:has(input:checked) .choix-carte-coche { visibility: visible; }
+
+.choix-carte:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Une précision : toute la ligne se touche, 48 px au moins. */
+.case-precision {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+
+.case-precision input {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+
+.bilan-carte { gap: 8px; }
+
+.bilan-carte p { margin: 0; }
+
+.bilan-regime { font-weight: 600; }
+
+/* « Modifier » : repères d'un ingrédient (« Bouillon de viande »), chacun avec « Retirer ». */
+.bloc-reperes .etiquette-champ { margin-top: 12px; }
+
+.liste-reperes {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ligne-repere {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  font-weight: 600;
+}

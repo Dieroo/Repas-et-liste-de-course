@@ -287,6 +287,18 @@ export function enregistrerProfil(profil) {
   return lot.commit();
 }
 
+/**
+ * Règles d'un profil (liste entière, préparée par coeur/regles.js › ecrireRegime) : `update` du seul champ `regles`.
+ * Un profil supprimé entre-temps n'est jamais recréé à moitié (refus `not-found`). Hors ligne : part plus tard.
+ * → promesse de l'envoi.
+ */
+export function enregistrerRegles(profilId, regles) {
+  if (!Array.isArray(regles)) throw new Error('Règles refusées : une liste est attendue.');
+  const lot = writeBatch(db);
+  lot.update(doc(db, 'profils', profilId), { regles });
+  return lot.commit();
+}
+
 export function retirerProfil(profilId) {
   const lot = writeBatch(db);
   lot.delete(doc(db, 'profils', profilId));

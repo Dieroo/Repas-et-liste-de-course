@@ -13,6 +13,7 @@ import { nouveauPlatParNom } from './coeur/plats.js';
 import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from './coeur/profils.js';
 import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
+import { evaluer } from './coeur/compatibilite.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -35,6 +36,7 @@ import * as decouvrir from './ui/decouvrir.js';
 import * as reglages from './ui/reglages.js';
 import * as importRecettes from './ui/import.js';
 import * as restaurer from './ui/restaurer.js';
+import * as regime from './ui/regime.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
 
@@ -51,6 +53,7 @@ const ECRANS = {
   reglages: { titre: 'Réglages', module: reglages, onglet: null },
   import: { titre: 'Ajouter des recettes', module: importRecettes, onglet: 'plats' },
   restaurer: { titre: 'Restaurer une sauvegarde', module: restaurer, onglet: null },
+  regime: { titre: 'Ce que mange', module: regime, onglet: null, sansOnglets: true },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -247,8 +250,32 @@ function rendrePremiereOuverture() {
 function routeCourante() {
   const roleReel = roleDe(etat.utilisateur.email, etat.donnees.reglages);
   const role = roleEffectif(roleReel, etat.apercu);
-  const route = resoudreRoute(location.hash, role);
-  return { roleReel, role, route, parametre: parametreDe(location.hash, route) };
+  let route = resoudreRoute(location.hash, role);
+  let parametre = parametreDe(location.hash, route);
+  // « Ce que <Prénom> mange » d'un profil inconnu (retiré entre-temps) : retour aux Réglages, une fois les profils lus.
+  if (route === 'regime' && etat.profilsCharges && !etat.profils.some((profil) => profil.id === parametre)) {
+    route = 'reglages';
+    parametre = '';
+  }
+  return { roleReel, role, route, parametre };
+}
+
+// Compatibilité d'un plat pour un profil (coeur/compatibilite.js › evaluer), gardée tant que plats et profils sont
+// les mêmes objets : un instantané nouveau (règle, recette, profil changés) recalcule tout, partout (§7).
+let memoCompat = { plats: null, profils: null, resultats: new WeakMap() };
+
+function compat(plat, profil) {
+  if (!plat || typeof plat !== 'object' || !profil || typeof profil !== 'object') return evaluer(plat, profil);
+  if (memoCompat.plats !== etat.plats || memoCompat.profils !== etat.profils) {
+    memoCompat = { plats: etat.plats, profils: etat.profils, resultats: new WeakMap() };
+  }
+  let parProfil = memoCompat.resultats.get(plat);
+  if (!parProfil) {
+    parProfil = new WeakMap();
+    memoCompat.resultats.set(plat, parProfil);
+  }
+  if (!parProfil.has(profil)) parProfil.set(profil, evaluer(plat, profil));
+  return parProfil.get(profil);
 }
 
 /**
@@ -273,6 +300,7 @@ function contexteCourant() {
     demandesChargees: etat.demandesChargees,
     parametre,
     routePrecedente,
+    compat,
     actions,
   };
 }
@@ -317,6 +345,8 @@ function rendreApp() {
   const nomPlat = route === 'plat' || route === 'modifier' ? etat.plats.find((p) => p.id === parametre)?.nom : undefined;
   let titrePage = titre;
   if (nomPlat) titrePage = route === 'modifier' ? `${nomPlat} · Modifier` : nomPlat;
+  const nomProfil = route === 'regime' ? etat.profils.find((p) => p.id === parametre)?.nom : undefined;
+  if (nomProfil) titrePage = `Ce que ${nomProfil} mange`;
   monter(cle, () => (module.creer ? module.creer(ctx) : module.afficher(ctx)), {
     dansApp: true,
     sansOnglets,
@@ -359,6 +389,24 @@ const actions = {
   },
   retirerProfil(profilId) {
     ecrire(donnees.retirerProfil(profilId), 'Le profil n’a pas pu être retiré. Réessayez.');
+  },
+  /**
+   * « Ce que <Prénom> mange » : la liste entière des règles du profil (coeur/regles.js › ecrireRegime). Appliquée tout
+   * de suite sur ce téléphone, envoyée dès que possible (hors ligne : plus tard) ; l'envoi n'est jamais attendu. Un
+   * refus (profil retiré entre-temps sur l'autre appareil) est annoncé. → undefined.
+   */
+  enregistrerRegles(profilId, regles) {
+    const nom = etat.profils.find((profil) => profil.id === profilId)?.nom;
+    const echec = nom
+      ? `Ce que ${nom} mange n’a pas pu être enregistré. Réessayez.`
+      : 'Ce réglage n’a pas pu être enregistré. Réessayez.';
+    try {
+      ecrire(donnees.enregistrerRegles(profilId, regles), echec);
+    } catch {
+      annoncer(echec);
+      return;
+    }
+    etat.profils = etat.profils.map((profil) => (profil.id === profilId ? { ...profil, regles } : profil));
   },
   /** Recettes préparées par coeur/paquet.js › preparerImport. Affichées tout de suite, envoyées dès que possible. */
   importer({ ecritures, demandesAClore }) {

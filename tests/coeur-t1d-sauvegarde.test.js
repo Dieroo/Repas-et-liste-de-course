@@ -821,6 +821,7 @@ test('résumé : comptes exacts', () => {
     identiques: 1, // lasagnes, ⏳ des deux côtés
     ajoutesDepuis: 2,
     nonRemis: [],
+    reglesRemises: [], // T2a : aucun profil du fichier n'a de règles
   });
   assert.equal(r.recettesDifferentes.length, 1);
   assert.equal(r.rien, false);

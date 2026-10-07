@@ -8,6 +8,7 @@ import { normaliserEmail } from './roles.js';
 import { preparerProfil, trierProfils } from './profils.js';
 import { cheminNote, noteValide } from './notes.js';
 import { egalProfonde } from './edition.js';
+import { validerRegles } from './regles.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, recetteValidee, validerPaquet,
 } from './paquet.js';
@@ -24,8 +25,8 @@ const JOUR_MS = 86_400_000;
 const DEFAUTS_PLAT = { type: 'plat', recurrence: 'aucune', statutRecette: 'attente' };
 // Champs ajoutés à la recette dans le fichier.
 const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar'];
-// Champs d'un profil repris à la restauration (ceux qu'écrit coeur/profils.js › preparerProfil).
-const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion'];
+// Champs d'un profil repris à la restauration (ceux qu'écrit coeur/profils.js › preparerProfil, et ses règles, T2a).
+const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion', 'regles'];
 // Champs d'un profil jamais exportés (liste fermée ; vide en T1d).
 const EXCLUSIONS_PROFIL = [];
 // Clés de premier niveau comprises par la restauration.
@@ -295,12 +296,22 @@ function validerProfils(bruts, erreurs, avertissements) {
     if (Object.keys(brut).some((cle) => !CHAMPS_PROFIL.includes(cle))) {
       avertissements.push(`${guillemets(nom)}\u00A0: des informations non reconnues ont été ignorées.`);
     }
+    // Règles : absentes ≠ [] (« Mange de tout », choisi exprès) ; seulement si le fichier en porte une liste.
+    let regles;
+    if (Array.isArray(brut.regles)) {
+      const lues = validerRegles(brut.regles, { nom });
+      regles = lues.regles;
+      avertissements.push(...lues.avertissements);
+    } else if (brut.regles != null) {
+      avertissements.push(`${guillemets(nom)}\u00A0: ses règles sont abîmées dans ce fichier, elles ont été ignorées.`);
+    }
     profils.push({
       id,
       nom,
       ...(email !== undefined ? { email } : {}),
       ...(brut.ordre != null ? { ordre: brut.ordre } : {}),
       coefPortion,
+      ...(regles !== undefined ? { regles } : {}),
     });
   }
   return profils;
@@ -465,6 +476,7 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     identiques: 0,
     ajoutesDepuis: 0,
     nonRemis: [],
+    reglesRemises: [],
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -474,11 +486,22 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     for (const id of ids) if (!demandesAClore.includes(id)) demandesAClore.push(id);
   };
 
-  // Profils : un profil absent revient ; un profil présent n'est jamais modifié.
+  // Profils : un profil absent revient (avec ses règles) ; un profil présent n'est jamais modifié, sauf ses règles
+  // s'il n'en a jamais eu (champ absent : jamais réglé ; [] : « Mange de tout », choisi exprès, jamais remplacé).
   const idsProfilsApp = new Set(profilsApp.map((p) => p.id));
   const adressesPrises = new Set(profilsApp.map((p) => normaliserEmail(p.email)).filter(Boolean));
   for (const profil of profilsFichier) {
-    if (idsProfilsApp.has(profil.id)) continue;
+    if (idsProfilsApp.has(profil.id)) {
+      const present = profilsApp.find((p) => p.id === profil.id);
+      if (Array.isArray(profil.regles) && !Array.isArray(present.regles)) {
+        ecrituresProfils.push({
+          collection: 'profils', id: profil.id, mode: 'update', donnees: { regles: profil.regles },
+          condition: { reglesAbsentes: true },
+        });
+        resume.reglesRemises.push(reduire(present.nom) || profil.nom);
+      }
+      continue;
+    }
     const donnees = { ...profil };
     const adresse = normaliserEmail(donnees.email);
     if (adresse && adressesPrises.has(adresse)) {
@@ -660,7 +683,8 @@ function empreinteRecette(plat) {
  * - plat ou profil à remettre : seulement s'il manque encore ;
  * - note : seulement si le profil n'a toujours pas de note ;
  * - `derniereFois` : seulement si elle reste plus récente ;
- * - recette cochée : seulement si la fiche est encore celle de l'aperçu.
+ * - recette cochée : seulement si la fiche est encore celle de l'aperçu ;
+ * - règles d'un profil (`reglesAbsentes`) : seulement s'il n'en a toujours aucune (une liste, même vide, reste).
  * → l'écriture à faire (même forme, `clore` gardé seulement si la recette est écrite), ou null s'il ne reste rien.
  */
 export function appliquerConditions(ecriture, actuel) {
@@ -669,6 +693,7 @@ export function appliquerConditions(ecriture, actuel) {
   if (condition.absent) return existe ? null : ecriture;
   if (ecriture.mode !== 'update') return ecriture;
   if (!existe) return null; // plat supprimé entre-temps : jamais recréé à moitié
+  if (condition.reglesAbsentes && Array.isArray(actuel.regles)) return null;
   const donnees = { ...ecriture.donnees };
   let effacer = [...(ecriture.effacer ?? [])];
   let clore = ecriture.clore ?? [];

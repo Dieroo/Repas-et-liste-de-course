@@ -149,11 +149,15 @@ export function aDecouvrir(plat, profilId) {
   return !estNote(plat, profilId);
 }
 
-/** Plats à découvrir, chacun une seule fois. */
-function aMontrer(plats, profilId) {
+/**
+ * Plats à découvrir, chacun une seule fois. `garder(plat)` (facultatif) écarte en plus des plats : pour un profil
+ * contraint, ceux qui attendent encore leur version (T2a).
+ */
+function aMontrer(plats, profilId, garder) {
   const vus = new Set();
+  const garde = typeof garder === 'function' ? garder : () => true;
   return (Array.isArray(plats) ? plats : []).filter((plat) => {
-    if (!aDecouvrir(plat, profilId) || vus.has(plat.id)) return false;
+    if (!aDecouvrir(plat, profilId) || vus.has(plat.id) || !garde(plat)) return false;
     vus.add(plat.id);
     return true;
   });
@@ -163,11 +167,11 @@ function aMontrer(plats, profilId) {
  * Identifiants des plats à montrer dans Découvrir pour ce profil : par type (plat, dessert, apéro,
  * accompagnement), d'abord ceux qui ont une recette puis les ⏳ ; chaque groupe trié par identifiant puis mélangé
  * avec la graine. L'ordre du tableau reçu ne change donc rien. Graine de l'app : grainePour (même ordre toute la
- * journée).
+ * journée). `garder(plat)` (facultatif) écarte des plats de la file ; sans lui, l'ordre est celui de T1d.
  */
-export function fileDecouverte(plats, profilId, { graine = '' } = {}) {
+export function fileDecouverte(plats, profilId, { graine = '', garder = null } = {}) {
   const groupes = ORDRE_TYPES.flatMap(() => [[], []]);
-  for (const plat of aMontrer(plats, profilId)) {
+  for (const plat of aMontrer(plats, profilId, garder)) {
     const type = Math.max(0, ORDRE_TYPES.indexOf(typeDe(plat)));
     groupes[type * 2 + (statutDe(plat) === 'attente' ? 1 : 0)].push(plat.id);
   }
@@ -176,14 +180,16 @@ export function fileDecouverte(plats, profilId, { graine = '' } = {}) {
 
 /**
  * Index de la prochaine carte, à partir de `depuis` : le premier plat de la file qui existe encore et reste à
- * découvrir (un plat noté ailleurs ou supprimé est sauté) ; `file.length` en fin de file.
+ * découvrir (un plat noté ailleurs ou supprimé est sauté ; `garder`, facultatif : même filtre que fileDecouverte) ;
+ * `file.length` en fin de file.
  */
-export function suivant(file, depuis, plats, profilId) {
+export function suivant(file, depuis, plats, profilId, { garder = null } = {}) {
   const liste = Array.isArray(file) ? file : [];
+  const garde = typeof garder === 'function' ? garder : () => true;
   const parIdentifiant = new Map((Array.isArray(plats) ? plats : []).filter(estObjet).map((p) => [p.id, p]));
   for (let i = Number.isInteger(depuis) && depuis > 0 ? depuis : 0; i < liste.length; i += 1) {
     const plat = parIdentifiant.get(liste[i]);
-    if (plat && aDecouvrir(plat, profilId)) return i;
+    if (plat && aDecouvrir(plat, profilId) && garde(plat)) return i;
   }
   return liste.length;
 }
@@ -191,17 +197,18 @@ export function suivant(file, depuis, plats, profilId) {
 /**
  * Nouvelle file : la file, plus, à la fin, chaque plat à découvrir qui n'est ni la carte affichée (`file[position]`)
  * ni déjà devant, dans l'ordre de fileDecouverte. Un plat nouveau, ou dont la note a été effacée, revient ainsi à
- * la fin, une seule fois.
+ * la fin, une seule fois. `garder` : même filtre que fileDecouverte (un plat qui reçoit sa version entre ainsi à
+ * la fin de la file).
  */
-export function completerFile(file, position, plats, profilId, { graine = '' } = {}) {
+export function completerFile(file, position, plats, profilId, { graine = '', garder = null } = {}) {
   const liste = Array.isArray(file) ? file : [];
   const devant = new Set(liste.slice(Number.isInteger(position) && position > 0 ? position : 0));
-  return [...liste, ...fileDecouverte(plats, profilId, { graine }).filter((id) => !devant.has(id))];
+  return [...liste, ...fileDecouverte(plats, profilId, { graine, garder }).filter((id) => !devant.has(id))];
 }
 
-/** Nombre de plats que ce profil n'a pas encore notés (préparations et plats sans nom exclus). */
-export function nombreANoter(plats, profilId) {
-  return aMontrer(plats, profilId).length;
+/** Nombre de plats que ce profil n'a pas encore notés (préparations, plats sans nom et plats écartés par `garder` exclus). */
+export function nombreANoter(plats, profilId, { garder = null } = {}) {
+  return aMontrer(plats, profilId, garder).length;
 }
 
 /** Bilan de la visite, pour l'écran de fin. `gestes` : [{ note }] (0, 3 ou 5). → { adore, pourquoiPas, jamais } */

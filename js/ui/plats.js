@@ -2,7 +2,9 @@
 import { el, etatVide, pastille } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { modeDeCuisson } from './pictos.js';
-import { FILTRES, LIBELLES_TYPE, STATUTS, NOM_MAX, filtrerPlats, visuelDuPlat, statutDe, typeDe } from '../coeur/plats.js';
+import { LIBELLES_TYPE, STATUTS, NOM_MAX, filtresPour, filtreRetenu, filtrerPlats, visuelDuPlat, statutDe, typeDe } from '../coeur/plats.js';
+import { profilsContraints } from '../coeur/compatibilite.js';
+import { ligneCompat, garderPour, nomDe } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
@@ -37,7 +39,7 @@ function ligneDeNotes(plat, profils) {
     el('span', { class: 'visuellement-masque' }, resume.accessible));
 }
 
-function carteDuPlat(plat, profils) {
+function carteDuPlat(plat, ctx) {
   const statut = statutDe(plat) !== 'validee' ? STATUTS[statutDe(plat)] : null;
   // « Plat · [pictogramme] Four · 📝 Recette à vérifier » : type, mode de cuisson principal, statut.
   const morceaux = [
@@ -52,11 +54,25 @@ function carteDuPlat(plat, profils) {
       el('span', { class: 'carte-plat-texte' },
         el('span', { class: 'carte-plat-nom' }, plat.nom),
         el('span', { class: 'carte-plat-detail' }, detail),
-        ligneDeNotes(plat, profils),
+        ligneDeNotes(plat, ctx.profils),
+        ligneCompat(plat, ctx),
       ),
       el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'),
     ),
   );
+}
+
+/** Filtre « Pour <Prénom> » ou « Versions à créer » sans aucun plat. */
+function etatVideCompat(choisi, moi) {
+  if (choisi.profils) {
+    const noms = choisi.profils.map(nomDe);
+    const pour = noms.length === 1 ? noms[0] : noms.length > 1 ? `${noms.slice(0, -1).join(', ')} et ${noms.at(-1)}` : '';
+    return el('div', { class: 'carte etat-vide compact' },
+      el('p', {}, pour ? `Tous les plats ont une version pour ${pour}\u00A0` : 'Tous les plats ont leur version\u00A0',
+        el('span', { 'aria-hidden': 'true' }, '🎉')));
+  }
+  return el('div', { class: 'carte etat-vide compact' },
+    el('p', {}, moi && moi.id === choisi.profil.id ? 'Aucun plat pour vous ici.' : `Aucun plat pour ${nomDe(choisi.profil)} ici.`));
 }
 
 function ouvrirAjout(ctx) {
@@ -122,16 +138,46 @@ export function creer(ctx) {
     el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/decouvrir' },
       el('span', { 'aria-hidden': 'true' }, '❤️'), 'Découvrir'));
 
-  const boutonsFiltre = FILTRES.map((f) => el('button', {
-    class: 'puce',
-    type: 'button',
-    'aria-pressed': String(f.id === filtre),
-    onclick: () => {
-      filtre = f.id;
-      for (const [i, bouton] of boutonsFiltre.entries()) bouton.setAttribute('aria-pressed', String(FILTRES[i].id === filtre));
-      remplir();
-    },
-  }, f.libelle));
+  // Filtres : les cinq de toujours, puis « 🌿 Pour <Prénom> » par profil qui a des règles et, pour le gestionnaire,
+  // « ❌ Versions à créer ». Reconstruits seulement quand leur liste change (le focus reste sur la puce touchée).
+  const groupeFiltres = el('div', { class: 'puces', role: 'group', 'aria-label': 'Afficher' });
+  let filtres = [];
+  let cleFiltres = '';
+  let boutonsFiltre = [];
+
+  function filtresCourants() {
+    return filtresPour(profilsContraints(courant.profils), { moi: courant.moi, role: courant.role });
+  }
+
+  function marquerFiltre() {
+    const actif = filtreRetenu(filtres, filtre).id;
+    for (const [i, bouton] of boutonsFiltre.entries()) bouton.setAttribute('aria-pressed', String(filtres[i].id === actif));
+  }
+
+  function majFiltres() {
+    filtres = filtresCourants();
+    const cle = filtres.map((f) => `${f.id}:${f.libelle}`).join('|');
+    if (cle !== cleFiltres) {
+      const focusId = groupeFiltres.contains(document.activeElement) ? document.activeElement.dataset.filtre : null;
+      cleFiltres = cle;
+      boutonsFiltre = filtres.map((f) => el('button', {
+        class: 'puce',
+        type: 'button',
+        'data-filtre': f.id,
+        onclick: () => {
+          filtre = f.id;
+          marquerFiltre();
+          remplir();
+        },
+      }, f.libelle));
+      groupeFiltres.replaceChildren(...boutonsFiltre);
+      if (focusId) groupeFiltres.querySelector(`[data-filtre="${CSS.escape(focusId)}"]`)?.focus();
+    }
+    // Filtre mémorisé disparu (profil retiré, règles effacées, aperçu « Repas et courses ») : retour à « Tous ». Pas
+    // avant la lecture des profils : un filtre « Pour <Prénom> » n'existe qu'une fois ses règles connues.
+    if (courant.profilsCharges) filtre = filtreRetenu(filtres, filtre).id;
+    marquerFiltre();
+  }
 
   const champRecherche = el('input', {
     class: 'champ champ-recherche',
@@ -155,7 +201,7 @@ export function creer(ctx) {
     recherche = '';
     filtre = 'tous';
     champRecherche.value = '';
-    for (const [i, bouton] of boutonsFiltre.entries()) bouton.setAttribute('aria-pressed', String(FILTRES[i].id === filtre));
+    marquerFiltre();
     remplir();
     champRecherche.focus();
   }
@@ -163,8 +209,9 @@ export function creer(ctx) {
   function remplir() {
     // Pas d'ajout avant le chargement : sans la liste, un doublon ne serait pas repéré.
     boutonAjouter.disabled = !courant.platsCharges;
+    majFiltres();
     const moi = courant.moi;
-    invitation.hidden = !(courant.platsCharges && moi && nombreANoter(courant.plats, moi.id) > 0
+    invitation.hidden = !(courant.platsCharges && moi && nombreANoter(courant.plats, moi.id, { garder: garderPour(courant, moi.id) }) > 0
       && !courant.plats.some((plat) => estNote(plat, moi.id)));
     if (!courant.platsCharges) {
       compteur.textContent = '';
@@ -173,7 +220,8 @@ export function creer(ctx) {
       return;
     }
     const tous = courant.plats;
-    const resultat = filtrerPlats(tous, { recherche, filtre });
+    const choisi = filtreRetenu(filtres, filtre);
+    const resultat = filtrerPlats(tous, { recherche, filtre: choisi, evaluer: courant.compat });
     const pluriel = (n) => `${n}\u00A0plat${n > 1 ? 's' : ''}`;
     compteur.textContent = !tous.length ? ''
       : resultat.length === tous.length ? pluriel(tous.length)
@@ -185,6 +233,8 @@ export function creer(ctx) {
         titre: 'Aucun plat pour l’instant',
         texte: 'Ajoutez un plat par son nom\u00A0: la recette suivra.',
       }));
+    } else if (!resultat.length && !recherche.trim() && (choisi.profil || choisi.profils)) {
+      zoneMessage.replaceChildren(etatVideCompat(choisi, courant.moi));
     } else if (!resultat.length) {
       zoneMessage.replaceChildren(el('div', { class: 'carte etat-vide compact' },
         el('p', {}, 'Aucun plat ne correspond.'),
@@ -195,7 +245,7 @@ export function creer(ctx) {
     }
     // Une carte qui avait le focus le retrouve après la mise à jour.
     const cleFocus = liste.contains(document.activeElement) ? document.activeElement.dataset.cle : null;
-    liste.replaceChildren(...resultat.map((plat) => carteDuPlat(plat, courant.profils)));
+    liste.replaceChildren(...resultat.map((plat) => carteDuPlat(plat, courant)));
     if (cleFocus) liste.querySelector(`[data-cle="${CSS.escape(cleFocus)}"]`)?.focus();
   }
 
@@ -215,7 +265,7 @@ export function creer(ctx) {
       ctx.role === 'gestionnaire'
         ? el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/import' }, '📋 Ajouter des recettes')
         : null,
-      el('div', { class: 'puces', role: 'group', 'aria-label': 'Afficher' }, boutonsFiltre),
+      groupeFiltres,
       invitation,
       zoneMessage,
       liste,

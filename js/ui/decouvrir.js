@@ -5,6 +5,7 @@ import { el, etatVide, pastille, annoncer } from './dom.js';
 import { vignetteDuPlat } from './plats.js';
 import { modeDeCuisson } from './pictos.js';
 import { carteQuiEtesVous } from './relier.js';
+import { garderPour } from './compat.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, visuelDuPlat } from '../coeur/plats.js';
 import {
   GESTES,
@@ -111,8 +112,12 @@ export function creer(ctx) {
   const titre = el('h2', { class: 'decouverte-nom', id: 'decouverte-nom', tabindex: '-1' });
   const detail = el('p', { class: 'decouverte-detail' });
   const ingredients = el('p', { class: 'decouverte-ingredients' });
+  // « 🌿 Votre version : Part au thon » : le plat se mange grâce à la version de la fiche pour ce profil.
+  const texteVersion = el('span', {});
+  const version = el('p', { class: 'decouverte-version compat-version', hidden: true },
+    el('span', { 'aria-hidden': 'true' }, '🌿\u00A0'), texteVersion);
   const carte = el('article', { class: 'carte-decouverte', 'aria-labelledby': titre.id },
-    visuel, ruban, titre, detail, ingredients);
+    visuel, ruban, titre, detail, ingredients, version);
   // La scène coupe ce qui dépasse sur les côtés : la carte qui sort ne crée jamais de défilement horizontal.
   const scene = el('div', { class: 'scene-decouverte', hidden: true }, carte);
   const zoneEtat = el('div', { class: 'zone-etat', hidden: true });
@@ -271,16 +276,19 @@ export function creer(ctx) {
    */
   function preparerFile(profilId) {
     const graine = grainePour(profilId);
+    // Profil qui a des règles : les plats qui attendent encore sa version restent hors de la file ; ils y entrent
+    // quand leur version arrive.
+    const garder = garderPour(courant, profilId);
     let entree = memoire.files.get(profilId);
     if (!entree) {
-      entree = { file: fileDecouverte(courant.plats, profilId, { graine }), position: 0 };
-      entree.position = suivant(entree.file, 0, courant.plats, profilId);
+      entree = { file: fileDecouverte(courant.plats, profilId, { graine, garder }), position: 0 };
+      entree.position = suivant(entree.file, 0, courant.plats, profilId, { garder });
       memoire.files.set(profilId, entree);
       return { entree, noteAilleurs: false };
     }
     const montre = entree.file[entree.position];
-    entree.file = completerFile(entree.file, entree.position, courant.plats, profilId, { graine });
-    entree.position = suivant(entree.file, entree.position, courant.plats, profilId);
+    entree.file = completerFile(entree.file, entree.position, courant.plats, profilId, { graine, garder });
+    entree.position = suivant(entree.file, entree.position, courant.plats, profilId, { garder });
     const plat = trouver(montre);
     const noteAilleurs = !enSortie && montre !== undefined && montre === afficheId
       && entree.file[entree.position] !== montre && Boolean(plat) && estNote(plat, profilId);
@@ -325,6 +333,13 @@ export function creer(ctx) {
     detail.replaceChildren(...morceaux.flatMap((morceau, i) => (i ? [' · ', morceau] : [morceau])));
     ingredients.textContent = texteIngredients(plat);
     ingredients.hidden = !ingredients.textContent;
+    const variante = courant.compat?.(plat, profil)?.variante;
+    const consigne = typeof variante?.consigne === 'string' ? variante.consigne.trim() : '';
+    const texte = variante
+      ? `${estMoi ? 'Votre version' : `Version pour ${profil.nom}`}${consigne ? `\u00A0: ${consigne}` : ''}`
+      : '';
+    if (texteVersion.textContent !== texte) texteVersion.textContent = texte;
+    version.hidden = !texte;
     ruban.textContent = `Pour ${profil.nom}`;
     ruban.hidden = estMoi;
     // TalkBack : « J’adore, bouton, Gratin de pâtes au jambon, pour Enfant ».
@@ -365,7 +380,7 @@ export function creer(ctx) {
     vibrer(geste.note);
     lancerSortie(geste.sortie);
     ecrire(trace.platId, trace.profilId, geste.note, (code) => echecDuGeste(code, trace));
-    const prochain = trouver(entree.file[suivant(entree.file, entree.position, courant.plats, profil.id)]);
+    const prochain = trouver(entree.file[suivant(entree.file, entree.position, courant.plats, profil.id, { garder: garderPour(courant, profil.id) })]);
     dire(texteDuGeste(trace, prochain));
     afficher();
   }
@@ -488,15 +503,32 @@ export function creer(ctx) {
       if (focusIci) radios.find((radio) => radio.id === profilChoisi)?.input.focus();
     }
     for (const radio of radios) {
-      const reste = nombreANoter(courant.plats, radio.id);
+      const reste = nombreANoter(courant.plats, radio.id, { garder: garderPour(courant, radio.id) });
       radio.input.checked = radio.id === profilChoisi;
-      radio.compte.textContent = reste ? `${reste}\u00A0à noter` : 'tout est noté';
+      // Plats qui attendent leur version : pas encore notés, ils arriveront plus tard.
+      const plusTard = !reste && enAttente(radio.id) > 0;
+      radio.compte.textContent = reste ? `${reste}\u00A0à noter` : plusTard ? 'plus rien pour l’instant' : 'tout est noté';
       // TalkBack : « Adulte A, 12 plats à noter ».
       let combien = 'aucun plat';
       if (reste === 1) combien = '1\u00A0plat';
       else if (reste > 1) combien = `${reste}\u00A0plats`;
-      radio.masque.textContent = `${radio.nom}, ${combien} à noter`;
+      radio.masque.textContent = `${radio.nom}, ${combien} à noter${plusTard ? ' pour l’instant' : ''}`;
     }
+  }
+
+  /** Plats pas encore notés par ce profil mais écartés de sa file : ils attendent sa version. */
+  function enAttente(profilId) {
+    const tous = nombreANoter(courant.plats, profilId);
+    return Math.max(0, tous - nombreANoter(courant.plats, profilId, { garder: garderPour(courant, profilId) }));
+  }
+
+  /** « 2 plats attendent votre version : ils arriveront ici dès qu'elle existera. » ; '' s'il n'y en a pas. */
+  function phraseAttente(attente, { profil, estMoi }) {
+    if (!attente) return '';
+    const version = estMoi ? 'votre version' : `la version de ${profil.nom}`;
+    return attente > 1
+      ? `${attente}\u00A0plats attendent ${version}\u00A0: ils arriveront ici dès qu’elle existera.`
+      : `1\u00A0plat attend ${version}\u00A0: il arrivera ici dès qu’elle existera.`;
   }
 
   function majCompteur(reste) {
@@ -552,9 +584,10 @@ export function creer(ctx) {
   function etatDeFin(choisi, notables) {
     const { profil, estMoi } = choisi;
     const gestes = visite.filter((trace) => trace.profilId === profil.id);
+    const attente = phraseAttente(enAttente(profil.id), choisi);
     const autres = notables
       .filter((notable) => notable.profil.id !== profil.id)
-      .map((notable) => ({ ...notable, reste: nombreANoter(courant.plats, notable.profil.id) }))
+      .map((notable) => ({ ...notable, reste: nombreANoter(courant.plats, notable.profil.id, { garder: garderPour(courant, notable.profil.id) }) }))
       .filter((notable) => notable.reste > 0);
     // Les nombres restent hors de la clé : ils changent en place, sans reconstruire l'écran (le focus reste).
     const cleAutres = autres.map((a) => `${a.profil.id}:${a.profil.nom}:${a.estMoi}`).join(',');
@@ -585,19 +618,26 @@ export function creer(ctx) {
 
     if (!gestes.length) {
       return {
-        cle: `tous|${profil.id}|${profil.nom}|${estMoi}|${cleAutres}`,
+        cle: `tous|${profil.id}|${profil.nom}|${estMoi}|${attente}|${cleAutres}`,
         maj,
-        construire: () => focalisable(etatVide({
-          emoji: '👍',
-          teinte: 'olive',
-          titre: estMoi ? 'Tous les plats sont notés' : `Tous les plats sont notés pour ${profil.nom}`,
-          texte: 'Les nouveaux plats apparaîtront ici dès leur ajout. Vos notes se changent sur chaque fiche.',
-        }, ...boutonsAutres(), voirPlats())),
+        construire: () => focalisable(etatVide(attente
+          ? {
+            emoji: '👍',
+            teinte: 'olive',
+            titre: estMoi ? 'Plus rien à noter pour l’instant' : `Plus rien à noter pour ${profil.nom} pour l’instant`,
+            texte: `${attente} Vos notes se changent sur chaque fiche.`,
+          }
+          : {
+            emoji: '👍',
+            teinte: 'olive',
+            titre: estMoi ? 'Tous les plats sont notés' : `Tous les plats sont notés pour ${profil.nom}`,
+            texte: 'Les nouveaux plats apparaîtront ici dès leur ajout. Vos notes se changent sur chaque fiche.',
+          }, ...boutonsAutres(), voirPlats())),
       };
     }
 
     return {
-      cle: `fin|${profil.id}|${profil.nom}|${estMoi}|${gestes.map((g) => `${g.platId}:${g.apres}:${g.nom}`).join(',')}|${cleAutres}`,
+      cle: `fin|${profil.id}|${profil.nom}|${estMoi}|${gestes.map((g) => `${g.platId}:${g.apres}:${g.nom}`).join(',')}|${attente}|${cleAutres}`,
       maj,
       construire: () => {
         const { adore, pourquoiPas, jamais } = bilan(gestes.map((trace) => ({ note: trace.apres })));
@@ -611,6 +651,7 @@ export function creer(ctx) {
           el('p', {},
             el('span', { 'aria-hidden': 'true' }, `${debut}${parts.map(([nombre, emoji]) => `${nombre}\u00A0${emoji}`).join(', ')}.`),
             el('span', { class: 'visuellement-masque' }, `${debut}${parts.map(([nombre, , mot]) => `${nombre} ${mot}`).join(', ')}.`)),
+          attente ? el('p', { class: 'texte-doux' }, attente) : null,
           el('section', { class: 'visite' },
             el('h3', {}, 'Pendant cette visite'),
             el('ul', { class: 'liste-visite' }, gestes.map((trace) => el('li', {},
@@ -717,7 +758,7 @@ export function creer(ctx) {
       }
     }
 
-    majCompteur(choisi ? nombreANoter(courant.plats, choisi.profil.id) : 0);
+    majCompteur(choisi ? nombreANoter(courant.plats, choisi.profil.id, { garder: garderPour(courant, choisi.profil.id) }) : 0);
     aide.hidden = !carteVisible;
 
     // « Qui êtes-vous ? » en tête d'écran tant que la personne n'est pas reconnue et ne note pas pour l'enfant.

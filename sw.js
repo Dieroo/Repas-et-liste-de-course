@@ -9,7 +9,7 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = '5900339875b1';
+const VERSION = '1b7183c775b9';
 const VERSION_SDK = '12.19.0';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
@@ -24,6 +24,7 @@ const FICHIERS_APP = [
   './js/donnees.js',
   './js/coeur/roles.js',
   './js/coeur/slug.js',
+  './js/coeur/vocabulaire.js',
   './js/coeur/plats.js',
   './js/coeur/profils.js',
   './js/coeur/photo.js',
@@ -31,6 +32,8 @@ const FICHIERS_APP = [
   './js/coeur/edition.js',
   './js/coeur/notes.js',
   './js/coeur/sauvegarde.js',
+  './js/coeur/compatibilite.js',
+  './js/coeur/regles.js',
   './js/ui/dom.js',
   './js/ui/feuille.js',
   './js/ui/fichier.js',
@@ -38,6 +41,7 @@ const FICHIERS_APP = [
   './js/ui/photo.js',
   './js/ui/presse-papiers.js',
   './js/ui/pictos.js',
+  './js/ui/compat.js',
   './js/ui/connexion.js',
   './js/ui/relier.js',
   './js/ui/profil.js',
@@ -51,6 +55,7 @@ const FICHIERS_APP = [
   './js/ui/reglages.js',
   './js/ui/import.js',
   './js/ui/restaurer.js',
+  './js/ui/regime.js',
   './icons/icone.svg',
   './icons/icone-192.png',
   './icons/icone-512.png',

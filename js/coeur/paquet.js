@@ -2,8 +2,12 @@
 // la valider, préparer les écritures. Logique pure : ni DOM ni Firebase.
 // Chaque erreur porte deux textes : `message` (affiché, en français courant) et `pourClaude` (codes exacts,
 // recopiés dans le texte de correction à recoller dans le Projet Claude).
-import { slug, sansAccents } from './slug.js';
+import { slug } from './slug.js';
 import { NOM_MAX, statutDe } from './plats.js';
+import { VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient } from './vocabulaire.js';
+
+// Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
+export { VOCABULAIRES, SOUS_TYPES_VIANDE, VIANDES, IMPLICATIONS, code, validerIngredient } from './vocabulaire.js';
 
 export const FORMAT = 'paquet@1';
 export const TEXTE_MAX = 500_000;
@@ -11,21 +15,6 @@ export const PLATS_MAX = 400;
 
 const ID = /^[a-z0-9-]+$/;
 
-export const VOCABULAIRES = {
-  type: ['plat', 'dessert', 'accompagnement', 'preparation', 'apero'],
-  recurrence: ['aucune', 'hebdo'],
-  statutRecette: ['attente', 'brouillon', 'validee'],
-  unite: ['g', 'kg', 'ml', 'cl', 'l', 'pc', 'cs', 'cc', 'pincee', 'botte', 'sachet', 'boite', 'tranche'],
-  rayon: ['fruits_legumes', 'boucherie', 'charcuterie', 'poissonnerie', 'cremerie', 'fromages', 'epicerie_salee',
-    'epicerie_sucree', 'boulangerie', 'surgeles', 'boissons', 'hygiene', 'entretien', 'divers'],
-  marqueurs: ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie', 'poisson', 'fruits_de_mer',
-    'bouillon_viande', 'gelatine_porc', 'oeuf', 'oeuf_cru', 'laitier', 'alcool_cru', 'cafe', 'legume', 'feculent'],
-  appareil: ['plaque', 'four', 'cookeo', 'airfryer', 'monsieur_cuisine'],
-  forme: ['hachee', 'fine', 'morceaux', 'effilochable'],
-  role: ['principal', 'incorpore'],
-};
-
-const VIANDES = ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie'];
 const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
 
 export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
@@ -33,7 +22,6 @@ export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 
 // Champs de la fiche connus mais jamais repris par l'ajout de recettes (notes, dernier passage, marque « modifiée à
 // la main ») : ils voyagent dans une sauvegarde, que seule la restauration reprend.
 const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar'];
-const CHAMPS_INGREDIENT = ['produit', 'qte', 'qtePortion', 'unite', 'rayon', 'marqueurs', 'forme', 'role'];
 const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
 const CHAMPS_VARIANTE = ['pour', 'retirer', 'ajouter', 'consigne'];
@@ -119,20 +107,6 @@ export function extrairePaquet(texte, { max = TEXTE_MAX } = {}) {
 
 // ——— Valeurs tolérées ———
 
-/** Valeur comparable aux vocabulaires fermés : « Incorporé » → incorpore, « fruits & légumes » → fruits_legumes. */
-export function code(valeur) {
-  if (typeof valeur !== 'string') return '';
-  return sansAccents(valeur).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-}
-
-/** Nombre, y compris écrit en texte (« 450 », « 0,5 ») ; NaN sinon. */
-function nombre(valeur) {
-  if (typeof valeur === 'number') return Number.isFinite(valeur) ? valeur : NaN;
-  if (typeof valeur !== 'string') return NaN;
-  const propre = valeur.trim().replace(/\s/g, '').replace(',', '.');
-  return /^-?\d+(\.\d+)?$/.test(propre) ? Number(propre) : NaN;
-}
-
 function booleen(valeur) {
   if (typeof valeur === 'boolean') return valeur;
   const c = code(valeur);
@@ -141,103 +115,7 @@ function booleen(valeur) {
   return null;
 }
 
-function texte(valeur) {
-  return typeof valeur === 'string' ? valeur.replace(/\s+/g, ' ').trim() : '';
-}
-
-const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
-
-const liste = (valeurs) => valeurs.map((v) => `\`${v}\``).join(', ');
-
 // ——— Validation ———
-
-/** Ingrédient d'une recette (`qte`) ou d'une variante (`qtePortion`). → { ingredient } ou erreurs ajoutées. */
-function validerIngredient(brut, { position, champQte, signaler, inconnu }) {
-  const nomProduit = texte(brut?.produit).toLocaleLowerCase('fr-FR');
-  const affiche = nomProduit ? `${position.affiche} (${nomProduit})` : position.affiche;
-  const claude = nomProduit ? `${position.claude} « ${nomProduit} »` : position.claude;
-  const erreur = (message, pourClaude) => signaler(`${affiche}\u00A0: ${message}`, `${claude} : ${pourClaude}`);
-
-  if (!estObjet(brut)) {
-    erreur('illisible.', 'objet attendu');
-    return null;
-  }
-  const ingredient = {};
-  let valide = true;
-  const refuser = (message, pourClaude) => {
-    valide = false;
-    erreur(message, pourClaude);
-  };
-
-  if (!nomProduit) refuser('nom de l’ingrédient manquant.', 'produit manquant');
-  else ingredient.produit = nomProduit;
-
-  if (champQte === 'qtePortion' && brut.qtePortion == null && brut.qte != null) {
-    refuser('quantité par portion attendue.', '`qtePortion` attendu (quantité par portion) au lieu de `qte`');
-  } else {
-    const quantite = nombre(brut[champQte]);
-    if (!(quantite > 0)) refuser('quantité manquante ou invalide.', `\`${champQte}\` : nombre supérieur à 0`);
-    else ingredient[champQte] = quantite;
-  }
-
-  const unite = code(brut.unite);
-  if (!VOCABULAIRES.unite.includes(unite)) {
-    refuser(brut.unite == null ? 'unité manquante.' : `unité «\u00A0${texte(String(brut.unite))}\u00A0» inconnue.`,
-      `unite : ${liste(VOCABULAIRES.unite)}`);
-  } else {
-    ingredient.unite = unite;
-  }
-
-  const rayon = code(brut.rayon);
-  if (!VOCABULAIRES.rayon.includes(rayon)) {
-    refuser(brut.rayon == null ? 'rayon manquant.' : `rayon «\u00A0${texte(String(brut.rayon))}\u00A0» inconnu.`,
-      `rayon : ${liste(VOCABULAIRES.rayon)}`);
-  } else {
-    ingredient.rayon = rayon;
-  }
-
-  const marqueurs = [];
-  if (brut.marqueurs != null && !Array.isArray(brut.marqueurs)) {
-    refuser('marqueurs illisibles.', 'marqueurs : liste attendue');
-  } else {
-    for (const brutMarqueur of brut.marqueurs ?? []) {
-      const marqueur = code(brutMarqueur);
-      if (!VOCABULAIRES.marqueurs.includes(marqueur)) {
-        refuser(`marqueur «\u00A0${texte(String(brutMarqueur))}\u00A0» inconnu.`, `marqueurs : ${liste(VOCABULAIRES.marqueurs)}`);
-      } else if (!marqueurs.includes(marqueur)) {
-        marqueurs.push(marqueur);
-      }
-    }
-  }
-  ingredient.marqueurs = marqueurs;
-
-  const forme = code(brut.forme);
-  if (marqueurs.some((m) => VIANDES.includes(m))) {
-    if (!VOCABULAIRES.forme.includes(forme)) {
-      refuser('précisez la forme de la viande (hachée, fine, morceaux ou effilochable).',
-        `forme manquante ou inconnue pour une viande : ${liste(VOCABULAIRES.forme)}`);
-    } else {
-      ingredient.forme = forme;
-    }
-  } else if (VOCABULAIRES.forme.includes(forme)) {
-    ingredient.forme = forme;
-  }
-
-  const role = code(brut.role);
-  if (marqueurs.includes('legume')) {
-    if (!VOCABULAIRES.role.includes(role)) {
-      refuser('précisez si ce légume est principal ou incorporé.',
-        `role manquant ou inconnu pour un légume : ${liste(VOCABULAIRES.role)}`);
-    } else {
-      ingredient.role = role;
-    }
-  } else if (VOCABULAIRES.role.includes(role)) {
-    ingredient.role = role;
-  }
-
-  if (Object.keys(brut).some((cle) => !CHAMPS_INGREDIENT.includes(cle))) inconnu();
-  return valide ? ingredient : null;
-}
 
 /** Une recette du collage. → { index, id, nom, donnees (null si erreur), erreurs, avertissements } */
 function validerPlat(brut, index, idsProfils) {
