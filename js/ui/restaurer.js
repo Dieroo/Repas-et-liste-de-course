@@ -387,6 +387,8 @@ export function creer(ctx) {
       resume.datesRemises
         ? `🗓️ ${pluriel(resume.datesRemises, 'date de dernier passage au menu remise', 'dates de dernier passage au menu remises')}`
         : null,
+      // Règles revenues sur un profil présent qui n'en avait jamais eu (coeur/sauvegarde.js : liste des prénoms).
+      ...(resume.reglesRemises ?? []).map((nom) => `🍽️ Ce que ${nom} mange revient.`),
     ].filter(Boolean);
 
     // Ce qui ne change pas

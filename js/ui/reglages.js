@@ -3,6 +3,7 @@ import { el, enteteVue, etatVide, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
 import { dateDeSauvegarde, joursDepuis } from '../coeur/sauvegarde.js';
+import { REGIMES, lireRegime } from '../coeur/regles.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -24,6 +25,18 @@ function texteEtatSauvegarde(valeur) {
     return `⚠️ Dernière sauvegarde il y a ${jours}\u00A0jours\u00A0: pensez à en faire une.`;
   }
   return `Dernière sauvegarde\u00A0: ${leJour(derniere)}.`;
+}
+
+/** Régime du profil lu dans ses règles (« Mange de tout » si rien n'est réglé). */
+function regimeDe(profil) {
+  return REGIMES[lireRegime(profil?.regles).regime] ?? REGIMES.tout;
+}
+
+/** Mention du régime sur la carte du profil : rien pour « Mange de tout » (un profil sans règle n'affiche rien). */
+function mentionRegime(profil) {
+  const { regime } = lireRegime(profil?.regles);
+  if (regime === 'tout' || !REGIMES[regime]) return null;
+  return `${REGIMES[regime].emoji} ${REGIMES[regime].libelle}`;
 }
 
 /** `lireCtx()` donne l'état à jour au moment d'enregistrer (les profils ont pu changer entre-temps). */
@@ -54,6 +67,18 @@ function ouvrirFicheProfil(lireCtx, existant) {
       }),
       el('span', {}, p.libelle),
     ));
+
+    // « Ce que <Prénom> mange » : écran à part (les changements de la feuille non enregistrés y sont abandonnés).
+    const ligneRegime = existant
+      ? el('button', {
+        class: 'bouton bouton-secondaire bouton-plein ligne-regime',
+        type: 'button',
+        onclick: () => {
+          fermer();
+          location.hash = `#/regime/${encodeURIComponent(existant.id)}`;
+        },
+      }, `🍽️ Ce que ${nomAffiche} mange\u00A0: ${regimeDe(existant).libelle} ›`)
+      : null;
 
     const boutonRetrait = existant
       ? el('button', {
@@ -107,6 +132,7 @@ function ouvrirFicheProfil(lireCtx, existant) {
       el('div', { class: 'choix-ligne' }, portions),
     ),
     message('coefPortion'),
+    ligneRegime,
     el('div', { class: 'actions-feuille' },
       el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' }, 'Enregistrer'),
       el('button', { class: 'bouton bouton-texte', type: 'button', onclick: fermer }, 'Annuler'),
@@ -214,7 +240,8 @@ export function creer(ctx) {
             el('span', { class: 'carte-plat-texte' },
               el('span', { class: 'carte-plat-nom' }, profil.nom),
               el('span', { class: 'carte-plat-detail' },
-                [libellePortion(profil.coefPortion), profil.email || 'sans adresse'].join(' · ')),
+                [libellePortion(profil.coefPortion), profil.email || 'sans adresse', mentionRegime(profil)]
+                  .filter(Boolean).join(' · ')),
             ),
             el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'),
           ))))

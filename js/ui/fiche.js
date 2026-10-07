@@ -5,6 +5,8 @@ import { copier } from './presse-papiers.js';
 import { modeDeCuisson } from './pictos.js';
 import { lireBrouillon } from './brouillon.js';
 import { sectionNotes } from './notes.js';
+import { etatsCompat, estVous, nomDe } from './compat.js';
+import { profilsContraints, marqueursDouteux } from '../coeur/compatibilite.js';
 import { texteDemandeRecette } from '../coeur/paquet.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
@@ -48,6 +50,88 @@ function accord(nombre, singulier, pluriel) {
 
 function section(titre, ...contenu) {
   return el('section', { class: 'fiche-section' }, el('h2', {}, titre), ...contenu);
+}
+
+/** « a », « a et b », « a, b et c » */
+function enumerer(mots) {
+  return mots.length > 1 ? `${mots.slice(0, -1).join(', ')} et ${mots.at(-1)}` : mots.join('');
+}
+
+const nomsProduits = (ingredients) => [...new Set((ingredients ?? [])
+  .map((ingredient) => String(ingredient?.produit ?? '').replace(/\s+/g, ' ').trim())
+  .filter(Boolean))];
+
+/** Contenu d'une version : « Part au thon », « Sans : jambon blanc », « Avec : thon au naturel, 50 g par portion ». */
+function detailVersion(variante) {
+  const retirer = (Array.isArray(variante?.retirer) ? variante.retirer : []).map((p) => String(p ?? '').trim()).filter(Boolean);
+  const ajouter = (Array.isArray(variante?.ajouter) ? variante.ajouter : [])
+    .filter((a) => a && typeof a === 'object' && String(a.produit ?? '').trim())
+    .map((a) => {
+      const quantite = quantiteLisible(a.qtePortion, a.unite);
+      return quantite ? `${String(a.produit).trim()}, ${quantite} par portion` : String(a.produit).trim();
+    });
+  const consigne = typeof variante?.consigne === 'string' ? variante.consigne.trim() : '';
+  return [
+    consigne ? el('p', { class: 'version-consigne' }, consigne) : null,
+    retirer.length ? el('p', {}, el('strong', {}, 'Sans\u00A0:'), ` ${retirer.join(', ')}`) : null,
+    ajouter.length ? el('p', {}, el('strong', {}, 'Avec\u00A0:'), ` ${ajouter.join('\u00A0; ')}`) : null,
+  ].filter(Boolean);
+}
+
+/**
+ * Section « Version pour <Prénom> » d'un profil qui a des règles (« Votre version » pour soi, vue « Repas et
+ * courses ») : la version qui convient ; sinon ce qui manque, avec ❌ pour le gestionnaire seulement.
+ */
+function sectionVersion({ profil, resultat, cas }, plat, { moi, role }) {
+  const nom = nomDe(profil);
+  const vous = estVous(profil, { moi, role });
+  const gestionnaire = role === 'gestionnaire';
+  // Tant que la version manque, le titre ne l'annonce pas (« Pour vous » plutôt que « Votre version »).
+  const titre = cas === 'version' ? (vous ? 'Votre version' : `Version pour ${nom}`) : (vous ? 'Pour vous' : `Pour ${nom}`);
+  const variante = (plat.variantes ?? []).find((v) => v && v.pour === profil.id);
+  let contenu;
+  if (cas === 'version') {
+    contenu = detailVersion(resultat.variante ?? variante);
+  } else if (cas === 'aRevoir' && gestionnaire) {
+    const restants = (resultat.restants ?? []).filter(Boolean);
+    contenu = [
+      el('p', { class: 'compat-texte compat-exclu' }, el('span', { 'aria-hidden': 'true' }, '❌\u00A0'),
+        restants.length
+          ? `La version pour ${nom} contient encore\u00A0: ${enumerer(restants)}.`
+          : `La version pour ${nom} est à revoir.`),
+      ...detailVersion(variante),
+    ];
+  } else {
+    const noms = nomsProduits(cas === 'aRevoir' && resultat.restants?.length
+      ? resultat.restants.map((produit) => ({ produit }))
+      : resultat.fautifs);
+    const entre = noms.length ? ` (${enumerer(noms)})` : '';
+    contenu = [el('p', { class: `compat-texte ${gestionnaire ? 'compat-exclu' : 'compat-discret'}` },
+      gestionnaire ? el('span', { 'aria-hidden': 'true' }, '❌\u00A0') : null,
+      `Pas encore de version pour ${vous ? 'vous' : nom}${entre}.`)];
+  }
+  return el('section', { class: 'fiche-section section-version' },
+    el('h2', {}, cas === 'version' ? el('span', { 'aria-hidden': 'true' }, '🌿\u00A0') : null, titre),
+    ...contenu);
+}
+
+// Ce que le nom d'un ingrédient laisse penser, pour la ligne « à vérifier » (gestionnaire).
+const SOUPCONS = {
+  viande: 'de la viande',
+  bouillon_viande: 'de la viande',
+  gelatine_animale: 'de la gélatine animale',
+  graisse_animale: 'de la graisse animale',
+};
+
+/** « « bouillon de volaille » contient peut-être de la viande : vérifiez-le dans Modifier. » (gestionnaire) */
+function carteDouteux(plat) {
+  const douteux = marqueursDouteux(plat);
+  if (!douteux.length) return null;
+  return el('section', { class: 'bandeau bandeau-alerte bandeau-colonne compat-douteux' },
+    douteux.map(({ produit, attendu }) => el('p', {},
+      el('span', { 'aria-hidden': 'true' }, '⚠️\u00A0'),
+      `«\u00A0${produit}\u00A0» contient peut-être ${SOUPCONS[attendu] ?? 'un ingrédient à vérifier'}\u00A0: vérifiez-le dans Modifier.`)),
+    el('a', { class: 'lien-fiche', href: `#/modifier/${encodeURIComponent(plat.id)}` }, 'Modifier ›'));
 }
 
 function ligneInfo(terme, definition) {
@@ -188,10 +272,14 @@ export function creer(ctx) {
     const statut = statutDe(plat);
     const gestionnaire = courant.role === 'gestionnaire';
     const nomsProfils = new Map((courant.profils ?? []).map((p) => [p.id, p.nom]));
+    // Versions par profil qui a des règles ; les autres versions (profil sans règle, ou inconnu) restent à part.
+    const etats = etatsCompat(plat, courant);
+    const versionsMontrees = new Set(etats.filter((e) => e.cas !== 'aCreer').map((e) => e.profil.id));
+    const contraints = profilsContraints(courant.profils);
     const ingredients = plat.ingredients ?? [];
     const etapes = plat.etapes ?? [];
     const cuissons = plat.cuisson ?? [];
-    const variantes = plat.variantes ?? [];
+    const variantes = (plat.variantes ?? []).filter((v) => !versionsMontrees.has(v?.pour));
     const frigo = plat.conservation?.frigoJours;
     const congelable = plat.conservation?.congelable;
     const conservation = [
@@ -205,6 +293,8 @@ export function creer(ctx) {
     const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud].some((n) => n.contains(document.activeElement))
       ? document.activeElement
       : null;
+    // Lien « Modifier › » de l'ingrédient douteux : reconstruit à chaque rendu, son remplaçant reprend le focus.
+    const focusDouteux = Boolean(document.activeElement?.closest?.('.compat-douteux'));
     majActionsRecette();
     const brouillon = lireBrouillon(courant.utilisateur?.uid, id);
     lienModifier.replaceChildren(
@@ -226,6 +316,10 @@ export function creer(ctx) {
       ),
 
       brouillon ? carteReprise : lienModifier,
+
+      ...etats.map((etat) => sectionVersion(etat, plat, { moi: courant.moi, role: courant.role })),
+
+      gestionnaire && contraints.length && statut !== 'attente' ? carteDouteux(plat) : null,
 
       statut === 'attente'
         ? el('section', { class: 'carte' },
@@ -259,7 +353,7 @@ export function creer(ctx) {
         : null,
 
       variantes.length
-        ? section('Variantes', el('ul', { class: 'liste-simple' }, variantes.map((v) => el('li', {}, el('span', {},
+        ? section(etats.length ? 'Autres versions' : 'Versions', el('ul', { class: 'liste-simple' }, variantes.map((v) => el('li', {}, el('span', {},
           el('strong', {}, nomsProfils.get(v.pour) ?? 'Autre profil'),
           v.consigne ? `\u00A0: ${v.consigne}` : '',
         )))))
@@ -281,6 +375,7 @@ export function creer(ctx) {
         : null,
     ].filter(Boolean));
     if (focusGarde?.isConnected && document.activeElement !== focusGarde) focusGarde.focus({ preventScroll: true });
+    else if (focusDouteux) contenu.querySelector('.compat-douteux a')?.focus({ preventScroll: true });
   }
 
   function toutDessiner() {

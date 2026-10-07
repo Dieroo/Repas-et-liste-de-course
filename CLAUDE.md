@@ -106,14 +106,17 @@ js/
                           pictos.js (pictogrammes des appareils de cuisson), modifier.js (écran « Modifier la recette »),
                           brouillon.js (modification en cours gardée sur le téléphone), notes.js (section Notes de la fiche),
                           relier.js (« Qui êtes-vous ? »), fichier.js (choisir, lire, télécharger un fichier),
-                          restaurer.js (écran « Restaurer une sauvegarde »)
+                          restaurer.js (écran « Restaurer une sauvegarde »), regime.js (« Ce que <Prénom> mange »),
+                          compat.js (lignes 🌿 / ❌ d'un plat pour chaque profil qui a des règles)
   coeur/                  logique pure : ni DOM ni Firebase
     roles.js              rôle de la personne connectée, écrans permis
     slug.js               identifiants et recherche sans accents
     plats.js              visuel, filtres, ajout par nom, affichage des quantités
     profils.js            validation et ordre des profils
     photo.js              dimensions et taille des photos
-    compatibilite.js      règles, variantes, substitutions
+    vocabulaire.js        vocabulaires fermés de paquet@1, sous-types de viande, implications de marqueurs
+    compatibilite.js      évaluation d'un plat pour un profil (règles, version de la fiche), comptes, mots douteux
+    regles.js             régimes (« Mange de tout », « Pas de viande », « Ni viande ni poisson »), précisions, textes pour Claude
     liste.js
     proposition.js
     batch.js
@@ -133,7 +136,7 @@ package.json              uniquement "type": "module" et le script de test
 | Chemin | Contenu |
 |---|---|
 | `reglages/foyer` | `versionSchema: 1`, `gestionnaire` (e-mail), `debutSemaine`, `nbPlats {min, max}`, `dessertParSemaine` (0 ou 1), `frigoJoursDefaut` (3), `dureeBatchMaxMin`, `rayons[]` (ordre du parcours en magasin), `appareils[]`, `apero {actif, jour, nbSuggestions, incontournables[]}`, `drive {nom, urlRecherche}` (modèle contenant `{q}`), `notifications {ntfySujet}`, `derniereSauvegarde` (date du téléphone, écrite seulement si plats et profils viennent du serveur) |
-| `profils/{id}` | `nom`, `email` (facultatif, sert à reconnaître la personne connectée ; posé par « C'est moi » et effacé par « Ce n'est pas moi », en transaction), `ordre`, `repas {midis: [jours], soirs: [jours]}`, `coefPortion` (1 adulte, 0,5 enfant), `regles[]` (§7) |
+| `profils/{id}` | `nom`, `email` (facultatif, sert à reconnaître la personne connectée ; posé par « C'est moi » et effacé par « Ce n'est pas moi », en transaction), `ordre`, `repas {midis: [jours], soirs: [jours]}`, `coefPortion` (1 adulte, 0,5 enfant), `regles[]` (§7 ; absent = jamais réglé, `[]` = « Mange de tout » choisi exprès ; la règle de l'écran « Ce que <Prénom> mange » porte `id: 'regime'`, les autres sont gardées telles quelles ; écrit par `update` de la liste entière) |
 | `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil ; écrite par le chemin `notes.<profilId>` en `update`, `deleteField` pour effacer, sans `majPar` ni `majLe`, jamais par l'import ni par « Modifier » ; absente = non notée, compte 3 pour le score (`noteRetenue`) mais reste distincte de 3 pour l'équilibre des propositions (`estNote`) ; aucune note n'est écrite par défaut ; les notes d'un profil retiré restent dans la fiche et dans la sauvegarde, ignorées ailleurs), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe`, `modifieeLe` et `modifieePar` (posés par « Modifier », effacés quand une recette de Claude remplace ou complète la fiche). « Modifier » écrit par `update` les seuls champs touchés : portions et ingrédients toujours ensemble, `conservation` sous-champ par sous-champ |
 | `photos/{platId}` | `image` (JPEG compressé dans le navigateur, 1024 px max, ~200 Ko max), `majPar`, `majLe` ; lu seulement à l'ouverture de la fiche, pour que la liste des plats reste légère |
 | `produits/{id}` | `nom`, `rayon`, `uniteDefaut`, `marqueurs[]`, `habituel {actif, qte, unite}`, `rechercheDrive` (terme de recherche personnalisé, facultatif), `placard {actif, seuil, unite}` (§9 ; `seuil` vide = toujours proposé), `achats[]` (dates, V2) |
@@ -184,6 +187,8 @@ service cloud.firestore {
 - Les noms de produits se comparent par slug (casse, accents et tirets ignorés). Les sous-types `boeuf`, `porc`, `volaille`, `agneau`, `charcuterie` impliquent `viande`.
 - Niveau final = le pire des règles déclenchées. Toute modification de règle recalcule les badges partout.
 - Les règles `preference` ne s'appliquent ni aux desserts ni à l'apéro.
+- `exclureMarqueurs` accepte `saufMarqueurs[]` (ex. « pas de viande, mais la charcuterie oui »). Implications de marqueurs (`gelatine_porc` → `gelatine_animale`, sous-types → `viande`) appliquées à l'évaluation, jamais écrites. En T2, `evaluer` n'applique que `exclureMarqueurs` et `exclureProduits` ; les autres types sont gardés et arrivent avec l'écran qui les montre (substitution en T3, préférences en T4). `besoin` d'une version : `sans_viande` ou `adapter`.
+- Affichage (`ui/compat.js`) : « 🌿 Version pour <Prénom> » ou « ❌ Version pour <Prénom> à créer / à revoir » (gestionnaire) ; dans la vue « Repas et courses », jamais de croix : « 🌿 Votre version » ou « Pas encore de version pour vous ». Découvrir ne montre pas à un profil les plats qu'il ne peut pas manger tant que leur version n'existe pas.
 
 Exemples de règles (fixtures génériques) :
 
@@ -294,7 +299,7 @@ Vocabulaires fermés :
 
 - `unite` : `g` `kg` `ml` `cl` `l` `pc` `cs` `cc` `pincee` `botte` `sachet` `boite` `tranche`
 - `rayon` : `fruits_legumes` `boucherie` `charcuterie` `poissonnerie` `cremerie` `fromages` `epicerie_salee` `epicerie_sucree` `boulangerie` `surgeles` `boissons` `hygiene` `entretien` `divers`
-- `marqueurs` : `viande` `boeuf` `porc` `volaille` `agneau` `charcuterie` `poisson` `fruits_de_mer` `bouillon_viande` `gelatine_porc` `oeuf` `oeuf_cru` `laitier` `alcool_cru` `cafe` `legume` `feculent`
+- `marqueurs` : `viande` `boeuf` `porc` `volaille` `agneau` `charcuterie` `poisson` `fruits_de_mer` `bouillon_viande` `gelatine_porc` `gelatine_animale` `graisse_animale` `oeuf` `oeuf_cru` `laitier` `alcool_cru` `cafe` `legume` `feculent`
 - `appareil` : `plaque` `four` `cookeo` `airfryer` `monsieur_cuisine`
 - `forme` (viande) : `hachee` `fine` `morceaux` `effilochable`
 - `role` (légume) : `principal` `incorpore`
@@ -389,7 +394,7 @@ besoin: sans_viande | avec_proteine
 
 1. **Semaine** (accueil) : ce soir pour chacun, carte « prochaine action » (dont « À congeler aujourd'hui », §9), grille jours × profils (chaque plat avec le pictogramme de son mode de cuisson principal, §4), apéro du week-end, « Proposer » (les deux membres), « Imprimer » (menu de la semaine et apéro, puis liste de courses par rayon, sur une page pensée pour l'impression ; `window.print()` → « Enregistrer au format PDF » de Chrome, à envoyer), badges ⏳ et Demandes (gestionnaire).
 2. **Courses** : bascule Drive / Magasin, grandes cases à cocher, ajout rapide, origine visible (plat, apéro, habituel).
-3. **Plats** : recherche, filtres (type, statut, compatibilité), ligne de notes par profil (« Prénom ❤️ », « Prénom ★4 »), invitation « Aucun plat noté » tant que la personne n'a rien noté, pictogramme du mode de cuisson principal, ajout par nom (→ ⏳ et demande de recette).
+3. **Plats** : recherche, filtres (type, statut, « 🌿 Pour <Prénom> », « ❌ Versions à créer » pour le gestionnaire), ligne 🌿 / ❌ par profil qui a des règles, ligne de notes par profil (« Prénom ❤️ », « Prénom ★4 »), invitation « Aucun plat noté » tant que la personne n'a rien noté, pictogramme du mode de cuisson principal, ajout par nom (→ ⏳ et demande de recette).
 4. **Découvrir** : §4.
 5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges (dont le mode de cuisson principal et sa durée), section « Notes » (soi et l'enfant : « Jamais » à part, 5 étoiles, « Effacer » ; l'autre adulte en lecture seule ; « Pas encore noté · compte comme Pourquoi pas »), variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
    - Fiche en lecture, un seul bouton « ✏️ Modifier la recette » (les deux membres ; « Écrire la recette moi-même » sur un plat ⏳) → écran `#/modifier/<id>` : nom, type, portions (« Ces quantités sont pour N portions »), ingrédients (ajouter, retirer, quantité, unité, nature), étapes (ajouter, déplacer, retirer), cuisson principale (« Cuit surtout au » + durée), jours au frigo, congélation, boîte à emporter, « Recette vérifiée ». Restent à Claude : variantes, temps de travail, source, récurrence, étapes de cuisson secondaires.
@@ -440,7 +445,12 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
   - [x] T1d en deux livraisons ; le critère « Fini quand » de T1 (§11) se vérifie à T1d-1, par le gestionnaire seul :
     - [x] T1d-1 notes 0–5, « Qui êtes-vous ? », Découvrir, notes sur la fiche et dans la liste — publié et essayé sur le téléphone du gestionnaire et sur l'ordinateur le 2026-10-06 (critère « Fini quand » de T1 vérifié : note posée sur le téléphone visible en direct sur l'ordinateur) ; vibration allongée à 40 ms (15 ms ne se sentait pas)
     - [x] T1d-2 sauvegarde et restauration par fichier, ajout de recettes par fichier — publié le 2026-10-07 ; essai court fait sur le téléphone du gestionnaire (sauvegarde téléchargée, restauration du même fichier « Tout est déjà à jour ») ; grand essai de restauration (plat supprimé, recette cochée) reporté à la demande du propriétaire
-- [ ] T2 Compatibilité & variantes
+- [ ] T2 Compatibilité & variantes — en cinq livraisons (plan détaillé hors du dépôt, données du foyer dans Firestore seulement) :
+  - [ ] T2a « Ce que <Prénom> mange » (régime d'un profil, lignes 🌿 / ❌ dans la liste, la fiche et Découvrir, filtres, repères dans « Modifier », règles dans la sauvegarde) — pull request ouverte le 2026-10-07, essai sur téléphone à faire
+  - [ ] T2b versions écrites par Claude, dix plats à la fois (demande groupée, import des seules versions, `docs/projet-claude.md`)
+  - [ ] T2c précautions de l'enfant selon son âge (date de naissance, barème générique français, ❌ / ! avec la cause, carte 🧸🎂 qui propose d'assouplir, règles désactivables)
+  - [ ] T2d relecture des recettes existantes par Claude (repères de précaution)
+  - [ ] T2e demandes et notification (« Demander ma version », écran Demandes, ntfy)
 - [ ] T3 Semaine, liste & apéro
 - [ ] T4 Congélateur & proposition
 - [ ] T5 Batch
@@ -468,3 +478,4 @@ Décisions :
 - 2026-10-06 — Découvrir garde les trois gestes Jamais · Pourquoi pas · J'adore (décision du propriétaire) : « Pourquoi pas » reste la réponse neutre, la nuance « J'aime bien » se règle sur la fiche.
 - 2026-10-07 — T1d-2 : restauration additive (rien n'est retiré ni écrasé sans case cochée), en ligne seulement, par transactions revérifiées à l'envoi ; une sauvegarde faite sur une copie non confirmée par le serveur est donnée mais ne compte pas comme dernière sauvegarde.
 - 2026-10-07 — T1 clos. Le grand essai de restauration de T1d-2 est reporté (décision du propriétaire) : la reprise d'une recette cochée n'a été essayée que sur le faux Firebase ; garder des fichiers de sauvegarde réduit ce risque.
+- 2026-10-07 — T2 recentré sur le besoin réel : un adulte du foyer ne mange pas de viande (versions de ses plats écrites par Claude, plusieurs à la fois) ; l'enfant a des précautions selon son âge (barème générique français dans l'app, date de naissance et choix des parents dans Firestore, chaque règle désactivable, levée seulement proposée, jamais automatique). Tout ce qui concerne l'enfant porte un nounours 🧸. Escargots et grenouilles comptent comme viande, toute gélatine animale est exclue, le beurre reste permis. Dans la vue « Repas et courses », jamais de croix rouge. En aperçu « Repas et courses », le gestionnaire crée les demandes et reçoit la notification comme l'autre membre (T2e). L'app reste conçue pour un seul foyer ; une version commerciale sera réévaluée après quelques mois d'usage réel.

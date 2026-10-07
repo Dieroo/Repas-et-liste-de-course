@@ -2,7 +2,9 @@
 // ingrédient, comparaison et préparation de l'enregistrement. Logique pure : ni DOM ni Firebase.
 import { slug } from './slug.js';
 import { APPAREILS, NOM_MAX, statutDe, typeDe } from './plats.js';
-import { FORMAT, VOCABULAIRES, validerPaquet } from './paquet.js';
+import { FORMAT, validerPaquet } from './paquet.js';
+import { VIANDES, VOCABULAIRES } from './vocabulaire.js';
+import { repereAttendu } from './compatibilite.js';
 
 // ——— Libellés (ordre d'affichage = ordre des clés) ———
 
@@ -58,7 +60,6 @@ export const FRIGO_JOURS_MAX = 14;
 export const DUREE_MAX = 1440; // minutes
 export const QTE_MAX = 100000;
 
-const VIANDES = ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie'];
 const POISSONS = ['poisson', 'fruits_de_mer'];
 const MARQUEURS_DE_NATURE = [...VIANDES, ...POISSONS, 'legume'];
 const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
@@ -113,6 +114,37 @@ export function appliquerNature(ingredient, nature) {
   if (nature === 'legume') copie.role = VOCABULAIRES.role.includes(copie.role) ? copie.role : NATURES.legume.role;
   else delete copie.role;
   return copie;
+}
+
+// ——— Repères d'un produit jamais vu (T2a) ———
+
+// Repères posés en plus de la nature, montrés en une ligne lisible dans « Plus de précisions », avec « Retirer ».
+export const REPERES = {
+  bouillon_viande: 'Bouillon de viande',
+  gelatine_animale: 'Gélatine animale',
+  gelatine_porc: 'Gélatine animale',
+  graisse_animale: 'Graisse animale',
+};
+const MARQUEURS_REPERE = Object.keys(REPERES);
+
+/**
+ * Nature présélectionnée pour un produit jamais vu, d'après son nom : « Viande » pour un mot de viande (lardons,
+ * poulet, escargots…) ; « Autre » avec un repère pour un bouillon, un fond ou un fumet de viande ou de volaille
+ * (`bouillon_viande`), une gélatine (`gelatine_animale`) ou une graisse animale (`graisse_animale`). Toujours
+ * modifiable. → { nature, repere? } ou null (rien à présélectionner, ou produit déjà connu du catalogue).
+ */
+export function natureProposee(produit, catalogue = []) {
+  if (produitConnu(catalogue, produit)) return null;
+  const attendu = repereAttendu(produit);
+  if (!attendu) return null;
+  if (attendu === 'viande') return { nature: 'viande' };
+  return { nature: 'autre', repere: attendu };
+}
+
+/** Repères que porte un ingrédient, dans l'ordre de REPERES. */
+export function reperesDe(ingredient) {
+  const marqueurs = Array.isArray(ingredient?.marqueurs) ? ingredient.marqueurs : [];
+  return MARQUEURS_REPERE.filter((m) => marqueurs.includes(m));
 }
 
 // ——— Base qui s'enrichit : catalogue des produits connus ———
@@ -230,7 +262,9 @@ function quantite(valeur) {
 
 /**
  * Ingrédient complet à partir des champs de la feuille.
- * `champs` : { produit, qte, unite, rayon, nature, forme, role } tels que saisis. `ingredients` : ceux de la
+ * `champs` : { produit, qte, unite, rayon, nature, forme, role, reperes? } tels que saisis. `reperes` (facultatif) :
+ * marqueurs de REPERES gardés sur l'ingrédient (« Retirer » en enlève un) ; absent, ceux de la base retenue, et pour
+ * un produit jamais vu, le repère de natureProposee. `ingredients` : ceux de la
  * recette en cours ; `index` : position de l'ingrédient modifié (null pour un ajout).
  * → { ingredient } ou { erreurs: { produit?, qte?, unite?, nature? } }
  */
@@ -255,18 +289,26 @@ export function ingredientSaisi(champs, { catalogue = [], ingredients = [], inde
   // Marqueurs, forme et rôle : la nature choisie, sinon l'ingrédient modifié (même produit), sinon le catalogue.
   const choisie = Object.hasOwn(NATURES, champs?.nature ?? '') ? champs.nature : null;
   let source = null;
+  let jamaisVu = false;
   if (!erreurs.produit) {
     const modifie = Number.isInteger(index) && estObjet(liste[index]) && slug(liste[index].produit) === cle
       ? liste[index] : null;
     const connu = produitConnu(catalogue, produit);
+    jamaisVu = !modifie && !connu;
     if (choisie) source = appliquerNature(modifie ?? connu ?? { marqueurs: [] }, choisie);
     else if (modifie ?? connu) source = copier(modifie ?? connu);
     else erreurs.nature = 'Choisissez\u00A0: viande, poisson, légume ou autre.';
   }
   if (Object.keys(erreurs).length) return { erreurs };
 
-  const marqueurs = [...new Set((Array.isArray(source.marqueurs) ? source.marqueurs : [])
+  let marqueurs = [...new Set((Array.isArray(source.marqueurs) ? source.marqueurs : [])
     .filter((m) => VOCABULAIRES.marqueurs.includes(m)))];
+  // Repères : ceux choisis, sinon ceux de la base, sinon (produit jamais vu) celui que le nom annonce.
+  const propose = jamaisVu ? natureProposee(produit)?.repere : null;
+  let reperes = null;
+  if (Array.isArray(champs?.reperes)) reperes = champs.reperes.filter((m) => MARQUEURS_REPERE.includes(m));
+  else if (propose) reperes = [...reperesDe(source), propose];
+  if (reperes) marqueurs = [...marqueurs.filter((m) => !MARQUEURS_REPERE.includes(m)), ...new Set(reperes)];
   const nature = natureDe({ marqueurs });
   // Rayon : celui choisi, sinon celui de la base retenue, sinon celui de la nature.
   let rayon = NATURES[choisie ?? nature].rayon;
