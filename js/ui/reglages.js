@@ -120,13 +120,24 @@ export function texteCopieLocale() {
   return `${navigator.onLine ? 'Données pas encore à jour' : 'Hors ligne'}\u00A0: ce fichier contient la copie de cet appareil. Il ne compte pas comme dernière sauvegarde.`;
 }
 
-/** Message court lu après un téléchargement ; le détail reste affiché dans Réglages. */
+/**
+ * Message court lu après un téléchargement. Dans Réglages, le détail reste affiché sous le bouton ; depuis le panneau
+ * du profil, rien d'autre n'est affiché : les plats à corriger sont nommés.
+ */
 export function resumeSauvegarde({ horsLigne, aCorriger = [] }, { dansReglages = false } = {}) {
   const phrases = ['Téléchargement lancé. Vérifiez qu’il est dans «\u00A0Téléchargements\u00A0».'];
-  if (horsLigne) phrases.push('Il ne compte pas comme dernière sauvegarde.');
-  const ou = dansReglages ? 'détails sous le bouton' : 'voir Réglages › Sauvegarde';
-  if (aCorriger.length === 1) phrases.push(`Une recette est à corriger\u00A0: ${ou}.`);
-  else if (aCorriger.length > 1) phrases.push(`${aCorriger.length} recettes sont à corriger\u00A0: ${ou}.`);
+  if (horsLigne) phrases.push(dansReglages ? 'Il ne compte pas comme dernière sauvegarde.' : texteCopieLocale());
+  if (dansReglages) {
+    if (aCorriger.length === 1) phrases.push('Une recette est à corriger\u00A0: détails sous le bouton.');
+    else if (aCorriger.length > 1) phrases.push(`${aCorriger.length} recettes sont à corriger\u00A0: détails sous le bouton.`);
+  } else if (aCorriger.length) {
+    const noms = aCorriger.slice(0, 3).map(({ nom }) => `«\u00A0${nom}\u00A0»`);
+    const reste = aCorriger.length - noms.length;
+    const liste = reste > 0 ? `${noms.join(', ')} et ${reste} autre${reste > 1 ? 's' : ''}` : noms.join(', ');
+    phrases.push(aCorriger.length === 1
+      ? `La recette de ${liste} est abîmée\u00A0: corrigez-la dans l’app.`
+      : `Recettes abîmées, à corriger dans l’app\u00A0: ${liste}.`);
+  }
   return phrases.join(' ');
 }
 

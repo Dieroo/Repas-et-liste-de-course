@@ -409,16 +409,14 @@ export function creer(ctx) {
     enregistre = true;
     const { ecritures } = preparation;
     courant.actions.importer(preparation);
-    if (!ecritures.length) {
-      annoncer('Recette marquée comme ajoutée.');
-      location.replace(cible ? `#/plat/${encodeURIComponent(cible)}` : '#/plats');
-      return;
-    }
-    annoncer(ecritures.length > 1 ? `${ecritures.length} recettes enregistrées.` : 'Recette enregistrée.');
+    annoncer(!ecritures.length ? 'Recette marquée comme ajoutée.'
+      : ecritures.length > 1 ? `${ecritures.length} recettes enregistrées.` : 'Recette enregistrée.');
     // Retour à l'écran d'où l'on vient (fiche ciblée, liste) : un pas en arrière, sans doublon dans l'historique.
     // Sinon, cet écran est remplacé : le geste retour ne ramène pas à un aperçu déjà enregistré.
-    const destination = ecritures.length === 1 ? `#/plat/${encodeURIComponent(ecritures[0].id)}` : '#/plats';
     const origine = cible ? `#/plat/${encodeURIComponent(cible)}` : '#/plats';
+    // Rien écrit (seulement une demande close) : retour d'où l'on vient.
+    const destination = !ecritures.length ? origine
+      : ecritures.length === 1 ? `#/plat/${encodeURIComponent(ecritures[0].id)}` : '#/plats';
     if (destination === origine && courant.routePrecedente === (cible ? 'plat' : 'plats') && history.length > 1) history.back();
     else location.replace(destination);
   }
