@@ -432,14 +432,14 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 ## 14. Statut
 
 - [x] T0 Socle — validé le 2026-10-05 sur le téléphone du gestionnaire (connexion, rôles, installation, mode avion) ; installation et avis sur le téléphone de l'utilisatrice des courses reportés à la fin du projet (décision du propriétaire)
-- [ ] T1 Plats, import & Découvrir — en trois livraisons :
+- [x] T1 Plats, import & Découvrir — en trois livraisons :
   - [x] T1a profils, bibliothèque, fiche, ajout par nom (+ demande de recette), photo (appareil ou galerie), aperçu de la vue « Repas et courses » — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
   - [x] T1b « Ajouter des recettes » (coller la réponse de Claude, aperçu, enregistrement), « Demander à Claude » et « Coller la recette » sur la fiche — publié et essayé sur le téléphone du gestionnaire le 2026-10-05
   - [x] T1c-1 pictogramme du mode de cuisson principal (liste des plats, fiche) — fusionné le 2026-10-05, mis en ligne le 2026-10-06 (incident GitHub Actions) et essayé sur le téléphone du gestionnaire le 2026-10-06
   - [x] T1c-2 « Modifier » une recette (les deux membres) et « Recette vérifiée » — publié et essayé sur le téléphone du gestionnaire le 2026-10-06 (modification, reprise après fermeture de l'app)
-  - [ ] T1d en deux livraisons ; le critère « Fini quand » de T1 (§11) se vérifie à T1d-1, par le gestionnaire seul :
+  - [x] T1d en deux livraisons ; le critère « Fini quand » de T1 (§11) se vérifie à T1d-1, par le gestionnaire seul :
     - [x] T1d-1 notes 0–5, « Qui êtes-vous ? », Découvrir, notes sur la fiche et dans la liste — publié et essayé sur le téléphone du gestionnaire et sur l'ordinateur le 2026-10-06 (critère « Fini quand » de T1 vérifié : note posée sur le téléphone visible en direct sur l'ordinateur) ; vibration allongée à 40 ms (15 ms ne se sentait pas)
-    - [ ] T1d-2 sauvegarde et restauration par fichier, ajout de recettes par fichier — pull request ouverte le 2026-10-07, essai sur téléphone à faire
+    - [x] T1d-2 sauvegarde et restauration par fichier, ajout de recettes par fichier — publié le 2026-10-07 ; essai court fait sur le téléphone du gestionnaire (sauvegarde téléchargée, restauration du même fichier « Tout est déjà à jour ») ; grand essai de restauration (plat supprimé, recette cochée) reporté à la demande du propriétaire
 - [ ] T2 Compatibilité & variantes
 - [ ] T3 Semaine, liste & apéro
 - [ ] T4 Congélateur & proposition
@@ -467,3 +467,4 @@ Décisions :
 - 2026-10-06 — T1d-1 : libellés des notes 0 à 5 « Jamais, Pas trop, Bof, Pourquoi pas, J'aime bien, J'adore » ; on note pour soi et pour l'enfant sans adresse, jamais pour l'autre adulte (lecture seule) ; « Qui êtes-vous ? » en attendant l'assistant de T6 ; un plat non noté est affiché « Pas encore noté · compte comme Pourquoi pas ». T1d découpé : notes et Découvrir d'abord (T1d-1), sauvegarde ensuite (T1d-2).
 - 2026-10-06 — Découvrir garde les trois gestes Jamais · Pourquoi pas · J'adore (décision du propriétaire) : « Pourquoi pas » reste la réponse neutre, la nuance « J'aime bien » se règle sur la fiche.
 - 2026-10-07 — T1d-2 : restauration additive (rien n'est retiré ni écrasé sans case cochée), en ligne seulement, par transactions revérifiées à l'envoi ; une sauvegarde faite sur une copie non confirmée par le serveur est donnée mais ne compte pas comme dernière sauvegarde.
+- 2026-10-07 — T1 clos. Le grand essai de restauration de T1d-2 est reporté (décision du propriétaire) : la reprise d'une recette cochée n'a été essayée que sur le faux Firebase ; garder des fichiers de sauvegarde réduit ce risque.
