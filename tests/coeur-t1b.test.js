@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  extrairePaquet, validerPaquet, preparerImport, texteDemandeRecette, texteCorrectionPourClaude, code, PLATS_MAX,
+  extrairePaquet, validerPaquet, preparerImport, code, PLATS_MAX,
 } from '../js/coeur/paquet.js';
+import { texteDemandeRecette, texteCorrectionPourClaude } from '../js/coeur/claude.js';
 import { lireHash, resoudreRoute, parametreDe } from '../js/coeur/roles.js';
 
 // ——— Fixtures génériques (aucune donnée du foyer) ———
@@ -504,8 +505,9 @@ test('validerPaquet : espaces insécables autour des guillemets dans les message
 test('preparerImport : collage sans ingrédients sur un plat rempli → sa recette et son statut restent', () => {
   const plats = [{ id: 'risotto-test', nom: 'Risotto test', statutRecette: 'brouillon', ingredients: [{ produit: 'riz' }] }];
   const r = preparerImport(valides({ id: 'risotto-test', nom: 'Risotto test', statutRecette: 'attente' }), { plats, demandes: [] });
-  assert.equal(r.elements[0].statut, 'inchange');
-  assert.equal('statutRecette' in r.ecritures[0].donnees, false);
+  // T2b : rien n'est écrit sur un plat rempli par une entrée sans ingrédients.
+  assert.equal(r.elements[0].statut, 'identique');
+  assert.deepEqual(r.ecritures, []);
   // Plat ⏳ recollé tel quel sur la même fiche ⏳ : identique, rien n'est écrit (T1d-2).
   const attente = preparerImport(valides({ id: 'plat-x', nom: 'Plat X' }), { plats: [{ id: 'plat-x', nom: 'Plat X' }], demandes: [] });
   assert.equal(attente.elements[0].statut, 'identique');

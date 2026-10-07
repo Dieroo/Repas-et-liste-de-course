@@ -40,6 +40,24 @@ const TOUT_COCHER_DES = 4;
 
 const pluriel = (n, singulier, plurielTexte) => `${n}\u00A0${n > 1 ? plurielTexte : singulier}`;
 
+/**
+ * Lignes « 🌿 3 versions pour <Prénom> reviennent. » : versions du fichier dont le profil manque à la fiche
+ * (coeur/sauvegarde.js › resume.versionsRemises : [{ pour, nom, nombre }]). Prénom lu dans les profils de l'app,
+ * sinon celui du résumé (profil remis par la restauration) ; jamais l'identifiant.
+ */
+export function lignesVersionsRemises(versionsRemises, profils = []) {
+  const noms = new Map((Array.isArray(profils) ? profils : []).map((p) => [p?.id, String(p?.nom ?? '').trim()]));
+  return (Array.isArray(versionsRemises) ? versionsRemises : [])
+    .filter((entree) => entree && typeof entree.pour === 'string' && Number.isInteger(entree.nombre) && entree.nombre > 0)
+    .map(({ pour, nom, nombre }) => {
+      const resume = typeof nom === 'string' && nom.trim() !== pour ? nom.trim() : '';
+      const prenom = noms.get(pour) || resume || 'un autre profil';
+      return nombre > 1
+        ? `🌿 ${nombre}\u00A0versions pour ${prenom} reviennent.`
+        : `🌿 1\u00A0version pour ${prenom} revient.`;
+    });
+}
+
 /** Date, horodatage Firestore (`toDate()` ou `{ seconds }`) ou texte ISO → Date, ou null. */
 function versDate(valeur) {
   if (valeur == null) return null;
@@ -389,6 +407,8 @@ export function creer(ctx) {
         : null,
       // Règles revenues sur un profil présent qui n'en avait jamais eu (coeur/sauvegarde.js : liste des prénoms).
       ...(resume.reglesRemises ?? []).map((nom) => `🍽️ Ce que ${nom} mange revient.`),
+      // Versions du fichier pour un profil que la fiche n'a pas : ajoutées, jamais à la place d'une autre.
+      ...lignesVersionsRemises(resume.versionsRemises, courant.profils),
     ].filter(Boolean);
 
     // Ce qui ne change pas

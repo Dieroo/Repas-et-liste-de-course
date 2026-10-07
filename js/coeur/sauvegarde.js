@@ -10,7 +10,8 @@ import { cheminNote, noteValide } from './notes.js';
 import { egalProfonde } from './edition.js';
 import { validerRegles } from './regles.js';
 import {
-  CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, recetteValidee, validerPaquet,
+  CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
+  validerPaquet,
 } from './paquet.js';
 
 export const FICHIER_MAX = 5_000_000; // caractères (le collage garde 500 000)
@@ -383,7 +384,7 @@ export function validerSauvegarde(sauvegarde) {
   const recettes = validerPaquet([{
     format: FORMAT,
     plats: retenus.map(({ brut }) => Object.fromEntries(Object.entries(brut).filter(([cle]) => !CHAMPS_SUIVI.includes(cle)))),
-  }], { platsMax: PLATS_MAX_SAUVEGARDE, doublonsDeNom: false });
+  }], { platsMax: PLATS_MAX_SAUVEGARDE, doublonsDeNom: false, versionsEnDouble: 'premiere' });
 
   const plats = retenus.map(({ brut, id, nom }, i) => {
     const valide = recettes.plats[i];
@@ -436,9 +437,11 @@ function enLots(ecritures, taille) {
 /**
  * Écritures d'une restauration, à partir des données lues sur le serveur (`plats`, `profils`, `demandes`) et de la
  * personne connectée (`email`, posé en `majPar`). Ce qui est dans l'app reste ; ce qui manque revient (plats,
- * notes, profils, `derniereFois` plus récente) ; seules les recettes de `recettesAReprendre` (identifiants)
- * reprennent leur version sauvegardée, en bloc. L'écran coche d'avance celles dont `cocheeParDefaut` est vrai
- * (fiche ⏳ dans l'app) et les passe ici.
+ * notes, profils, `derniereFois` plus récente, versions des profils qui n'en ont pas sur la fiche) ; seules les
+ * recettes de `recettesAReprendre` (identifiants) reprennent leur version sauvegardée, en bloc, sans toucher aux
+ * versions de la fiche. L'écran coche d'avance celles dont `cocheeParDefaut` est vrai (fiche ⏳ dans l'app) et les
+ * passe ici. Recettes comparées sans leurs versions. Une demande de version n'est close que si la version convient.
+ * `resume.versionsRemises` : [{ pour, nom, nombre }] (versions remises sur des plats présents, par profil).
  * → { resume, recettesDifferentes: [{ id, nom, modifieeLe? (Date), appEnAttente, cocheeParDefaut }],
  *     lots: [[{ collection, id, mode: 'fusion' | 'update', donnees, effacer?, condition, clore? }]], demandesAClore,
  *     avertissements, rien }
@@ -477,6 +480,7 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     ajoutesDepuis: 0,
     nonRemis: [],
     reglesRemises: [],
+    versionsRemises: [],
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -514,6 +518,9 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     resume.profilsRemis.push(profil.nom);
   }
   const profilsConnus = new Set([...idsProfilsApp, ...profilsFichier.map((p) => p.id)]);
+  // Profils qui jugent les versions : ceux de l'app, puis ceux que la restauration remet.
+  const profilsJuges = [...profilsApp, ...profilsFichier.filter((p) => !idsProfilsApp.has(p.id))];
+  const versionsRemises = new Map();
 
   /** Notes du fichier pour des profils connus ; les autres sont ignorées, avec un avertissement. */
   const notesConnues = (plat) => {
@@ -548,7 +555,8 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
       if (plat.modifieePar) donnees.modifieePar = plat.modifieePar;
       donnees.majPar = auteur;
       donnees.majLe = marqueurHorodatage();
-      const satisfaites = plat.recette ? demandesSatisfaites(plat.id, plat.recette, ouvertes) : [];
+      const satisfaites = plat.recette
+        ? demandesSatisfaites(plat.id, plat.recette, ouvertes, { plat: donnees, profils: profilsJuges }) : [];
       ecrituresPlats.push({
         collection: 'plats', id: plat.id, mode: 'fusion', donnees, condition: { absent: true },
         ...(satisfaites.length ? { clore: satisfaites } : {}),
@@ -582,11 +590,12 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
       }
     }
 
-    // Recette, traitée comme un bloc.
+    // Recette, traitée comme un bloc, comparée sans ses versions (rendues à part, ci-dessous).
     const recette = plat.recette ? recetteValidee(plat.recette) : null;
+    let reprise = false;
     if (recette && statutDe(recette) !== 'attente') {
       const actuelle = recetteValidee(existant);
-      if (actuelle && egalProfonde(actuelle, recette)) {
+      if (actuelle && egalProfonde(sansVersions(actuelle), sansVersions(recette))) {
         resume.identiques += 1;
       } else {
         const appEnAttente = statutDe(existant) === 'attente';
@@ -599,8 +608,10 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
           cocheeParDefaut: appEnAttente,
         });
         if (reprises.has(plat.id)) {
+          reprise = true;
           for (const champ of CHAMPS_PLAT) {
-            if (champ === 'id') continue;
+            // Les versions de la fiche restent : celles du fichier qui manquent reviennent à part.
+            if (champ === 'id' || champ === 'variantes') continue;
             if (champ === 'nom') {
               const autre = nomPrisPar(recette.nom, plat.id);
               if (autre) avertissements.push(`${guillemets(existant.nom ?? plat.nom)} garde son nom actuel\u00A0: un autre plat porte déjà celui du fichier.`);
@@ -622,13 +633,34 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
           condition.recette = empreinteRecette(existant);
           resume.recettesReprises += 1;
           if (modifieeALaMain(existant)) resume.dontModifiees += 1;
-          satisfaites = demandesSatisfaites(plat.id, recette, ouvertes);
-          clore(satisfaites);
         }
       }
     } else if (recette) {
       // Plat ⏳ dans le fichier : la recette de l'app reste (inchangée).
       resume.identiques += 1;
+    }
+
+    // Versions du fichier pour des profils qui n'en ont pas sur la fiche : elles reviennent ; une version présente
+    // n'est jamais remplacée.
+    // Sur un plat ⏳ dont la recette n'est pas reprise, une version n'aurait rien à adapter : elle attend.
+    const presentes = new Set((Array.isArray(existant.variantes) ? existant.variantes : [])
+      .filter(estObjet).map((v) => v.pour));
+    const avecRecette = reprise || (Array.isArray(existant.ingredients) && existant.ingredients.length > 0);
+    const absentes = (avecRecette && Array.isArray(recette?.variantes) ? recette.variantes : [])
+      .filter((v) => estObjet(v) && !presentes.has(v.pour));
+    if (absentes.length) {
+      donnees.variantes = fusionnerVariantes(existant.variantes, absentes);
+      condition.variantesAbsentes = absentes.map((v) => v.pour);
+      for (const { pour } of absentes) versionsRemises.set(pour, (versionsRemises.get(pour) ?? 0) + 1);
+    }
+    if (reprise || absentes.length) {
+      const fiche = { ...existant, ...(reprise ? recette : {}), id: plat.id, variantes: donnees.variantes ?? existant.variantes };
+      // Recette reprise : toute version de la fiche qui lui convient satisfait sa demande ; sinon, seules les versions
+      // remises.
+      satisfaites = demandesSatisfaites(plat.id, reprise
+        ? { ingredients: recette.ingredients, variantes: fiche.variantes }
+        : { variantes: absentes }, ouvertes, { plat: fiche, profils: profilsJuges });
+      clore(satisfaites);
     }
 
     if (Object.keys(donnees).length || effacer.length) {
@@ -640,6 +672,10 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     }
   }
   resume.ajoutesDepuis = platsApp.filter((p) => !idsFichier.has(p.id)).length;
+  resume.versionsRemises = trierProfils([...versionsRemises.keys()].map((pour) => {
+    const profil = profilsJuges.find((p) => p.id === pour);
+    return { id: pour, ordre: profil?.ordre, nom: reduire(profil?.nom) || pour };
+  })).map(({ id, nom }) => ({ pour: id, nom, nombre: versionsRemises.get(id) }));
 
   const lots = enLots([...ecrituresProfils, ...ecrituresPlats], ECRITURES_PAR_LOT);
   return { resume, recettesDifferentes, lots, demandesAClore, avertissements, rien: lots.length === 0 };
@@ -668,10 +704,20 @@ function texteStable(valeur) {
   return JSON.stringify(valeur ?? null);
 }
 
-/** Empreinte de la recette actuelle d'une fiche (avec sa marque « modifiée à la main »). */
+/** Recette sans ses versions (elles se comparent et se restaurent à part). */
+function sansVersions(recette) {
+  if (!estObjet(recette)) return recette;
+  const { variantes: _v, ...reste } = recette;
+  return reste;
+}
+
+/**
+ * Empreinte de la recette actuelle d'une fiche (avec sa marque « modifiée à la main »), sans ses versions : une
+ * version ajoutée entre-temps ne change ni la comparaison ni la reprise d'une recette cochée.
+ */
 function empreinteRecette(plat) {
   return texteStable({
-    recette: recetteValidee(plat),
+    recette: sansVersions(recetteValidee(plat)),
     modifieeLe: versDate(plat?.modifieeLe)?.toISOString() ?? null,
     modifieePar: plat?.modifieePar ?? null,
   });
@@ -684,8 +730,10 @@ function empreinteRecette(plat) {
  * - note : seulement si le profil n'a toujours pas de note ;
  * - `derniereFois` : seulement si elle reste plus récente ;
  * - recette cochée : seulement si la fiche est encore celle de l'aperçu ;
- * - règles d'un profil (`reglesAbsentes`) : seulement s'il n'en a toujours aucune (une liste, même vide, reste).
- * → l'écriture à faire (même forme, `clore` gardé seulement si la recette est écrite), ou null s'il ne reste rien.
+ * - règles d'un profil (`reglesAbsentes`) : seulement s'il n'en a toujours aucune (une liste, même vide, reste) ;
+ * - versions (`variantesAbsentes`) : seulement celles dont le profil n'a toujours pas de version sur la fiche,
+ *   ajoutées à la fin des versions lues (celles de la fiche gagnent).
+ * → l'écriture à faire (même forme, `clore` gardé seulement pour ce qui est écrit), ou null s'il ne reste rien.
  */
 export function appliquerConditions(ecriture, actuel) {
   const condition = ecriture?.condition ?? {};
@@ -705,12 +753,29 @@ export function appliquerConditions(ecriture, actuel) {
     const actuelle = jourDe(actuel.derniereFois);
     if (actuelle && !(donnees.derniereFois > actuelle)) delete donnees.derniereFois;
   }
-  if (condition.recette !== undefined && empreinteRecette(actuel) !== condition.recette) {
-    // La fiche a changé depuis l'aperçu : seules les notes et la date restent.
-    for (const cle of Object.keys(donnees)) if (!cle.startsWith('notes.') && cle !== 'derniereFois') delete donnees[cle];
-    effacer = [];
-    clore = [];
+  let ajoutees = null;
+  if (condition.variantesAbsentes) {
+    const presentes = new Set((Array.isArray(actuel.variantes) ? actuel.variantes : []).filter(estObjet).map((v) => v.pour));
+    const fichier = (Array.isArray(ecriture.donnees?.variantes) ? ecriture.donnees.variantes : [])
+      .filter((v) => estObjet(v) && condition.variantesAbsentes.includes(v.pour) && !presentes.has(v.pour));
+    ajoutees = new Set(fichier.map((v) => v.pour));
+    if (fichier.length) donnees.variantes = fusionnerVariantes(actuel.variantes, fichier);
+    else delete donnees.variantes;
   }
+  let recetteEcrite = true;
+  if (condition.recette !== undefined && empreinteRecette(actuel) !== condition.recette) {
+    // La fiche a changé depuis l'aperçu : seules les notes, la date et les versions manquantes restent.
+    for (const cle of Object.keys(donnees)) {
+      if (!cle.startsWith('notes.') && cle !== 'derniereFois' && cle !== 'variantes') delete donnees[cle];
+    }
+    effacer = [];
+    recetteEcrite = false;
+  }
+  // Demandes : celles de la recette reprise si elle est écrite ; celles d'une version remise si elle l'est.
+  const reprise = condition.recette !== undefined && recetteEcrite;
+  const recetteDuPlat = `${ecriture.id}__recette`;
+  clore = clore.filter((demande) => reprise
+    || (demande !== recetteDuPlat && Boolean(ajoutees?.has(demande.slice(`${ecriture.id}__`.length)))));
   if (!Object.keys(donnees).length && !effacer.length) return null;
   const { effacer: _e, clore: _c, ...reste } = ecriture;
   return { ...reste, donnees, ...(effacer.length ? { effacer } : {}), ...(clore.length ? { clore } : {}) };

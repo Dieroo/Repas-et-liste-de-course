@@ -13,7 +13,8 @@ import { nouveauPlatParNom } from './coeur/plats.js';
 import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from './coeur/profils.js';
 import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
-import { evaluer } from './coeur/compatibilite.js';
+import { evaluer, bilanCompatibilite } from './coeur/compatibilite.js';
+import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions } from './coeur/import-local.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -39,6 +40,7 @@ import * as restaurer from './ui/restaurer.js';
 import * as regime from './ui/regime.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
+import { lireEnvoyes, noterEnvoyes, effacerEnvoyes } from './ui/envoyes.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -362,6 +364,9 @@ function ecrire(promesse, messageEchec) {
   promesse.catch(() => annoncer(messageEchec));
 }
 
+// Instructions du projet Claude, lues une fois (actions.lireInstructionsClaude).
+let instructionsClaude = null;
+
 const actions = {
   ajouterPlat(nom) {
     const resultat = nouveauPlatParNom(nom, etat.plats);
@@ -408,26 +413,73 @@ const actions = {
     }
     etat.profils = etat.profils.map((profil) => (profil.id === profilId ? { ...profil, regles } : profil));
   },
-  /** Recettes préparées par coeur/paquet.js › preparerImport. Affichées tout de suite, envoyées dès que possible. */
+  /**
+   * Recettes et versions préparées par coeur/paquet.js › preparerImport (CLAUDE.md §8, T2b). Affichées tout de suite
+   * (coeur/import-local.js › appliquerImport : une version ne crée jamais de plat sur ce téléphone).
+   * - Fiches complètes : envoyées dès que possible (hors ligne : plus tard), comme en T1b ; un échec est annoncé.
+   * - Versions : demandent du réseau (une transaction par plat). Hors ligne, rien n'est écrit ni affiché : la promesse
+   *   est rejetée avec `code: 'hors_ligne'` et le message à montrer. Une fois envoyées, l'annonce « 9 versions
+   *   ajoutées. 14 plats attendent encore une version pour <Prénom>. » suit, avec le nom de chaque plat disparu
+   *   entre-temps ; un échec est annoncé, et la promesse est rejetée avec `code: 'echec'`.
+   * → promesse de { manquants: [nom] } (noms des plats disparus avant l'envoi de leur version) ; sans version,
+   *   résolue tout de suite avec { manquants: [] }.
+   */
   importer({ ecritures, demandesAClore }) {
-    ecrire(donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email),
-      'Les recettes n’ont pas pu être enregistrées. Réessayez.');
-    const recus = new Map(ecritures.map(({ id, donnees: champs }) => [id, champs]));
-    // Recette qui remplace des modifications faites à la main : leur marque disparaît aussi.
-    const effacees = new Set(ecritures.filter((ecriture) => ecriture.effacerModification).map(({ id }) => id));
-    etat.plats = [
-      ...etat.plats.map((plat) => {
-        if (!recus.has(plat.id)) return plat;
-        const maj = { ...plat, ...recus.get(plat.id) };
-        if (effacees.has(plat.id)) {
-          delete maj.modifieeLe;
-          delete maj.modifieePar;
-        }
-        return maj;
-      }),
-      ...ecritures.filter(({ id }) => !etat.plats.some((plat) => plat.id === id)).map(({ donnees: champs }) => champs),
-    ];
+    const aVersions = ecritures.some((ecriture) => ecriture.mode === 'versions');
+    if (aVersions && !navigator.onLine) {
+      return Promise.reject(Object.assign(new Error('Il faut être connecté pour ajouter des versions.'), { code: 'hors_ligne' }));
+    }
+    // Noms lus avant l'envoi : un plat disparu entre-temps n'est plus dans la liste quand la réponse arrive.
+    const nomsAvant = new Map(etat.plats.map((plat) => [plat.id, plat.nom]));
+    const { envoi, versions } = donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email);
+    ecrire(envoi, 'Les recettes n’ont pas pu être enregistrées. Réessayez.');
+    etat.plats = appliquerImport(etat.plats, ecritures);
     cloreDemandes(demandesAClore);
+    if (!aVersions) {
+      versions.catch(() => {});
+      return Promise.resolve({ manquants: [] });
+    }
+    const uid = etat.utilisateur.uid;
+    return versions.then(({ manquants }) => {
+      const noms = manquants.map((id) => String(nomsAvant.get(id) ?? id));
+      if (etat.utilisateur?.uid !== uid) return { manquants: noms };
+      const parProfil = profilsDesVersions(ecritures).map((pour) => {
+        const profil = etat.profils.find((p) => p.id === pour);
+        return {
+          nom: profil?.nom ?? '',
+          ajoutees: versionsEcrites(ecritures, pour, manquants),
+          restants: profil ? bilanCompatibilite(etat.plats, profil, { evaluer: compat }).aCreer : 0,
+        };
+      });
+      const texte = annonceVersions(parProfil, noms);
+      if (texte) annoncer(texte);
+      return { manquants: noms };
+    }, (erreur) => {
+      annoncer('Les versions n’ont pas pu être enregistrées. Réessayez.');
+      throw Object.assign(new Error('Les versions n’ont pas pu être enregistrées.'), { code: 'echec', cause: erreur });
+    });
+  },
+  /**
+   * Texte des instructions du projet Claude (`docs/projet-claude.md`, gardé par le service worker : lu tout de suite,
+   * hors ligne compris). Lu une fois ; un échec n'est pas retenu, le toucher suivant relit.
+   * → promesse du texte ; rejetée si le fichier n'a pas pu être lu.
+   */
+  lireInstructionsClaude() {
+    if (!instructionsClaude) {
+      instructionsClaude = fetch('./docs/projet-claude.md')
+        .then((reponse) => {
+          if (!reponse.ok) throw new Error(`Instructions illisibles (${reponse.status}).`);
+          return reponse.text();
+        })
+        .then((texte) => {
+          if (!texte.trim()) throw new Error('Instructions vides.');
+          return texte;
+        });
+      instructionsClaude.catch(() => {
+        instructionsClaude = null;
+      });
+    }
+    return instructionsClaude;
   },
   /**
    * Recette modifiée à la main, préparée par coeur/edition.js › preparerModification. Affichée tout de suite
@@ -563,6 +615,17 @@ const actions = {
   },
   /** Téléchargement d'un fichier (copie de précaution avant une restauration). Synchrone, dans le toucher. */
   telecharger,
+  /**
+   * Plats déjà copiés pour Claude par la personne connectée (30 jours, ce téléphone) : l'option `envoyes` de
+   * coeur/compatibilite.js › platsSansVersion. → [platId] ([] si rien n'est gardé).
+   */
+  lireEnvoyes() {
+    return lireEnvoyes(etat.utilisateur?.uid);
+  },
+  /** Retient les plats d'un lot copié pour Claude (ils passent en fin de liste). Échec silencieux. */
+  noterEnvoyes(platIds) {
+    noterEnvoyes(etat.utilisateur?.uid, platIds);
+  },
 };
 
 /**
@@ -682,6 +745,7 @@ async function seDeconnecter() {
   }
   // Les modifications pas encore enregistrées ne restent pas sur le téléphone après la déconnexion.
   effacerBrouillons();
+  effacerEnvoyes();
 }
 
 async function lancerCreation() {
@@ -786,6 +850,7 @@ function demarrer() {
       // L'écran en place (une modification en cours) est fermé avant l'effacement des brouillons.
       rendre();
       effacerBrouillons();
+      effacerEnvoyes();
     }
   });
 }

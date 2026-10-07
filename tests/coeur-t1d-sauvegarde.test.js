@@ -670,7 +670,8 @@ test('restauration : recette cochée → bloc écrit, champs absents effacés, m
   const r = preparerRestauration(v, { ...app, demandes: [], email: 'b@example.com' }, { recettesAReprendre: ['gratin-test'] });
   const e = ecritureDe(r, 'gratin-test');
   assert.equal(e.mode, 'update');
-  assert.deepEqual(e.effacer.sort(), ['modifieeLe', 'modifieePar', 'source', 'variantes']);
+  // T2b : les versions de la fiche restent (jamais effacées par une recette reprise).
+  assert.deepEqual(e.effacer.sort(), ['modifieeLe', 'modifieePar', 'source']);
   assert.equal(e.donnees.ingredients[0].qte, 400);
   for (const champ of ['nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes', 'cuisson', 'tempsActifMin', 'conservation', 'emporter']) {
     assert.ok(champ in e.donnees, champ);
@@ -681,7 +682,7 @@ test('restauration : recette cochée → bloc écrit, champs absents effacés, m
   assert.equal(r.resume.recettesReprises, 1);
   assert.equal(r.resume.dontModifiees, 1);
   const apres = appliquer(app, r.lots).plats.find((p) => p.id === 'gratin-test');
-  assert.equal('variantes' in apres, false);
+  assert.deepEqual(apres.variantes, FICHE_COMPLETE.variantes);
   assert.equal('modifieeLe' in apres, false);
   assert.deepEqual(apres.notes, FICHE_COMPLETE.notes);
   assert.equal(apres.vignette, FICHE_COMPLETE.vignette, 'photo intacte');
@@ -822,6 +823,7 @@ test('résumé : comptes exacts', () => {
     ajoutesDepuis: 2,
     nonRemis: [],
     reglesRemises: [], // T2a : aucun profil du fichier n'a de règles
+    versionsRemises: [], // T2b : les versions du fichier sont déjà sur les fiches
   });
   assert.equal(r.recettesDifferentes.length, 1);
   assert.equal(r.rien, false);
@@ -902,9 +904,12 @@ test('recetteValidee : défauts complétés, notes et suivi écartés, null si a
 
 test('demandesSatisfaites : recette reçue et variantes, demandes ouvertes seulement', () => {
   const ouvertes = new Set(['gratin-test__recette', 'gratin-test__profil-b', 'gratin-test__enfant']);
-  assert.deepEqual(demandesSatisfaites('gratin-test', FICHE_COMPLETE, ouvertes), ['gratin-test__recette', 'gratin-test__profil-b']);
-  assert.deepEqual(demandesSatisfaites('gratin-test', { id: 'gratin-test', nom: 'Gratin' }, [...ouvertes]), []);
-  assert.deepEqual(demandesSatisfaites('gratin-test', FICHE_COMPLETE, []), []);
+  // T2b : `profils` obligatoire (une version n'est satisfaite que si elle convient au profil).
+  const profils = clone(PROFILS);
+  assert.deepEqual(demandesSatisfaites('gratin-test', FICHE_COMPLETE, ouvertes, { profils }), ['gratin-test__recette', 'gratin-test__profil-b']);
+  assert.deepEqual(demandesSatisfaites('gratin-test', { id: 'gratin-test', nom: 'Gratin' }, [...ouvertes], { profils }), []);
+  assert.deepEqual(demandesSatisfaites('gratin-test', FICHE_COMPLETE, [], { profils }), []);
+  assert.throws(() => demandesSatisfaites('gratin-test', FICHE_COMPLETE, ouvertes), TypeError);
 });
 
 test('preparerImport : recette identique → statut identique, aucune écriture, marque gardée ; différente → remplace', () => {
@@ -914,9 +919,12 @@ test('preparerImport : recette identique → statut identique, aucune écriture,
   assert.equal(identique.elements[0].statut, 'identique');
   assert.deepEqual(identique.ecritures, []);
   assert.equal('modifieeA' in identique.elements[0], false);
-  // Même recette, nom différent : pas identique.
+  // T2b : même recette, nom différent → le nom de la fiche est gardé, rien n'est écrit, avertissement.
   const renommee = preparerImport(recu, { plats: [{ ...fiche, nom: 'Tarte renommée' }], demandes: [] });
-  assert.notEqual(renommee.elements[0].statut, 'identique');
+  assert.equal(renommee.elements[0].statut, 'identique');
+  assert.equal(renommee.elements[0].nom, 'Tarte renommée');
+  assert.deepEqual(renommee.ecritures, []);
+  assert.match(renommee.elements[0].avertissements.join(' '), /le nom de la fiche est gardé/);
   // Recette différente : remplacée comme avant, la marque est effacée.
   const differente = preparerImport(recu, { plats: [{ ...fiche, etapes: ['Autre.'] }], demandes: [] });
   assert.equal(differente.elements[0].statut, 'remplace');

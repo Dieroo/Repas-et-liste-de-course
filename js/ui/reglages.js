@@ -1,6 +1,7 @@
 // Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde.
 import { el, enteteVue, etatVide, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
+import { copier } from './presse-papiers.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
 import { dateDeSauvegarde, joursDepuis } from '../coeur/sauvegarde.js';
 import { REGIMES, lireRegime } from '../coeur/regles.js';
@@ -167,8 +168,73 @@ export function resumeSauvegarde({ horsLigne, aCorriger = [] }, { dansReglages =
   return phrases.join(' ');
 }
 
+/**
+ * Carte « Projet Claude » : copie les instructions à coller dans le projet Claude (`docs/projet-claude.md`). Le texte
+ * est lu à l'ouverture de Réglages (gardé par l'app, donc tout de suite là) : la copie part dans le toucher, sans
+ * attente, et le repli de copie fonctionne. → { noeud, detruire }
+ */
+function creerCarteProjetClaude(ctx) {
+  let instructions = null;
+  let detruit = false;
+  const etat = el('p', { class: 'aide', role: 'status' });
+  const bouton = el('button', {
+    class: 'bouton bouton-secondaire bouton-plein',
+    type: 'button',
+    disabled: true,
+    onclick: async () => {
+      if (!instructions) return;
+      const reussi = await copier(instructions);
+      etat.textContent = reussi
+        ? 'Copié. Collez-le dans les instructions de votre projet Claude.'
+        : 'La copie n’a pas marché. Réessayez.';
+      etat.hidden = false;
+    },
+  }, el('span', { 'aria-hidden': 'true' }, '📋'), 'Copier les instructions du projet');
+  const reessayer = el('button', { class: 'bouton bouton-texte', type: 'button', hidden: true, onclick: lire }, 'Réessayer');
+
+  function lire() {
+    reessayer.hidden = true;
+    etat.hidden = true;
+    etat.textContent = '';
+    bouton.disabled = true;
+    const lecture = typeof ctx.actions?.lireInstructionsClaude === 'function'
+      ? ctx.actions.lireInstructionsClaude()
+      : Promise.reject(new Error('Lecture indisponible.'));
+    lecture.then((texte) => {
+      if (detruit) return;
+      instructions = typeof texte === 'string' && texte.trim() ? texte : null;
+      if (!instructions) throw new Error('Instructions vides.');
+      bouton.disabled = false;
+    }).catch(() => {
+      if (detruit) return;
+      etat.textContent = 'Les instructions n’ont pas pu être lues. Réessayez.';
+      etat.hidden = false;
+      reessayer.hidden = false;
+    });
+  }
+
+  lire();
+  return {
+    noeud: el('section', { class: 'carte carte-projet-claude' },
+      el('h2', {}, 'Projet Claude'),
+      el('p', { class: 'texte-doux' },
+        'Les instructions qui apprennent à votre projet Claude à écrire les recettes et les versions pour l’app.'),
+      bouton,
+      etat,
+      reessayer,
+      el('p', { class: 'aide' }, 'Le plus simple\u00A0: faites-le depuis l’ordinateur, où vous modifiez votre projet Claude.'),
+      el('a', { class: 'lien-fiche', href: './docs/projet-claude.md', target: '_blank', rel: 'noopener' },
+        'Ouvrir les instructions ›'),
+    ),
+    detruire() {
+      detruit = true;
+    },
+  };
+}
+
 export function creer(ctx) {
   let courant = ctx;
+  const carteProjetClaude = creerCarteProjetClaude(ctx);
   const gestionnaire = el('dd', {});
   const listeProfils = el('div', { class: 'section' });
 
@@ -267,6 +333,7 @@ export function creer(ctx) {
       ),
       listeProfils,
       carteSauvegarde,
+      carteProjetClaude.noeud,
       etatVide({
         emoji: '⚙️',
         teinte: 'olive',
@@ -277,6 +344,9 @@ export function creer(ctx) {
     maj(nouveau) {
       courant = nouveau;
       remplir();
+    },
+    detruire() {
+      carteProjetClaude.detruire();
     },
   };
 }
