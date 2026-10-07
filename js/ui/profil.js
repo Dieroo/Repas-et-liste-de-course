@@ -1,6 +1,7 @@
 // Avatar de l'en-tête et panneau du profil (feuille du bas).
 import { el, annoncer } from './dom.js';
 import { messageDeReliure } from './relier.js';
+import { joursDepuis } from '../coeur/sauvegarde.js';
 
 /** Prénom affiché : premier mot du nom Google, '' s'il n'y en a pas. */
 export function prenomDe(utilisateur) {
@@ -96,14 +97,41 @@ function blocReliure({ moi, aRelier, avecProfils, role, bouton, onQuiEtesVous, o
   ];
 }
 
+// Au-delà, le panneau du profil rappelle de faire une sauvegarde.
+const JOURS_RAPPEL_SAUVEGARDE = 30;
+
+/**
+ * Rappel de sauvegarde (gestionnaire) : sans sauvegarde, ou si la dernière date de plus de 30 jours, une ligne et le
+ * bouton « Télécharger une sauvegarde ». `sauvegarde` : { derniere: Date | null }, ou null (pas de rappel).
+ */
+function blocSauvegarde(sauvegarde, onSauvegarder, bouton) {
+  if (!sauvegarde || !onSauvegarder) return [];
+  const { derniere } = sauvegarde;
+  let message = null;
+  if (!derniere) {
+    message = '⚠️ Pas encore de sauvegarde';
+  } else {
+    const jours = Math.floor(joursDepuis(derniere, new Date()));
+    if (jours > JOURS_RAPPEL_SAUVEGARDE) message = `⚠️ Dernière sauvegarde il y a ${jours}\u00A0jours`;
+  }
+  if (!message) return [];
+  return [
+    el('p', {}, message),
+    bouton('⬇️ Télécharger une sauvegarde', onSauvegarder, 'bouton-principal'),
+  ];
+}
+
 /**
  * Remplit et ouvre le panneau du profil. `role` est le rôle réel ; `apercu` : vue « Repas et courses » affichée.
  * `moi` : profil relié à l'adresse connectée, ou null ; `aRelier` : prénoms que « Qui êtes-vous ? » proposerait
  * (coeur/profils.js › profilsARelier) ; `avecProfils` : le foyer a au moins un profil.
+ * `sauvegarde` : { derniere: Date | null } pour le rappel de sauvegarde (gestionnaire), null sinon ;
+ * `onSauvegarder()` est appelé dans le toucher, panneau déjà fermé.
  */
 export function ouvrirProfil(dialogue, {
   utilisateur, role, apercu, moi = null, aRelier = [], avecProfils = false,
   onReglages, onAjouterRecettes, onApercu, onDeconnecter, onQuiEtesVous, onDelier,
+  sauvegarde = null, onSauvegarder,
 }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
@@ -125,6 +153,7 @@ export function ouvrirProfil(dialogue, {
       ),
       el('p', { class: 'etiquette' }, LIBELLES_ROLE[role] ?? ''),
       blocReliure({ moi, aRelier, avecProfils, role, bouton, onQuiEtesVous, onDelier, fermer }),
+      role === 'gestionnaire' && !apercu ? blocSauvegarde(sauvegarde, onSauvegarder, bouton) : null,
       role === 'gestionnaire' && !apercu ? bouton('📋 Ajouter des recettes', onAjouterRecettes) : null,
       role === 'gestionnaire' && !apercu ? bouton('⚙️ Réglages', onReglages) : null,
       role === 'gestionnaire'

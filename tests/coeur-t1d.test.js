@@ -614,10 +614,13 @@ test('preparerImport : les écritures ne contiennent jamais les notes', () => {
   const valide = validerPaquet([paquet]);
   assert.equal(valide.valide, true);
   assert.equal(contientNotes(valide.plats[0].donnees), false);
-  assert.ok(valide.plats[0].avertissements.length > 0);
+  // T1d-2 : notes, derniereFois… sont des champs connus mais ignorés ; seules les notes donnent un avertissement.
+  assert.deepEqual(valide.avertissements.map((a) => a.message), ['Les notes ne sont pas reprises ici.']);
+  assert.deepEqual(valide.plats[0].avertissements, []);
   const donnees = valide.plats.map((p) => p.donnees);
-  // Nouveau plat, recette remplacée sur une fiche notée, plat ⏳ noté complété.
-  const notee = { ...clone(RECETTE), notes: { 'profil-a': 5, enfant: 0 } };
+  // Nouveau plat, recette remplacée sur une fiche notée (recette différente : une recette identique n'est pas
+  // réécrite), plat ⏳ noté complété.
+  const notee = { ...clone(RECETTE), etapes: ['Autre étape.'], notes: { 'profil-a': 5, enfant: 0 } };
   const attente = { id: 'gratin-test', nom: 'Gratin test', notes: { 'profil-a': 3 } };
   for (const plats of [[], [notee], [attente]]) {
     const r = preparerImport(donnees, { plats, demandes: [] });
