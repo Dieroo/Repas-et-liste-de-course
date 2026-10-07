@@ -12,6 +12,7 @@ import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner
 import { nouveauPlatParNom } from './coeur/plats.js';
 import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from './coeur/profils.js';
 import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
+import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -33,6 +34,8 @@ import * as modifier from './ui/modifier.js';
 import * as decouvrir from './ui/decouvrir.js';
 import * as reglages from './ui/reglages.js';
 import * as importRecettes from './ui/import.js';
+import * as restaurer from './ui/restaurer.js';
+import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
@@ -47,6 +50,7 @@ const ECRANS = {
   decouvrir: { titre: 'Découvrir', module: decouvrir, onglet: 'decouvrir' },
   reglages: { titre: 'Réglages', module: reglages, onglet: null },
   import: { titre: 'Ajouter des recettes', module: importRecettes, onglet: 'plats' },
+  restaurer: { titre: 'Restaurer une sauvegarde', module: restaurer, onglet: null },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -78,8 +82,10 @@ const etat = {
   collectionsSuivies: false,
   profils: [],
   profilsCharges: false,
+  profilsDepuisCache: false, // copie du téléphone, pas encore confirmée par le serveur
   plats: [],
   platsCharges: false,
+  platsDepuisCache: false,
   demandes: [],
   demandesChargees: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
@@ -466,6 +472,49 @@ const actions = {
     });
     feuilleQuiEtesVous = feuille;
   },
+  /**
+   * Télécharge une sauvegarde (CLAUDE.md §8), construite depuis les données de ce téléphone. Synchrone : à appeler
+   * dans le toucher (le navigateur bloque un téléchargement lancé après une attente). En ligne seulement, la date est
+   * marquée dans `reglages/foyer.derniereSauvegarde` et appliquée tout de suite sur ce téléphone ; hors ligne, le
+   * fichier ne compte pas comme dernière sauvegarde.
+   * → { resume, aCorriger, horsLigne }, ou null tant que plats et profils ne sont pas chargés (rien n'est téléchargé).
+   */
+  sauvegarder() {
+    if (!etat.platsCharges || !etat.profilsCharges) return null;
+    const maintenant = new Date();
+    const { nomFichier, texte, resume, aCorriger } = creerSauvegarde(
+      { plats: etat.plats, profils: etat.profils },
+      { maintenant },
+    );
+    telecharger(nomFichier, texte);
+    // Copie du téléphone pas encore confirmée par le serveur (réseau absent ou médiocre) : le fichier est donné,
+    // mais il ne compte pas comme dernière sauvegarde.
+    const horsLigne = !navigator.onLine || etat.platsDepuisCache || etat.profilsDepuisCache;
+    if (!horsLigne) {
+      ecrire(donnees.marquerSauvegarde(maintenant), 'La date de la sauvegarde n’a pas pu être enregistrée.');
+      if (etat.donnees.reglages) {
+        etat.donnees = { ...etat.donnees, reglages: { ...etat.donnees.reglages, derniereSauvegarde: maintenant } };
+      }
+      rendre();
+    }
+    return { resume, aCorriger, horsLigne };
+  },
+  /** Profils, plats et demandes lus sur le serveur (restauration). → promesse ; rejetée hors ligne. */
+  lireDepuisServeur() {
+    if (!navigator.onLine) return Promise.reject(new Error('Hors ligne.'));
+    return donnees.lireDepuisServeur();
+  },
+  /**
+   * Restaure une sauvegarde préparée par coeur/sauvegarde.js › preparerRestauration. Les écrans suivent les
+   * instantanés de Firestore, qui arrivent aussitôt. → promesse de l'envoi ; rejetée hors ligne ou en cas d'échec
+   * (l'écran le dit : relancer est sans risque).
+   */
+  restaurer(preparation) {
+    if (!navigator.onLine) return Promise.reject(new Error('Hors ligne.'));
+    return donnees.restaurer(preparation, etat.utilisateur.email);
+  },
+  /** Téléchargement d'un fichier (copie de précaution avant une restauration). Synchrone, dans le toucher. */
+  telecharger,
 };
 
 /**
@@ -515,7 +564,22 @@ function ouvrirPanneauProfil() {
       actions.ouvrirQuiEtesVous();
     },
     onDelier: () => actions.delierProfil(),
+    // Rappel de sauvegarde : gestionnaire, hors aperçu, une fois plats et profils chargés.
+    sauvegarde: ctx.roleReel === 'gestionnaire' && !etat.apercu && etat.platsCharges && etat.profilsCharges
+      ? { derniere: dateDeSauvegarde(ctx.reglages?.derniereSauvegarde) }
+      : null,
+    onSauvegarder: sauvegarderDepuisLePanneau,
   });
+}
+
+/** « Télécharger une sauvegarde » du panneau du profil (déjà fermé) : téléchargement dans le toucher, puis annonce. */
+function sauvegarderDepuisLePanneau() {
+  const resultat = actions.sauvegarder();
+  if (!resultat) {
+    annoncer('Les plats sont encore en chargement. Réessayez dans un instant.');
+    return;
+  }
+  annoncer(reglages.resumeSauvegarde(resultat));
 }
 
 function changerApercu(actif) {
@@ -549,8 +613,10 @@ function oublierDonnees() {
     collectionsSuivies: false,
     profils: [],
     profilsCharges: false,
+    profilsDepuisCache: false,
     plats: [],
     platsCharges: false,
+    platsDepuisCache: false,
     demandes: [],
     demandesChargees: false,
     apercu: false,

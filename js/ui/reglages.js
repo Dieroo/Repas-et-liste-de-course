@@ -1,7 +1,30 @@
-// Écran Réglages (gestionnaire) : rôle, profils du foyer.
+// Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde.
 import { el, enteteVue, etatVide, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
+import { dateDeSauvegarde, joursDepuis } from '../coeur/sauvegarde.js';
+
+// Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
+const JOURS_RAPPEL_SAUVEGARDE = 30;
+
+/** « le 6 octobre » (« le 1er mai ») ; l'année s'ajoute si ce n'est pas l'année en cours. Fuseau du téléphone. */
+function leJour(date) {
+  const jour = date.getDate();
+  const mois = date.toLocaleDateString('fr-FR', { month: 'long' });
+  const annee = date.getFullYear() === new Date().getFullYear() ? '' : ` ${date.getFullYear()}`;
+  return `le ${jour === 1 ? '1er' : jour}\u00A0${mois}${annee}`;
+}
+
+/** État de la carte « Sauvegarde » : dernière date, absence, ou rappel au-delà de 30 jours. */
+function texteEtatSauvegarde(valeur) {
+  const derniere = dateDeSauvegarde(valeur);
+  if (!derniere) return 'Pas encore de sauvegarde.';
+  const jours = Math.floor(joursDepuis(derniere, new Date()));
+  if (jours > JOURS_RAPPEL_SAUVEGARDE) {
+    return `⚠️ Dernière sauvegarde il y a ${jours}\u00A0jours\u00A0: pensez à en faire une.`;
+  }
+  return `Dernière sauvegarde\u00A0: ${leJour(derniere)}.`;
+}
 
 /** `lireCtx()` donne l'état à jour au moment d'enregistrer (les profils ont pu changer entre-temps). */
 function ouvrirFicheProfil(lireCtx, existant) {
@@ -92,6 +115,21 @@ function ouvrirFicheProfil(lireCtx, existant) {
   });
 }
 
+/** Le fichier ne vient que de la copie du téléphone (pas de réseau, ou données pas encore confirmées). */
+export function texteCopieLocale() {
+  return `${navigator.onLine ? 'Données pas encore à jour' : 'Hors ligne'}\u00A0: ce fichier contient la copie de cet appareil. Il ne compte pas comme dernière sauvegarde.`;
+}
+
+/** Message court lu après un téléchargement ; le détail reste affiché dans Réglages. */
+export function resumeSauvegarde({ horsLigne, aCorriger = [] }, { dansReglages = false } = {}) {
+  const phrases = ['Téléchargement lancé. Vérifiez qu’il est dans «\u00A0Téléchargements\u00A0».'];
+  if (horsLigne) phrases.push('Il ne compte pas comme dernière sauvegarde.');
+  const ou = dansReglages ? 'détails sous le bouton' : 'voir Réglages › Sauvegarde';
+  if (aCorriger.length === 1) phrases.push(`Une recette est à corriger\u00A0: ${ou}.`);
+  else if (aCorriger.length > 1) phrases.push(`${aCorriger.length} recettes sont à corriger\u00A0: ${ou}.`);
+  return phrases.join(' ');
+}
+
 export function creer(ctx) {
   let courant = ctx;
   const gestionnaire = el('dd', {});
@@ -99,7 +137,53 @@ export function creer(ctx) {
 
   const lireCtx = () => courant;
 
+  // ——— Sauvegarde ———
+  const etatSauvegarde = el('p', { class: 'sauvegarde-etat' });
+  // Aide gardée d'un rendu à l'autre, jusqu'à la sortie de l'écran. Pas de zone annoncée ici : un seul message
+  // court est lu (annoncer), l'aide détaillée se lit au balayage.
+  const aideSauvegarde = el('div', { class: 'sauvegarde-aide' });
+  const boutonSauvegarder = el('button', {
+    class: 'bouton bouton-principal bouton-plein',
+    type: 'button',
+    // Synchrone : le téléchargement part dans le toucher, sans attente (sinon le navigateur peut le bloquer).
+    onclick: () => {
+      const resultat = courant.actions.sauvegarder();
+      if (!resultat) {
+        annoncer('Les plats sont encore en chargement. Réessayez dans un instant.');
+        return;
+      }
+      // replaceChildren écrirait « null » pour un élément absent : seuls les éléments présents sont passés.
+      aideSauvegarde.replaceChildren(...[
+        el('p', { class: 'aide' },
+          'Téléchargement lancé. Vérifiez qu’il est dans «\u00A0Téléchargements\u00A0», puis mettez-le à l’abri, dans Google Drive par exemple. Gardez-le pour vous\u00A0: il contient les adresses des profils.'),
+        resultat.horsLigne ? el('p', { class: 'aide' }, texteCopieLocale()) : null,
+        (resultat.aCorriger ?? []).length
+          ? el('ul', { class: 'liste-a-corriger' }, resultat.aCorriger.map(({ id, nom }) => el('li', {},
+            el('p', {}, `⚠️ La recette de «\u00A0${nom}\u00A0» est abîmée\u00A0: elle ne pourra pas être reprise depuis cette sauvegarde. Corrigez-la dans l’app.`),
+            el('a', { class: 'lien-fiche', href: `#/plat/${encodeURIComponent(id)}` }, `Ouvrir «\u00A0${nom}\u00A0» ›`),
+          )))
+          : null,
+      ].filter(Boolean));
+      annoncer(resumeSauvegarde(resultat, { dansReglages: true }));
+    },
+  }, '⬇️ Télécharger une sauvegarde');
+  const carteSauvegarde = el('section', { class: 'carte carte-sauvegarde' },
+    el('h2', {}, 'Sauvegarde'),
+    el('p', { class: 'texte-doux' }, 'Un fichier avec vos plats, leurs recettes, vos notes et les profils. Les photos n’y sont pas.'),
+    etatSauvegarde,
+    boutonSauvegarder,
+    aideSauvegarde,
+    el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/restaurer' }, 'Restaurer une sauvegarde ›'),
+  );
+
+  function remplirSauvegarde() {
+    etatSauvegarde.textContent = texteEtatSauvegarde(courant.reglages?.derniereSauvegarde);
+    // Avant le chargement, le fichier serait incomplet.
+    boutonSauvegarder.disabled = !(courant.platsCharges && courant.profilsCharges);
+  }
+
   function remplir() {
+    remplirSauvegarde();
     gestionnaire.textContent = courant.reglages?.gestionnaire ?? '';
     const profils = trierProfils(courant.profils);
     const cleFocus = listeProfils.contains(document.activeElement) ? document.activeElement.dataset.cle : null;
@@ -144,11 +228,12 @@ export function creer(ctx) {
         el('dl', { class: 'ligne-info' }, el('dt', {}, 'Recettes et réglages'), gestionnaire),
       ),
       listeProfils,
+      carteSauvegarde,
       etatVide({
         emoji: '⚙️',
         teinte: 'olive',
         titre: 'D’autres réglages arrivent',
-        texte: 'Les rayons du magasin, les appareils et la sauvegarde trouveront leur place ici.',
+        texte: 'Les rayons du magasin et les appareils trouveront leur place ici.',
       }),
     ),
     maj(nouveau) {

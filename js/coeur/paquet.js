@@ -28,8 +28,11 @@ export const VOCABULAIRES = {
 const VIANDES = ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie'];
 const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
 
-const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
+export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
   'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
+// Champs de la fiche connus mais jamais repris par l'ajout de recettes (notes, dernier passage, marque « modifiée à
+// la main ») : ils voyagent dans une sauvegarde, que seule la restauration reprend.
+const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar'];
 const CHAMPS_INGREDIENT = ['produit', 'qte', 'qtePortion', 'unite', 'rayon', 'marqueurs', 'forme', 'role'];
 const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
@@ -76,18 +79,19 @@ function lireObjet(morceau) {
 
 /**
  * Retrouve les recettes dans un texte : réponse complète de Claude (prose et blocs de code), bloc seul ou fichier.
+ * `max` : longueur acceptée (collage : TEXTE_MAX ; fichier : coeur/sauvegarde.js › FICHIER_MAX).
  * → { paquets: [objet, …] } ou { erreur } avec erreur ∈ vide, trop_long, demande, coupee, aucune.
  */
-export function extrairePaquet(texte) {
+export function extrairePaquet(texte, { max = TEXTE_MAX } = {}) {
   const brut = String(texte ?? '');
   if (!brut.trim()) return { erreur: 'vide' };
-  if (brut.length > TEXTE_MAX) return { erreur: 'trop_long' };
+  if (brut.length > max) return { erreur: 'trop_long' };
   // Sa propre demande, ou les corrections, recollées à la place de la réponse de Claude.
   if (/^\s*(DEMANDE-|CORRECTION\s+paquet@)/i.test(brut)) return { erreur: 'demande' };
   const paquets = [];
   let finDernier = -1; // fin du dernier objet lu
   let coupe = -1; // dernier objet commencé, jamais refermé, qui annonce une recette
-  let budget = 20 * TEXTE_MAX; // caractères parcourus au plus (évite un coût quadratique)
+  let budget = 20 * max; // caractères parcourus au plus (évite un coût quadratique)
   let i = brut.indexOf('{');
   while (i !== -1 && budget > 0) {
     const fin = finDObjet(brut, i);
@@ -457,17 +461,23 @@ function validerPlat(brut, index, idsProfils) {
   const source = texte(brut.source);
   if (source) donnees.source = source;
 
-  if (Object.keys(brut).some((cle) => !CHAMPS_PLAT.includes(cle))) inconnu();
+  if (Object.keys(brut).some((cle) => !CHAMPS_PLAT.includes(cle) && !CHAMPS_IGNORES.includes(cle))) inconnu();
   if (champsInconnus) prevenir(`${affiche}\u00A0: des informations non reconnues ont été ignorées.`, ': champs inconnus ignorés');
   return resultat(donnees);
 }
 
+/** Vrai si l'un des objets retrouvés est une sauvegarde de l'app (il porte `sauvegardeLe`) : elle se restaure, elle ne s'ajoute pas. */
+export function estSauvegarde(paquets) {
+  return (Array.isArray(paquets) ? paquets : [paquets]).some((paquet) => estObjet(paquet) && Object.hasOwn(paquet, 'sauvegardeLe'));
+}
+
 /**
  * Valide les recettes retrouvées (CLAUDE.md §8). `profils` : profils de l'app (variante pour un profil inconnu → avertissement).
+ * `platsMax` : nombre de recettes accepté ; `doublonsDeNom` : false pour une sauvegarde, restaurée par identifiant.
  * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide }
  *   `donnees` ne contient que des champs présents et valides (aucune valeur undefined, aucune table vide).
  */
-export function validerPaquet(paquets, { profils = null } = {}) {
+export function validerPaquet(paquets, { profils = null, platsMax = PLATS_MAX, doublonsDeNom = true } = {}) {
   const erreurs = [];
   const avertissements = [];
   const bruts = [];
@@ -488,21 +498,26 @@ export function validerPaquet(paquets, { profils = null } = {}) {
   if (clesIgnorees) {
     avertissements.push({ message: 'Seules les recettes sont ajoutées ici\u00A0: le reste a été ignoré.', pourClaude: 'clés autres que plats ignorées' });
   }
+  if (bruts.some((brut) => estObjet(brut) && brut.notes != null)) {
+    avertissements.push({ message: 'Les notes ne sont pas reprises ici.', pourClaude: 'notes ignorées' });
+  }
   if (!bruts.length && !erreurs.length) {
     erreurs.push({ message: 'Aucune recette dans ce texte.', pourClaude: 'plats : au moins une recette attendue' });
   }
-  if (bruts.length > PLATS_MAX) {
-    erreurs.push({ message: `Trop de recettes d’un coup (${PLATS_MAX} au plus).`, pourClaude: `plats : ${PLATS_MAX} au plus` });
+  if (bruts.length > platsMax) {
+    erreurs.push({ message: `Trop de recettes d’un coup (${platsMax} au plus).`, pourClaude: `plats : ${platsMax} au plus` });
     return { plats: [], erreurs, avertissements, valide: false };
   }
 
   const idsProfils = Array.isArray(profils) && profils.length ? new Set(profils.map((p) => p.id)) : null;
   const plats = bruts.map((brut, index) => validerPlat(brut, index, idsProfils));
 
-  // Doublons dans le collage : même identifiant ou même nom.
+  // Doublons dans le collage : même identifiant ou même nom (sauf demande contraire).
   const vus = new Map();
   for (const plat of plats) {
-    for (const [cle, quoi] of [[`id:${plat.id}`, 'identifiant'], [`nom:${slug(plat.nom)}`, 'nom']]) {
+    const cles = [[`id:${plat.id}`, 'identifiant']];
+    if (doublonsDeNom) cles.push([`nom:${slug(plat.nom)}`, 'nom']);
+    for (const [cle, quoi] of cles) {
       if (cle.endsWith(':')) continue;
       if (vus.has(cle)) {
         erreurs.push({
@@ -521,6 +536,44 @@ export function validerPaquet(paquets, { profils = null } = {}) {
 
 // ——— Préparer les écritures ———
 
+/**
+ * Recette d'une fiche (champs du §8), validée comme à l'ajout de recettes et complétée de ses défauts (type plat,
+ * récurrence aucune, statut ⏳) : deux recettes égales selon edition.js › egalProfonde sont identiques. null si la
+ * recette de la fiche n'est pas valide. Notes, photos et marques de mise à jour ne comptent pas.
+ */
+export function recetteValidee(plat) {
+  if (!estObjet(plat)) return null;
+  const brut = {};
+  for (const champ of CHAMPS_PLAT) if (plat[champ] != null) brut[champ] = plat[champ];
+  const resultat = validerPlat(brut, 0, null);
+  if (resultat.erreurs.length) return null;
+  return { type: 'plat', recurrence: 'aucune', statutRecette: 'attente', ...resultat.donnees };
+}
+
+/** Deux valeurs égales, à toute profondeur (ordre des clés indifférent). Même règle que edition.js › egalProfonde. */
+function egales(a, b) {
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => egales(v, b[i]));
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].every((cle) => egales(a[cle], b[cle]));
+}
+
+/**
+ * Demandes ouvertes que la recette reçue par le plat `id` satisfait : `<id>__recette` si elle a des ingrédients,
+ * `<id>__<profil>` pour chaque variante. `ouvertes` : identifiants des demandes ouvertes (Set ou liste).
+ */
+export function demandesSatisfaites(id, donnees, ouvertes) {
+  const ouverte = ouvertes instanceof Set ? (cle) => ouvertes.has(cle) : (cle) => (ouvertes ?? []).includes(cle);
+  const satisfaites = [];
+  if (donnees?.ingredients?.length && ouverte(`${id}__recette`)) satisfaites.push(`${id}__recette`);
+  for (const variante of Array.isArray(donnees?.variantes) ? donnees.variantes : []) {
+    const demande = `${id}__${variante?.pour}`;
+    if (ouverte(demande) && !satisfaites.includes(demande)) satisfaites.push(demande);
+  }
+  return satisfaites;
+}
+
 function idLibre(base, pris) {
   let id = `${base}-2`;
   for (let n = 3; pris.has(id); n += 1) id = `${base}-${n}`;
@@ -538,7 +591,8 @@ function modifieeALaMain(plat) {
  * → { elements: [{ id, nom, statut, ancienNom?, modifieeA?, ingredients, etapes, avertissements }],
  *     ecritures: [{ id, donnees, effacerModification? }], demandesAClore: [id], erreurs, avertissements }
  *   statut ∈ nouveau, complete (⏳ complété), remplace (recette existante remplacée), inchange (pas d'ingrédients
- *   reçus pour un plat existant : sa recette reste).
+ *   reçus pour un plat existant : sa recette reste), identique (recette égale à la fiche, nom compris : rien n'est
+ *   écrit, la marque « modifiée à la main » reste).
  *   Fiche modifiée à la main, complétée ou remplacée : `modifieeA` (secondes de `modifieeLe`, ou true tant que
  *   l'écriture n'est pas confirmée) et `effacerModification: true` (la marque de modification est retirée).
  */
@@ -607,6 +661,25 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       avertissementsPlat.push(`Un autre plat s’appelle déjà «\u00A0${memeNom.nom}\u00A0».`);
     }
     const ecriture = { ...donnees, id: vise };
+    if (existant) {
+      const actuelle = recetteValidee(existant);
+      if (actuelle && egales(actuelle, recetteValidee(ecriture))) {
+        elements.push({
+          id: vise,
+          nom: donnees.nom,
+          statut: 'identique',
+          ingredients: donnees.ingredients?.length ?? 0,
+          etapes: donnees.etapes?.length ?? 0,
+          avertissements: avertissementsPlat,
+        });
+        // Aucune écriture du plat, mais une demande restée ouverte (lot de clôture perdu, ajout par nom croisé) est
+        // satisfaite : elle sera close.
+        for (const demande of demandesSatisfaites(vise, ecriture, ouvertes)) {
+          if (!demandesAClore.includes(demande)) demandesAClore.push(demande);
+        }
+        continue;
+      }
+    }
     const recue = Boolean(ecriture.ingredients?.length);
     // Sans ingrédients reçus, un plat qui a déjà sa recette garde son statut (il ne repasse pas en ⏳).
     if (!recue && existant && statutDe(existant) !== 'attente') delete ecriture.statutRecette;
@@ -627,10 +700,8 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     });
     ecritures.push({ id: vise, donnees: ecriture, ...(effacerModification ? { effacerModification: true } : {}) });
 
-    if (ecriture.ingredients?.length && ouvertes.has(`${vise}__recette`)) demandesAClore.push(`${vise}__recette`);
-    for (const variante of ecriture.variantes ?? []) {
-      const demande = `${vise}__${variante.pour}`;
-      if (ouvertes.has(demande) && !demandesAClore.includes(demande)) demandesAClore.push(demande);
+    for (const demande of demandesSatisfaites(vise, ecriture, ouvertes)) {
+      if (!demandesAClore.includes(demande)) demandesAClore.push(demande);
     }
   }
   return { elements, ecritures, demandesAClore, erreurs, avertissements };

@@ -2,6 +2,7 @@
 import {
   collection,
   doc,
+  getDocsFromServer,
   onSnapshot,
   runTransaction,
   writeBatch,
@@ -11,6 +12,7 @@ import {
 import { db } from './firebase.js';
 import { gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
 import { demandeDeRecette } from './coeur/plats.js';
+import { appliquerConditions } from './coeur/sauvegarde.js';
 import { cheminNote, noteValide } from './coeur/notes.js';
 
 let arreterSuiviReglages = null;
@@ -65,16 +67,31 @@ export function devenirGestionnaire(email) {
 
 /**
  * Suit les profils, les plats et les demandes en temps réel (un abonnement par collection).
- * rappel({ profils }), rappel({ plats }) ou rappel({ demandes }) à chaque changement, documents sous la forme
- * { id, ...champs }.
+ * rappel({ profils, profilsDepuisCache }), rappel({ plats, platsDepuisCache }) ou rappel({ demandes }) à chaque
+ * changement, documents sous la forme { id, ...champs } ; `…DepuisCache` : copie du téléphone, pas encore confirmée
+ * par le serveur.
  * surErreur(code) si une écoute s'arrête pour une autre raison qu'un accès refusé (géré par reglages/foyer).
  */
 export function suivreCollections(rappel, surErreur) {
   arreterCollections();
   for (const nom of ['profils', 'plats', 'demandes']) {
+    // Profils et plats : on sait aussi si la copie vient du serveur ou seulement du téléphone (sauvegarde).
+    const suivreCache = nom !== 'demandes';
+    let dernierCache = null;
     arretsCollections.push(onSnapshot(
       collection(db, nom),
-      (instantane) => rappel({ [nom]: instantane.docs.map((d) => ({ ...d.data(), id: d.id })) }),
+      { includeMetadataChanges: suivreCache },
+      (instantane) => {
+        const depuisCache = Boolean(instantane.metadata?.fromCache);
+        // Changement des seules métadonnées (écriture confirmée…) : rien à redessiner, sauf l'origine de la copie.
+        const changements = typeof instantane.docChanges === 'function' ? instantane.docChanges().length : 1;
+        if (suivreCache && dernierCache !== null && !changements && depuisCache === dernierCache) return;
+        dernierCache = depuisCache;
+        rappel({
+          [nom]: instantane.docs.map((d) => ({ ...d.data(), id: d.id })),
+          ...(suivreCache ? { [`${nom}DepuisCache`]: depuisCache } : {}),
+        });
+      },
       (erreur) => {
         if (erreur?.code !== 'permission-denied') surErreur(erreur?.code ?? '');
       },
@@ -170,7 +187,8 @@ export function importer({ ecritures, demandesAClore }, auteur) {
       if (effacerModification) Object.assign(document, { modifieeLe: deleteField(), modifieePar: deleteField() });
       lot.set(doc(db, 'plats', id), document, { mergeFields: Object.keys(document) });
     }
-    envoi = lot.commit();
+    // Recettes toutes identiques : seules les demandes restées ouvertes sont closes.
+    envoi = ecritures.length ? lot.commit() : Promise.resolve();
   } catch (erreur) {
     return Promise.reject(erreur);
   }
@@ -272,5 +290,103 @@ export function enregistrerProfil(profil) {
 export function retirerProfil(profilId) {
   const lot = writeBatch(db);
   lot.delete(doc(db, 'profils', profilId));
+  return lot.commit();
+}
+
+// ——— Sauvegarde et restauration (T1d-2) ———
+
+// Au-delà, le serveur est jugé injoignable : la restauration ne part que de données à jour.
+const DELAI_SERVEUR_MS = 15000;
+
+/**
+ * Lit les profils, les plats et les demandes sur le serveur, jamais dans la copie du téléphone : la restauration
+ * part des données à jour de l'autre téléphone. → promesse de { plats, profils, demandes } (documents sous la forme
+ * { id, ...champs }) ; rejetée hors ligne, ou si le serveur ne répond pas à temps.
+ */
+export function lireDepuisServeur() {
+  const noms = ['plats', 'profils', 'demandes'];
+  let minuteur = null;
+  const delai = new Promise((_, rejeter) => {
+    minuteur = setTimeout(() => rejeter(new Error('Serveur injoignable.')), DELAI_SERVEUR_MS);
+  });
+  const lecture = Promise.all(noms.map((nom) => getDocsFromServer(collection(db, nom))))
+    .then((instantanes) => Object.fromEntries(noms.map((nom, i) => [
+      nom,
+      instantanes[i].docs.map((d) => ({ ...d.data(), id: d.id })),
+    ])));
+  return Promise.race([lecture, delai]).finally(() => clearTimeout(minuteur));
+}
+
+/** Données préparées par le cœur → données Firestore : le marqueur { horodatageServeur: true } devient serverTimestamp(). */
+function versFirestore(valeur) {
+  if (Array.isArray(valeur)) return valeur.map(versFirestore);
+  if (valeur === null || typeof valeur !== 'object' || Object.getPrototypeOf(valeur) !== Object.prototype) return valeur;
+  if (valeur.horodatageServeur === true && Object.keys(valeur).length === 1) return serverTimestamp();
+  return Object.fromEntries(Object.entries(valeur).map(([cle, sous]) => [cle, versFirestore(sous)]));
+}
+
+const COLLECTIONS_RESTAUREES = new Set(['plats', 'profils']);
+// Écritures par transaction : sous les 500 d'une transaction Firestore, demandes closes comprises.
+const ECRITURES_PAR_TRANSACTION = 200;
+
+/**
+ * Restaure une sauvegarde (préparée par coeur/sauvegarde.js › preparerRestauration), par transactions de
+ * ECRITURES_PAR_TRANSACTION écritures au plus. Une transaction relit chaque document visé et ne garde que ce qui
+ * reste vrai à cet instant (coeur/sauvegarde.js › appliquerConditions) : une note, une recette ou un plat posés
+ * entre-temps sur l'autre téléphone ne sont jamais écrasés. Hors ligne, une transaction échoue au lieu d'être mise
+ * en file : rien ne part plus tard à l'insu de la personne.
+ * - `fusion` : `set` + `merge` (données imbriquées) ;
+ * - `update` : chemins (`notes.<profil>`, champs de recette), `effacer` → deleteField().
+ * Les demandes satisfaites par une écriture faite (`clore`) sont closes dans la même transaction.
+ * `auteur` : la personne connectée (`majPar` est déjà posé par le cœur).
+ * → promesse de la fin de toutes les transactions (rejetée à la première qui échoue ; les précédentes restent faites,
+ *   et une relance ne refait pas ce qui ne manque plus).
+ */
+export async function restaurer({ lots }, auteur) {
+  const ecritures = (lots ?? []).flat();
+  for (const { collection: nom, mode } of ecritures) {
+    if (!COLLECTIONS_RESTAUREES.has(nom)) throw new Error(`Collection refusée pour une restauration : ${nom}.`);
+    if (mode !== 'fusion' && mode !== 'update') throw new Error(`Mode d’écriture inconnu : ${mode}.`);
+  }
+  for (let debut = 0; debut < ecritures.length; debut += ECRITURES_PAR_TRANSACTION) {
+    const tranche = ecritures.slice(debut, debut + ECRITURES_PAR_TRANSACTION);
+    await runTransaction(db, async (transaction) => {
+      // Toutes les lectures d'abord, comme l'exige une transaction.
+      const actuels = [];
+      for (const ecriture of tranche) {
+        const instantane = await transaction.get(doc(db, ecriture.collection, ecriture.id));
+        actuels.push(instantane.exists() ? instantane.data() : null);
+      }
+      const aFaire = tranche.map((ecriture, i) => appliquerConditions(ecriture, actuels[i])).filter(Boolean);
+      const idsDemandes = [...new Set(aFaire.flatMap((ecriture) => ecriture.clore ?? []))];
+      const demandes = [];
+      for (const id of idsDemandes) {
+        const instantane = await transaction.get(doc(db, 'demandes', id));
+        if (instantane.exists() && instantane.data().statut === 'ouverte') demandes.push(id);
+      }
+      for (const { collection: nom, id, mode, donnees, effacer = [] } of aFaire) {
+        const reference = doc(db, nom, id);
+        const document = versFirestore(donnees ?? {});
+        if (mode === 'fusion') {
+          transaction.set(reference, document, { merge: true });
+        } else {
+          for (const champ of effacer) document[champ] = deleteField();
+          transaction.update(reference, document);
+        }
+      }
+      for (const id of demandes) {
+        transaction.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
+      }
+    });
+  }
+}
+
+/**
+ * Date de la dernière sauvegarde (date du téléphone, lisible tout de suite, contrairement à un serverTimestamp() en
+ * attente). À n'appeler qu'en ligne. → promesse de l'envoi.
+ */
+export function marquerSauvegarde(date) {
+  const lot = writeBatch(db);
+  lot.update(doc(db, 'reglages', 'foyer'), { derniereSauvegarde: date });
   return lot.commit();
 }

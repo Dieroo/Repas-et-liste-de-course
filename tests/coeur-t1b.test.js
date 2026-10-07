@@ -250,7 +250,9 @@ test('validerPaquet : avertissements (clés ignorées, champs inconnus, profil i
   assert.equal(resultat.valide, true);
   assert.match(resultat.avertissements[0].message, /Seules les recettes/);
   const messages = resultat.plats[0].avertissements.map((a) => a.message).join(' | ');
-  assert.match(messages, /non reconnues/);
+  assert.match(messages, /non reconnues/); // l'ingrédient porte un champ inconnu (`marque`)
+  // T1d-2 : les notes sont connues mais ignorées, avec leur propre avertissement.
+  assert.equal(resultat.avertissements[1].message, 'Les notes ne sont pas reprises ici.');
   assert.match(messages, /aucun profil «\sprofil-z\s»/);
   assert.match(messages, /température non précisée/);
   assert.doesNotMatch(messages, INTERDITS);
@@ -504,8 +506,13 @@ test('preparerImport : collage sans ingrédients sur un plat rempli → sa recet
   const r = preparerImport(valides({ id: 'risotto-test', nom: 'Risotto test', statutRecette: 'attente' }), { plats, demandes: [] });
   assert.equal(r.elements[0].statut, 'inchange');
   assert.equal('statutRecette' in r.ecritures[0].donnees, false);
+  // Plat ⏳ recollé tel quel sur la même fiche ⏳ : identique, rien n'est écrit (T1d-2).
   const attente = preparerImport(valides({ id: 'plat-x', nom: 'Plat X' }), { plats: [{ id: 'plat-x', nom: 'Plat X' }], demandes: [] });
-  assert.equal(attente.elements[0].statut, 'inchange');
+  assert.equal(attente.elements[0].statut, 'identique');
+  assert.deepEqual(attente.ecritures, []);
+  // Plat ⏳ recollé sous un autre type : rien à compléter, le nouveau type est écrit.
+  const autreType = preparerImport(valides({ id: 'plat-x', nom: 'Plat X', type: 'dessert' }), { plats: [{ id: 'plat-x', nom: 'Plat X' }], demandes: [] });
+  assert.equal(autreType.elements[0].statut, 'inchange');
 });
 
 test('preparerImport : la recette d’un autre plat existant, collée sur une fiche → erreur, rien d’écrit', () => {
