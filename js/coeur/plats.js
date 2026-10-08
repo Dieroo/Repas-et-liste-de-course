@@ -97,12 +97,22 @@ export function aAdapterSelon(plat, profil, resultat) {
   return compteDansLeBilan(plat, profil) && Boolean(resultat?.aCreer || resultat?.aRevoir);
 }
 
+/**
+ * Vrai si le plat est à compléter pour ce profil, d'après `resultat` (compatibilite.js › evaluer) : une de ses
+ * versions convient, mais il manque celle d'un style attendu (« Pas de viande » : mer et végétale). Mêmes plats que
+ * aAdapterSelon (type, recette, pas « Jamais »).
+ */
+export function aCompleterSelon(plat, profil, resultat) {
+  return compteDansLeBilan(plat, profil) && Boolean(resultat?.aCompleter);
+}
+
 // ——— Filtres de la liste ———
 
 /**
  * Filtres de la liste des plats : les cinq de toujours, puis « 🌿 Pour <Prénom> » par profil contraint (« 🌿 Pour
- * moi » pour `moi`), puis, pour le gestionnaire seul, « ❌ Versions à créer ». `profils` : profils contraints, dans
- * l'ordre d'affichage (compatibilite.js › profilsContraints). `role` : rôle effectif.
+ * moi » pour `moi`), puis, pour le gestionnaire seul, « ❌ Versions à créer » (à créer, à revoir ou à compléter).
+ * `profils` : profils contraints, dans l'ordre d'affichage (compatibilite.js › profilsContraints). `role` : rôle
+ * effectif.
  * → [{ id, libelle, profil? (filtre « pour »), profils? (« Versions à créer ») }]
  */
 export function filtresPour(profils, { moi = null, role = null } = {}) {
@@ -129,7 +139,8 @@ export function filtreRetenu(filtres, id) {
 /**
  * Plats correspondant à la recherche et au filtre, triés par nom. `filtre` : identifiant (« tous », « plat »…) ou
  * filtre de filtresPour. Les filtres « pour » et « à créer » demandent `evaluer(plat, profil)` (résultat de
- * compatibilite.js › evaluer) ; sans lui, ou sans son profil, tous les plats sont gardés.
+ * compatibilite.js › evaluer) ; sans lui, ou sans son profil, tous les plats sont gardés. « À créer » garde les plats
+ * à créer, à revoir ou à compléter pour au moins un des profils du filtre.
  */
 export function filtrerPlats(plats, { recherche = '', filtre = 'tous', evaluer = null } = {}) {
   const choisi = filtre && typeof filtre === 'object' ? filtre : { id: filtre };
@@ -143,7 +154,10 @@ export function filtrerPlats(plats, { recherche = '', filtre = 'tous', evaluer =
         return niveau === 'ok' || niveau === 'adaptable';
       }
       if (Array.isArray(choisi.profils) && peutEvaluer) {
-        return choisi.profils.some((profil) => aAdapterSelon(plat, profil, evaluer(plat, profil)));
+        return choisi.profils.some((profil) => {
+          const resultat = evaluer(plat, profil);
+          return aAdapterSelon(plat, profil, resultat) || aCompleterSelon(plat, profil, resultat);
+        });
       }
       if (id === 'attente') return statutDe(plat) === 'attente';
       // Filtre « pour » ou « à créer » sans son profil (profil disparu, ou réservé au gestionnaire) : « Tous ».

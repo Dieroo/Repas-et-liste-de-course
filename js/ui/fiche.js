@@ -5,9 +5,11 @@ import { copier } from './presse-papiers.js';
 import { modeDeCuisson } from './pictos.js';
 import { lireBrouillon } from './brouillon.js';
 import { sectionNotes } from './notes.js';
-import { etatsCompat, estVous, nomDe } from './compat.js';
+import { etatsCompat, estVous, nomDe, rangerStyles } from './compat.js';
 import { profilsContraints, marqueursDouteux } from '../coeur/compatibilite.js';
 import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
+import { stylesAttendus } from '../coeur/regles.js';
+import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
@@ -61,7 +63,16 @@ const nomsProduits = (ingredients) => [...new Set((ingredients ?? [])
   .map((ingredient) => String(ingredient?.produit ?? '').replace(/\s+/g, ' ').trim())
   .filter(Boolean))];
 
-/** Contenu d'une version : « Part au thon », « Sans : jambon blanc », « Avec : thon au naturel, 50 g par portion ». */
+/** « À manger dans les 2 jours après cuisson » (part au poisson d'une version mer, surtout) ; null sans durée valide. */
+function texteFrigo(jours) {
+  if (!Number.isInteger(jours) || jours < 1) return null;
+  return jours === 1 ? 'À manger dans le jour qui suit la cuisson' : `À manger dans les ${jours}\u00A0jours après cuisson`;
+}
+
+/**
+ * Contenu d'une version : « Part au thon », « Sans : jambon blanc », « Avec : thon au naturel, 50 g par portion »,
+ * « À manger dans les 2 jours après cuisson ».
+ */
 function detailVersion(variante) {
   const retirer = (Array.isArray(variante?.retirer) ? variante.retirer : []).map((p) => String(p ?? '').trim()).filter(Boolean);
   const ajouter = (Array.isArray(variante?.ajouter) ? variante.ajouter : [])
@@ -71,28 +82,110 @@ function detailVersion(variante) {
       return quantite ? `${String(a.produit).trim()}, ${quantite} par portion` : String(a.produit).trim();
     });
   const consigne = typeof variante?.consigne === 'string' ? variante.consigne.trim() : '';
+  const frigo = texteFrigo(variante?.frigoJours);
   return [
     consigne ? el('p', { class: 'version-consigne' }, consigne) : null,
     retirer.length ? el('p', {}, el('strong', {}, 'Sans\u00A0:'), ` ${retirer.join(', ')}`) : null,
     ajouter.length ? el('p', {}, el('strong', {}, 'Avec\u00A0:'), ` ${ajouter.join('\u00A0; ')}`) : null,
+    frigo ? el('p', { class: 'version-frigo' }, frigo) : null,
   ].filter(Boolean);
+}
+
+/** Style écrit d'une version (`mer`, `vegetal`) ; null sinon. */
+const styleEcrit = (variante) => (STYLES.includes(variante?.style) ? variante.style : null);
+
+// « pas de version mer pour un dessert » : types qui n'attendent pas de version mer (regles.js › TYPES_SANS_MER).
+const POUR_UN = { dessert: 'un dessert', accompagnement: 'un accompagnement' };
+
+/**
+ * Une version dans la section d'un profil : titre « 🐟 Version mer », « 🌿 Version végétale » (ou « Version » pour un
+ * profil sans style attendu), « ❌ À revoir » si elle ne convient pas (gestionnaire seul : l'autre membre ne voit que
+ * les versions qui conviennent), puis son contenu. `version` : élément de evaluer(…).versions. `plusUtilisee` : texte
+ * discret, sans croix, d'une version d'un style que le profil n'attend plus et qu'une autre version remplace déjà
+ * (rien à redemander : la prochaine version reçue pour ce profil la retire).
+ */
+function partieVersion({ variante, style, convient, restants }, { avecStyles, gestionnaire, plusUtilisee = '' }) {
+  const nomme = avecStyles || styleEcrit(variante) ? style : null;
+  const emoji = nomme ? EMOJIS_STYLE[nomme] : convient ? '🌿' : '';
+  const noms = (restants ?? []).filter(Boolean);
+  let etat = null;
+  if (!convient && gestionnaire) {
+    etat = plusUtilisee
+      ? el('p', { class: 'compat-texte compat-discret' }, plusUtilisee)
+      : el('p', { class: 'compat-texte compat-exclu' }, el('span', { 'aria-hidden': 'true' }, '❌\u00A0'),
+        noms.length ? `À revoir\u00A0: elle contient encore ${enumerer(noms)}.` : 'À revoir.');
+  }
+  return el('div', { class: 'version-style' },
+    el('h3', {}, emoji ? el('span', { 'aria-hidden': 'true' }, `${emoji}\u00A0`) : null,
+      nomme ? `Version ${LIBELLES_STYLE[nomme]}` : 'Version'),
+    etat,
+    ...detailVersion(variante));
+}
+
+/**
+ * « Plus utilisée : <Prénom> ne mange pas de poisson. » ou « Plus utilisée : pas de version mer pour un dessert. »,
+ * pour une version qui ne convient pas, d'un style que le profil n'attend pas pour ce plat (regles.js ›
+ * stylesAttendus), quand une autre de ses versions convient ; '' sinon (elle reste « À revoir »).
+ */
+function textePlusUtilisee(version, profil, plat, { avecStyles, autreConvient }) {
+  if (!avecStyles || version.convient || !autreConvient || stylesAttendus(profil, plat).includes(version.style)) return '';
+  const pourUn = POUR_UN[typeDe(plat)];
+  return stylesAttendus(profil).includes(version.style) && pourUn
+    ? `Plus utilisée\u00A0: pas de version ${LIBELLES_STYLE[version.style] ?? version.style} pour ${pourUn}.`
+    : `Plus utilisée\u00A0: ${nomDe(profil)} ne mange pas de poisson.`;
+}
+
+/** « 🌿 Version végétale à demander » (gestionnaire) : un style attendu sans aucune version sur la fiche. */
+function ligneADemander(style) {
+  return el('p', { class: 'version-a-demander' }, el('span', { 'aria-hidden': 'true' }, `${EMOJIS_STYLE[style]}\u00A0`),
+    `Version ${LIBELLES_STYLE[style]} à demander`);
 }
 
 /**
  * Section « Version pour <Prénom> » d'un profil qui a des règles (« Votre version » pour soi, vue « Repas et
  * courses ») : la version qui convient ; sinon ce qui manque, avec ❌ pour le gestionnaire seulement.
+ * Profil qui attend des styles (« Pas de viande » : mer et végétale), ou qui a plusieurs versions : une partie par
+ * version (« 🐟 Version mer », « 🌿 Version végétale »), puis, pour le gestionnaire, les styles qui manquent encore
+ * (« 🌿 Version végétale à demander »). L'autre membre ne voit que les versions qui conviennent.
  */
 function sectionVersion({ profil, resultat, cas }, plat, { moi, role }, actions = null) {
   const nom = nomDe(profil);
   const vous = estVous(profil, { moi, role });
   const gestionnaire = role === 'gestionnaire';
-  // Tant que la version manque, le titre ne l'annonce pas (« Pour vous » plutôt que « Votre version »).
-  const titre = cas === 'version' ? (vous ? 'Votre version' : `Version pour ${nom}`) : (vous ? 'Pour vous' : `Pour ${nom}`);
+  const avecStyles = stylesAttendus(profil).length > 0;
+  const toutes = (Array.isArray(resultat.versions) ? resultat.versions : []).filter((v) => v && v.variante);
+  const autreConvient = toutes.some((v) => v.convient);
+  const plusUtilisee = (v) => textePlusUtilisee(v, profil, plat, { avecStyles, autreConvient });
+  // Mer puis végétale, une version plus utilisée en dernier (tri stable : l'ordre de la fiche pour le reste).
+  const rang = (v) => (avecStyles ? (plusUtilisee(v) ? STYLES.length : Math.max(0, STYLES.indexOf(v.style))) : 0);
+  const versions = (gestionnaire ? toutes : toutes.filter((v) => v.convient)).sort((a, b) => rang(a) - rang(b));
+  // Styles attendus sans aucune version sur la fiche (une version à revoir est déjà montrée) : gestionnaire seul.
+  const aDemander = gestionnaire && avecStyles && cas !== 'version'
+    ? rangerStyles(resultat.manquants).filter((style) => !toutes.some((v) => v.style === style))
+    : [];
   const variante = (plat.variantes ?? []).find((v) => v && v.pour === profil.id);
+  const parParties = (avecStyles || versions.length > 1) && (cas === 'version' || cas === 'aCompleter' || (cas === 'aRevoir' && gestionnaire));
+  let titre;
   let contenu;
-  if (cas === 'version') {
+  let emojiTitre = false;
+  if (parParties) {
+    const convient = versions.some((v) => v.convient);
+    const n = versions.length;
+    // Tant qu'aucune version ne convient, le titre ne l'annonce pas (« Pour vous » plutôt que « Votre version »).
+    if (!convient) titre = vous ? 'Pour vous' : `Pour ${nom}`;
+    else if (vous) titre = n > 1 ? 'Vos versions' : 'Votre version';
+    else titre = n > 1 ? `Versions pour ${nom}` : `Version pour ${nom}`;
+    contenu = [
+      ...versions.map((version) => partieVersion(version, { avecStyles, gestionnaire, plusUtilisee: plusUtilisee(version) })),
+      ...aDemander.map(ligneADemander),
+    ];
+  } else if (cas === 'version' || cas === 'aCompleter') {
+    // Profil sans style attendu, une seule version : comme avant les styles.
+    titre = vous ? 'Votre version' : `Version pour ${nom}`;
+    emojiTitre = true;
     contenu = detailVersion(resultat.variante ?? variante);
   } else if (cas === 'aRevoir' && gestionnaire) {
+    titre = `Pour ${nom}`;
     const restants = (resultat.restants ?? []).filter(Boolean);
     contenu = [
       el('p', { class: 'compat-texte compat-exclu' }, el('span', { 'aria-hidden': 'true' }, '❌\u00A0'),
@@ -102,16 +195,21 @@ function sectionVersion({ profil, resultat, cas }, plat, { moi, role }, actions 
       ...detailVersion(variante),
     ];
   } else {
+    titre = vous ? 'Pour vous' : `Pour ${nom}`;
     const noms = nomsProduits(cas === 'aRevoir' && resultat.restants?.length
       ? resultat.restants.map((produit) => ({ produit }))
       : resultat.fautifs);
     const entre = noms.length ? ` (${enumerer(noms)})` : '';
-    contenu = [el('p', { class: `compat-texte ${gestionnaire ? 'compat-exclu' : 'compat-discret'}` },
-      gestionnaire ? el('span', { 'aria-hidden': 'true' }, '❌\u00A0') : null,
-      `Pas encore de version pour ${vous ? 'vous' : nom}${entre}.`)];
+    contenu = [
+      el('p', { class: `compat-texte ${gestionnaire ? 'compat-exclu' : 'compat-discret'}` },
+        gestionnaire ? el('span', { 'aria-hidden': 'true' }, '❌\u00A0') : null,
+        `Pas encore de version pour ${vous ? 'vous' : nom}${entre}.`),
+      // À créer (gestionnaire) : les versions que « Demander à Claude » demandera.
+      ...aDemander.map(ligneADemander),
+    ];
   }
   return el('section', { class: 'fiche-section section-version' },
-    el('h2', {}, cas === 'version' ? el('span', { 'aria-hidden': 'true' }, '🌿\u00A0') : null, titre),
+    el('h2', {}, emojiTitre ? el('span', { 'aria-hidden': 'true' }, '🌿\u00A0') : null, titre),
     ...contenu,
     actions);
 }
@@ -133,6 +231,16 @@ function carteDouteux(plat) {
       el('span', { 'aria-hidden': 'true' }, '⚠️\u00A0'),
       `«\u00A0${produit}\u00A0» contient peut-être ${SOUPCONS[attendu] ?? 'un ingrédient à vérifier'}\u00A0: vérifiez-le dans Modifier.`)),
     el('a', { class: 'lien-fiche', href: `#/modifier/${encodeURIComponent(plat.id)}` }, 'Modifier ›'));
+}
+
+/**
+ * Profil dont une version manque, dans l'ordre des profils : à créer ou à revoir d'abord, sinon à compléter (une
+ * version convient, il en manque d'un style attendu). → état de etatsCompat, ou null.
+ */
+function versionAttendue(etats) {
+  return etats.find((etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir')
+    ?? etats.find((etat) => etat.cas === 'aCompleter')
+    ?? null;
 }
 
 function ligneInfo(terme, definition) {
@@ -182,12 +290,13 @@ export function creer(ctx) {
 
   /**
    * Texte copié par « Demander à Claude » : plat ⏳ → la recette, avec les versions des profils qui ont des règles ;
-   * plat dont la version manque ou est à revoir pour un profil (le premier dans l'ordre des profils) → sa version
-   * seule ; sinon → une nouvelle recette, comme en T1b (avec les versions des profils qui ont des règles).
+   * plat dont une version manque pour un profil (versionAttendue) → ses versions seules (celles « à faire » : à
+   * créer, à revoir ou à compléter) ; sinon → une nouvelle recette, comme en T1b (avec les versions des profils qui
+   * ont des règles).
    */
   function demandeDuPlat(plat) {
     if (statutDe(plat) !== 'attente') {
-      const manque = etatsCompat(plat, courant).find((etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir');
+      const manque = versionAttendue(etatsCompat(plat, courant));
       if (manque) return texteDemandeVariantes([plat], manque.profil);
     }
     return texteDemandeRecette(plat, { profils: courant.profils ?? [] });
@@ -291,10 +400,8 @@ export function creer(ctx) {
     const etats = etatsCompat(plat, courant);
     const versionsMontrees = new Set(etats.filter((e) => e.cas !== 'aCreer').map((e) => e.profil.id));
     const contraints = profilsContraints(courant.profils);
-    // Première version à créer ou à revoir : le bouton unique « Demander à Claude » la demande (demandeDuPlat).
-    const versionManquante = gestionnaire && statut !== 'attente'
-      ? etats.find((etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir') ?? null
-      : null;
+    // Première version qui manque : le bouton unique « Demander à Claude » la demande (demandeDuPlat).
+    const versionManquante = gestionnaire && statut !== 'attente' ? versionAttendue(etats) : null;
     const ingredients = plat.ingredients ?? [];
     const etapes = plat.etapes ?? [];
     const cuissons = plat.cuisson ?? [];
@@ -376,6 +483,7 @@ export function creer(ctx) {
       variantes.length
         ? section(etats.length ? 'Autres versions' : 'Versions', el('ul', { class: 'liste-simple' }, variantes.map((v) => el('li', {}, el('span', {},
           el('strong', {}, nomsProfils.get(v.pour) ?? 'Autre profil'),
+          styleEcrit(v) ? `, version ${LIBELLES_STYLE[styleEcrit(v)]}` : '',
           v.consigne ? `\u00A0: ${v.consigne}` : '',
         )))))
         : null,

@@ -178,8 +178,10 @@ function cloreDemandes(demandesAClore) {
  *   écrits (`mergeFields`) : les autres (notes, photo, champs absents de la recette) restent intacts. Une recette qui
  *   remplace des modifications faites à la main (`effacerModification`) efface aussi leur marque (`modifieeLe`,
  *   `modifieePar`). Hors ligne : part plus tard.
- * - Versions `{ id, mode: 'versions', variantes }` : une transaction par plat, qui relit ses versions, y fusionne
- *   celles reçues par `pour` (coeur/paquet.js › fusionnerVariantes : celles des autres profils restent) et n'écrit que
+ * - Versions `{ id, mode: 'versions', variantes, attendus? }` : une transaction par plat, qui relit ses versions, y
+ *   fusionne celles reçues par profil et par style (coeur/paquet.js › fusionnerVariantes : une version reçue remplace
+ *   celle du même profil et du même style, et celles d'un style que son profil n'attend pas, `attendus` ; les autres
+ *   versions, de ce profil ou des autres, restent) et n'écrit que
  *   `variantes`, `majPar`, `majLe` (jamais le nom, le statut, la recette ni la marque « modifiée à la main »). Plat
  *   disparu entre-temps : rien n'est écrit, son identifiant est rendu dans `manquants`. Hors ligne, une transaction
  *   échoue au lieu d'être mise en file : l'app refuse ces envois avant d'appeler (actions.importer).
@@ -210,14 +212,14 @@ export function importer({ ecritures, demandesAClore }, auteur) {
   cloreDemandes((demandesAClore ?? []).filter((demande) => !deVersion(demande)));
   const envoiVersions = (async () => {
     const manquants = [];
-    for (const { id, variantes } of versions) {
+    for (const { id, variantes, attendus } of versions) {
       const ecrite = await runTransaction(db, async (transaction) => {
         const reference = doc(db, 'plats', id);
         const actuel = await transaction.get(reference);
         if (!actuel.exists()) return false;
         const lues = actuel.data().variantes;
         transaction.update(reference, {
-          variantes: fusionnerVariantes(Array.isArray(lues) ? lues : [], variantes),
+          variantes: fusionnerVariantes(Array.isArray(lues) ? lues : [], variantes, { attendus }),
           ...trace(auteur),
         });
         return true;

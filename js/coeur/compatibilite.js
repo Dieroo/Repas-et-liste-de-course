@@ -1,11 +1,15 @@
 // Compatibilité d'un plat avec ce que mange un profil (CLAUDE.md §7), et versions à créer. Logique pure : ni DOM
 // ni Firebase. En T2, seules les règles `exclureMarqueurs` (avec `saufMarqueurs`) et `exclureProduits` sont
 // évaluées ; les autres types restent dans les données, sans effet ici. Les notes ne sont jamais lues par `evaluer`.
+// Un profil peut avoir plusieurs versions d'un plat, une par style (`mer`, `vegetal`) : les styles attendus viennent
+// de son régime (regles.js › stylesAttendus) ; une version sans `style` reçoit un style déduit à la lecture (styleDe),
+// jamais écrit.
 import { slug } from './slug.js';
-import { IMPLICATIONS, SOUS_TYPES_VIANDE } from './vocabulaire.js';
-import { TYPES_A_ADAPTER, aAdapterSelon, compteDansLeBilan } from './plats.js';
+import { IMPLICATIONS, SOUS_TYPES_VIANDE, STYLES } from './vocabulaire.js';
+import { TYPES_A_ADAPTER, aAdapterSelon, aCompleterSelon, compteDansLeBilan } from './plats.js';
 import { noteRetenue } from './notes.js';
 import { trierProfils } from './profils.js';
+import { stylesAttendus } from './regles.js';
 
 export { TYPES_A_ADAPTER };
 
@@ -13,6 +17,10 @@ const TYPES_EVALUES = ['exclureMarqueurs', 'exclureProduits'];
 const SEVERITES_EVALUEES = ['exclu', 'adaptable'];
 // Ce qui relève d'un repas sans viande : un plat qui n'est exclu que pour eux demande une version « sans viande ».
 const MARQUEURS_SANS_VIANDE = ['viande', 'bouillon_viande', 'gelatine_animale', 'graisse_animale'];
+// Ce qui fait d'une version une version « mer ».
+const MARQUEURS_MER = ['poisson', 'fruits_de_mer'];
+// Jours au frigo d'une version (part au poisson…), bornes de paquet@1.
+const FRIGO_JOURS_MAX = 30;
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 const textes = (valeurs) => (Array.isArray(valeurs) ? valeurs.filter((v) => typeof v === 'string' && v !== '') : []);
@@ -91,53 +99,133 @@ function besoinDe(ingredients) {
 
 const nomsDe = (ingredients) => [...new Set(ingredients.map((i) => reduire(i.produit)).filter(Boolean))];
 
+// ——— Versions d'un plat ———
+
+/** Ajouts d'une version (objets seulement). */
+function ajoutsDe(variante) {
+  return Array.isArray(variante?.ajouter) ? variante.ajouter.filter(estObjet) : [];
+}
+
+/**
+ * Style d'une version : `style` s'il est valide (`mer` ou `vegetal`) ; sinon déduit, sans rien écrire : un ajout
+ * marqué poisson ou fruits de mer (marqueurs effectifs) → 'mer', sinon 'vegetal'.
+ */
+export function styleDe(variante) {
+  if (STYLES.includes(variante?.style)) return variante.style;
+  const mer = ajoutsDe(variante).some((ajout) => {
+    const effectifs = marqueursEffectifs(ajout);
+    return MARQUEURS_MER.some((m) => effectifs.has(m));
+  });
+  return mer ? 'mer' : 'vegetal';
+}
+
+/** Jours au frigo d'une version : entier de 1 à 30, sinon null. */
+function frigoJoursDe(variante) {
+  const jours = variante?.frigoJours;
+  return Number.isInteger(jours) && jours >= 1 && jours <= FRIGO_JOURS_MAX ? jours : null;
+}
+
+/** Versions de la fiche pour ce profil, dans leur ordre. */
+function versionsPour(plat, profil) {
+  if (typeof profil?.id !== 'string') return [];
+  return (Array.isArray(plat?.variantes) ? plat.variantes : []).filter((v) => estObjet(v) && v.pour === profil.id);
+}
+
+/**
+ * Une version jugée seule : rend-elle le plat mangeable ? Les ingrédients exclus qu'elle ne retire pas et ses ajouts
+ * exclus restent. → { variante, style, convient, restants: [texte], problemes: [ingredient] } (`problemes` : pour
+ * le besoin, jamais rendu par evaluer).
+ */
+function jugerVersion(variante, exclus, regles) {
+  const retires = new Set(textes(variante.retirer).map(slug));
+  const problemes = [
+    ...exclus.filter((ingredient) => !retires.has(slug(ingredient.produit))),
+    ...fautifsDe(regles, ajoutsDe(variante)),
+  ];
+  return { variante, style: styleDe(variante), convient: !problemes.length, restants: nomsDe(problemes), problemes };
+}
+
+/** Version retenue, sous la forme qu'utilisent les écrans : `style` toujours (styleDe), `frigoJours` s'il est donné. */
+function varianteRetenue(variante) {
+  const frigoJours = frigoJoursDe(variante);
+  return {
+    source: 'fiche',
+    retirer: textes(variante.retirer),
+    ajouter: ajoutsDe(variante),
+    consigne: typeof variante.consigne === 'string' ? variante.consigne : '',
+    style: styleDe(variante),
+    ...(frigoJours ? { frigoJours } : {}),
+  };
+}
+
 // ——— Évaluer un plat pour un profil ———
 
 /**
  * Ce que le plat donne pour ce profil.
  * → { niveau: 'ok' | 'adaptable' | 'exclu' | 'inconnu' (plat sans ingrédients),
- *     variante: null | { source: 'fiche', retirer, ajouter, consigne } (version de la fiche qui convient),
+ *     variante: null | { source: 'fiche', retirer, ajouter, consigne, style, frigoJours? } (version de la fiche qui
+ *       convient : celle de style `mer` s'il y en a une, préférence du foyer ; sinon la première),
  *     fautifs: [ingredient] (ingrédients du plat qui l'excluent, ou le rendent adaptable),
- *     restants: [texte] (ce que la version laisse ou ajoute d'exclu), aCreer, aRevoir,
- *     besoin: null | 'sans_viande' | 'adapter' }
+ *     restants: [texte] (ce que la version laisse ou ajoute d'exclu ; si aucune ne convient, la première d'un style
+ *       attendu, sinon la première),
+ *     aCreer (aucune version), aRevoir (des versions, aucune ne convient),
+ *     besoin: null | 'sans_viande' | 'adapter' (besoin de la version à faire : à créer, à revoir ou à compléter),
+ *     versions: [{ variante, style, convient, restants }] (toutes les versions de la fiche pour ce profil, dans leur
+ *       ordre, chacune jugée seule ; `variante` : l'objet de la fiche ; `style` : styleDe),
+ *     manquants: [style] (styles attendus, regles.js › stylesAttendus(profil, plat), sans version qui convient ;
+ *       [] si le plat se mange tel quel ; jamais `mer` pour un dessert ou un accompagnement),
+ *     aCompleter (au moins une version convient, mais il en manque d'un style attendu) }
+ * Un profil sans style attendu (stylesAttendus vide) n'a jamais de `manquants` ni de plat à compléter.
  */
 export function evaluer(plat, profil) {
-  const resultat = { niveau: 'ok', variante: null, fautifs: [], restants: [], aCreer: false, aRevoir: false, besoin: null };
+  const resultat = {
+    niveau: 'ok', variante: null, fautifs: [], restants: [], aCreer: false, aRevoir: false, besoin: null,
+    versions: [], manquants: [], aCompleter: false,
+  };
   const ingredients = ingredientsDe(plat);
   if (!ingredients.length) return { ...resultat, niveau: 'inconnu' };
   const regles = reglesEvaluees(profil);
-  if (!regles.length) return resultat;
-
   const exclus = fautifsDe(regles.filter((r) => r.severite === 'exclu'), ingredients);
+  const jugees = versionsPour(plat, profil).map((variante) => jugerVersion(variante, exclus, regles));
+  const versions = jugees.map(({ variante, style, convient, restants }) => ({ variante, style, convient, restants }));
+  const base = { ...resultat, versions };
+  if (!regles.length) return base;
+
   if (!exclus.length) {
     const adaptables = fautifsDe(regles, ingredients);
-    return adaptables.length ? { ...resultat, niveau: 'adaptable', fautifs: adaptables } : resultat;
+    return adaptables.length ? { ...base, niveau: 'adaptable', fautifs: adaptables } : base;
   }
 
-  // Exclu : la version de la fiche pour ce profil (la première s'il y en a deux) le rend-elle mangeable ?
-  const version = (Array.isArray(plat.variantes) ? plat.variantes : [])
-    .find((v) => estObjet(v) && typeof profil?.id === 'string' && v.pour === profil.id);
-  if (!version) return { ...resultat, niveau: 'exclu', fautifs: exclus, aCreer: true, besoin: besoinDe(exclus) };
+  // Exclu : une version de la fiche pour ce profil le rend-elle mangeable ? Chaque style attendu en veut une (un
+  // dessert ou un accompagnement n'attend pas de version mer).
+  const attendus = stylesAttendus(profil, plat);
+  const manquants = attendus.filter((style) => !jugees.some((v) => v.convient && v.style === style));
+  if (!jugees.length) return { ...base, niveau: 'exclu', fautifs: exclus, aCreer: true, besoin: besoinDe(exclus), manquants };
 
-  const retires = new Set(textes(version.retirer).map(slug));
-  const ajouts = Array.isArray(version.ajouter) ? version.ajouter.filter(estObjet) : [];
-  const problemes = [
-    ...exclus.filter((ingredient) => !retires.has(slug(ingredient.produit))),
-    ...fautifsDe(regles, ajouts),
-  ];
-  if (problemes.length) {
-    return { ...resultat, niveau: 'exclu', fautifs: exclus, restants: nomsDe(problemes), aRevoir: true, besoin: besoinDe(problemes) };
+  const conviennent = jugees.filter((v) => v.convient);
+  if (!conviennent.length) {
+    // La version à revoir d'un style attendu d'abord (c'est elle que la demande à Claude montre) ; une version d'un
+    // style que le profil n'attend plus ne compte que s'il n'y en a pas d'autre.
+    const premiere = jugees.find((v) => attendus.includes(v.style)) ?? jugees[0];
+    return {
+      ...base,
+      niveau: 'exclu',
+      fautifs: exclus,
+      restants: premiere.restants,
+      aRevoir: true,
+      besoin: besoinDe(premiere.problemes),
+      manquants,
+    };
   }
+  const retenue = conviennent.find((v) => v.style === 'mer') ?? conviennent[0];
   return {
-    ...resultat,
+    ...base,
     niveau: 'adaptable',
-    variante: {
-      source: 'fiche',
-      retirer: textes(version.retirer),
-      ajouter: ajouts,
-      consigne: typeof version.consigne === 'string' ? version.consigne : '',
-    },
+    variante: varianteRetenue(retenue.variante),
     fautifs: exclus,
+    besoin: manquants.length ? besoinDe(exclus) : null,
+    manquants,
+    aCompleter: manquants.length > 0,
   };
 }
 
@@ -159,19 +247,22 @@ export function aAdapterPour(plat, profil, { evaluer: evaluation = evaluer } = {
 }
 
 /**
- * Bilan d'un profil, sur les mêmes plats que aAdapterPour : { convient, avecVersion, aCreer, orphelines }.
- * `aCreer` compte aussi les versions à revoir. `orphelines` : versions des fiches rangées sous un profil qui
- * n'existe pas (seulement si `profils` est donné).
+ * Bilan d'un profil, sur les mêmes plats que aAdapterPour : { convient, avecVersion, aCreer, aCompleter, orphelines }.
+ * `aCreer` compte aussi les versions à revoir. `aCompleter` : plats dont une version convient mais dont il manque un
+ * style attendu (ils comptent aussi dans `avecVersion`). `orphelines` : versions des fiches rangées sous un profil
+ * qui n'existe pas (seulement si `profils` est donné).
  */
 export function bilanCompatibilite(plats, profil, { profils = null, evaluer: evaluation = evaluer } = {}) {
-  const bilan = { convient: 0, avecVersion: 0, aCreer: 0, orphelines: 0 };
+  const bilan = { convient: 0, avecVersion: 0, aCreer: 0, aCompleter: 0, orphelines: 0 };
   const liste = Array.isArray(plats) ? plats.filter(estObjet) : [];
   for (const plat of liste) {
     if (!compteDansLeBilan(plat, profil)) continue;
     const resultat = evaluation(plat, profil);
     if (aAdapterSelon(plat, profil, resultat)) bilan.aCreer += 1;
-    else if (resultat?.variante) bilan.avecVersion += 1;
-    else if (resultat?.niveau === 'ok' || resultat?.niveau === 'adaptable') bilan.convient += 1;
+    else if (resultat?.variante) {
+      bilan.avecVersion += 1;
+      if (aCompleterSelon(plat, profil, resultat)) bilan.aCompleter += 1;
+    } else if (resultat?.niveau === 'ok' || resultat?.niveau === 'adaptable') bilan.convient += 1;
   }
   if (Array.isArray(profils)) {
     const ids = new Set(profils.filter(estObjet).map((p) => p.id));
@@ -185,11 +276,12 @@ export function bilanCompatibilite(plats, profil, { profils = null, evaluer: eva
 }
 
 /**
- * Plats qui attendent une version pour ce profil (mêmes plats que aAdapterPour), dans l'ordre où les demander :
- * demande ouverte d'abord, puis meilleure note des autres profils (non noté = 3), puis nom ; les plats de `envoyes`
- * (identifiants déjà copiés pour Claude) passent en fin de liste, dans le même ordre. `profils` : tous les profils
- * (sans eux, seules les notes présentes des autres comptent).
- * → [{ plat, fautifs, besoin, aRevoir }]
+ * Plats qui attendent une version pour ce profil, dans l'ordre où les demander : d'abord les plats à créer ou à
+ * revoir (mêmes plats que aAdapterPour), puis les plats à compléter (une version convient, il en manque d'un style
+ * attendu ; mêmes filtres). Dans chaque groupe : demande ouverte d'abord, puis meilleure note des autres profils (non
+ * noté = 3), puis nom ; les plats de `envoyes` (identifiants déjà copiés pour Claude) passent en fin de groupe, dans
+ * le même ordre. `profils` : tous les profils (sans eux, seules les notes présentes des autres comptent).
+ * → [{ plat, fautifs, besoin, aRevoir, manquants, aCompleter }]
  */
 export function platsSansVersion(plats, profil, { demandes = [], envoyes = [], profils = null, evaluer: evaluation = evaluer } = {}) {
   const ouvertes = new Set((Array.isArray(demandes) ? demandes : [])
@@ -209,15 +301,25 @@ export function platsSansVersion(plats, profil, { demandes = [], envoyes = [], p
   for (const plat of Array.isArray(plats) ? plats.filter(estObjet) : []) {
     if (!compteDansLeBilan(plat, profil)) continue;
     const resultat = evaluation(plat, profil);
-    if (!aAdapterSelon(plat, profil, resultat)) continue;
+    const aAdapter = aAdapterSelon(plat, profil, resultat);
+    if (!aAdapter && !aCompleterSelon(plat, profil, resultat)) continue;
     elements.push({
-      element: { plat, fautifs: resultat.fautifs ?? [], besoin: resultat.besoin ?? null, aRevoir: Boolean(resultat.aRevoir) },
+      element: {
+        plat,
+        fautifs: resultat.fautifs ?? [],
+        besoin: resultat.besoin ?? null,
+        aRevoir: Boolean(resultat.aRevoir),
+        manquants: Array.isArray(resultat.manquants) ? [...resultat.manquants] : [],
+        aCompleter: !aAdapter,
+      },
+      groupe: aAdapter ? 0 : 1,
       envoye: dejaEnvoyes.has(plat.id),
       demande: ouvertes.has(`${plat.id}__${profil?.id}`),
       note: meilleureNote(plat),
     });
   }
-  elements.sort((a, b) => Number(a.envoye) - Number(b.envoye)
+  elements.sort((a, b) => a.groupe - b.groupe
+    || Number(a.envoye) - Number(b.envoye)
     || Number(b.demande) - Number(a.demande)
     || b.note - a.note
     || comparer(String(a.element.plat.nom ?? ''), String(b.element.plat.nom ?? ''))

@@ -77,7 +77,7 @@ test('texteDemandeRecette : sans profil contraint, texte de T1b à l’identique
   assert.equal(texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }, { profils: [ADULTE_A, { ...ADULTE_B, regles: [] }] }), t1b);
 });
 
-test('texteDemandeRecette : une ligne de versions par profil contraint, dans l’ordre d’affichage', () => {
+test('texteDemandeRecette : une ligne de versions par profil contraint, dans l’ordre d’affichage, avec ses styles', () => {
   const texte = texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }, { profils: PROFILS });
   assert.equal(texte, [
     'DEMANDE-RECETTE paquet@1',
@@ -85,26 +85,28 @@ test('texteDemandeRecette : une ligne de versions par profil contraint, dans l�
     'id: plat-x',
     'nom: Plat X',
     'versions:',
-    '- pour: profil-b — Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel.',
-    '- pour: enfant — Ne mange ni viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni poisson, ni fruits de mer, ni bouillon ou fond de viande, de volaille ou de poisson, ni gélatine animale, ni graisse animale. Mange des œufs, du fromage (même à présure animale) et du miel.',
+    '- pour: profil-b — Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel. — styles: mer, vegetal',
+    '- pour: enfant — Ne mange ni viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni poisson, ni fruits de mer, ni bouillon ou fond de viande, de volaille ou de poisson, ni gélatine animale, ni graisse animale. Mange des œufs, du fromage (même à présure animale) et du miel. — styles: vegetal',
     '(Ajoute un lien, une photo ou la recette dictée.)',
-    '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)',
+    '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)',
   ].join('\n'));
 });
 
-test('texteDemandeVariantes : texte exact, fautifs marqués ✗, unité « pc » sous-entendue', () => {
+test('texteDemandeVariantes : texte exact, fautifs marqués ✗, unité « pc » sous-entendue, styles à faire', () => {
   assert.equal(texteDemandeVariantes([CARBONADE], ADULTE_B), [
     'DEMANDE-VARIANTES paquet@1',
     `instructions: ${VERSION_INSTRUCTIONS}`,
     'pour: profil-b',
+    'styles: mer, vegetal',
     'besoin: sans_viande',
     'règles: Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel.',
-    '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)',
+    '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [les versions de sa ligne « à faire »] }, jamais la recette entière. Une version par style, avec `style` (et `frigoJours` pour `mer`) ; une version que tu rends remplace celle du même style, les autres restent. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)',
     'plats:',
     '- id: carbonade-flamande',
     '  nom: Carbonade flamande',
     '  portions: 4',
     '  ingrédients: 800 g bœuf à braiser ✗ ; 25 cl bière brune ; 2 oignon jaune ; 2 tranche pain d’épices ; 1 cs fond de veau ✗',
+    '  à faire: mer, vegetal',
   ].join('\n'));
 });
 
@@ -114,7 +116,8 @@ test('texteDemandeVariantes : éléments de platsSansVersion acceptés ; version
   const elements = platsSansVersion([aRevoir], ADULTE_B, { profils: PROFILS });
   const texte = texteDemandeVariantes(elements, ADULTE_B);
   assert.match(texte, /\n {2}ingrédients: 400 g pâtes ; 200 g lardons ✗\n/);
-  assert.match(texte, /\n {2}version actuelle: retirer: lardons ; ajouter: 50 g jambon par portion ✗ ; consigne: Part à part\.$/);
+  // Version sans style : nommée par son style déduit (aucun poisson ajouté → végétale).
+  assert.match(texte, /\n {2}version actuelle \(vegetal\): retirer: lardons ; ajouter: 50 g jambon par portion ✗ ; consigne: Part à part\.\n {2}à faire: mer, vegetal$/);
 });
 
 test('texteDemandeVariantes : besoin omis si les plats du lot n’ont pas le même', () => {
@@ -218,7 +221,7 @@ test('versions seules { id, nom, type, variantes } : statut versions, ni nom ni 
   assert.equal(r.elements[0].nom, 'Gratin test');
   assert.deepEqual(r.ecritures, [{ id: 'gratin-test', mode: 'versions', variantes: [POUR_B] }]);
   assert.deepEqual(r.elements[0].versions, [{
-    pour: 'profil-b', nom: 'Adulte B', action: 'ajoutee', convient: true, libelle: '🌿 Version pour Adulte B ajoutée',
+    pour: 'profil-b', style: null, nom: 'Adulte B', action: 'ajoutee', convient: true, libelle: '🌿 Version pour Adulte B ajoutée',
   }]);
   assert.deepEqual(r.elements[0].avertissements, [
     'Seule la version de «\u00A0Gratin test\u00A0» est reprise.',
@@ -306,9 +309,21 @@ test('version déjà sur la fiche → identique, rien n’est écrit, la demande
   assert.equal(r.elements[0].statut, 'identique');
   assert.deepEqual(r.ecritures, []);
   assert.deepEqual(r.demandesAClore, ['gratin-test__profil-b']);
-  const autre = version('profil-b', ['lardons'], [TOFU], 'Part au tofu.');
+  // Une autre version mer (sans style, déduite) remplace celle au thon, comme avant les styles.
+  const autre = version('profil-b', ['lardons'], [{ ...THON, produit: 'saumon fumé' }], 'Part au saumon.');
   const remplacee = importer([{ id: 'gratin-test', nom: 'Gratin test', variantes: [autre] }], { plats: [fiche] });
   assert.equal(remplacee.elements[0].versions[0].libelle, 'Version pour Adulte B remplacée');
+  // Une version sans style d'un autre style (tofu : végétale) effacerait la version mer : refusée.
+  const tofu = version('profil-b', ['lardons'], [TOFU], 'Part au tofu.');
+  const refusee = importer([{ id: 'gratin-test', nom: 'Gratin test', variantes: [tofu] }], { plats: [fiche] });
+  assert.deepEqual(refusee.erreurs.map((e) => e.pourClaude), [
+    'id gratin-test variantes[pour=profil-b] : `style` attendu (`mer` ou `vegetal`) : ce profil a une version par style',
+  ]);
+  assert.match(refusee.erreurs[0].message, /ne dit pas si elle est mer ou végétale/);
+  // Avec son style, elle s'ajoute à côté de la version mer.
+  const vegetale = importer([{ id: 'gratin-test', nom: 'Gratin test', variantes: [{ ...tofu, style: 'vegetal' }] }], { plats: [fiche] });
+  assert.deepEqual(vegetale.erreurs, []);
+  assert.equal(vegetale.elements[0].versions[0].libelle, '🌿 Version végétale pour Adulte B ajoutée');
 });
 
 test('une version reçue ne retire jamais celle d’un autre profil ; aucune valeur undefined', () => {
@@ -396,10 +411,13 @@ test('platsSansVersion avec envoyes : après un import de 10, les 10 suivants so
   const apres = plats.map((p) => (premiers.slice(0, 9).includes(p.id)
     ? { ...p, variantes: [version('profil-b', ['bœuf à braiser'], [THON])] } : p));
   const suivants = platsSansVersion(apres, ADULTE_B, { profils: PROFILS, envoyes: premiers });
-  assert.equal(suivants.length, 16);
+  // 16 plats encore à créer, puis les 9 qui ont reçu leur version mer : à compléter (végétale), en fin de liste.
+  assert.equal(suivants.length, 25);
   const attendus = plats.map((p) => p.id).filter((id) => !premiers.includes(id)).slice(0, LOT_VERSIONS);
   assert.deepEqual(suivants.slice(0, LOT_VERSIONS).map((e) => e.plat.id), attendus);
-  assert.equal(suivants.at(-1).plat.id, premiers[9], 'le plat impossible passe en fin de liste');
+  assert.equal(suivants[15].plat.id, premiers[9], 'le plat impossible passe en fin des plats à créer');
+  assert.deepEqual(suivants.slice(16).map((e) => e.plat.id), premiers.slice(0, 9));
+  assert.ok(suivants.slice(16).every((e) => e.aCompleter && e.manquants.join() === 'vegetal'));
 });
 
 // ——— Restauration : versions additives ———
@@ -523,7 +541,7 @@ test('textes pour Claude : les règles que la phrase du régime ne dit pas sont 
   const phrase = decrireRegles(profilA);
   assert.ok(phrase);
   assert.match(texteDemandeRecette({ id: 'x', nom: 'X' }, { profils: [profilA] }),
-    new RegExp(`- pour: profil-a — ${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} Exclut les marqueurs alcool_cru, oeuf_cru\\.\\n`));
+    new RegExp(`- pour: profil-a — ${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} Exclut les marqueurs alcool_cru, oeuf_cru\\. — styles: mer, vegetal\\n`));
   const enfant = { id: 'enfant', nom: 'Enfant', regles: [
     { type: 'exclureMarqueurs', marqueurs: ['oeuf_cru'], severite: 'exclu' },
     { type: 'exclureProduits', produits: ['navet'], severite: 'exclu' },
@@ -540,7 +558,8 @@ test('textes pour Claude : les règles que la phrase du régime ne dit pas sont 
   // Règles inactives ou de préférence : rien de plus.
   const calme = { id: 'profil-a', regles: [...SANS_VIANDE, { type: 'exclureMarqueurs', marqueurs: ['cafe'], severite: 'exclu', actif: false },
     { type: 'exclureMarqueurs', marqueurs: ['alcool_cru'], severite: 'preference' }] };
-  assert.match(texteDemandeRecette({ id: 'x', nom: 'X' }, { profils: [calme] }), new RegExp(`— ${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`));
+  assert.match(texteDemandeRecette({ id: 'x', nom: 'X' }, { profils: [calme] }),
+    new RegExp(`— ${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — styles: mer, vegetal\\n`));
 });
 
 // ——— Modules ———

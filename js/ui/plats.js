@@ -9,7 +9,7 @@ import {
 } from '../coeur/plats.js';
 import { profilsContraints, platsSansVersion } from '../coeur/compatibilite.js';
 import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
-import { ligneCompat, garderPour, nomDe } from './compat.js';
+import { ligneCompat, garderPour, nomDe, libellesStyles, rangerStyles } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
@@ -81,7 +81,7 @@ function etatVideCompat(choisi, moi) {
 }
 
 /**
- * Plats écartés des versions à créer parce que ce profil les a notés « Jamais » (même tri que
+ * Plats écartés des versions à créer ou à compléter parce que ce profil les a notés « Jamais » (même tri que
  * compatibilite.js › platsSansVersion, note mise à part).
  */
 function nombreNotesJamais(plats, profil, evaluer) {
@@ -91,12 +91,20 @@ function nombreNotesJamais(plats, profil, evaluer) {
     && plat.notes && typeof plat.notes === 'object' && Object.hasOwn(plat.notes, profil.id) && plat.notes[profil.id] === 0
     && (() => {
       const resultat = evaluer(plat, profil);
-      return Boolean(resultat?.aCreer || resultat?.aRevoir);
+      return Boolean(resultat?.aCreer || resultat?.aRevoir || resultat?.aCompleter);
     })()).length;
 }
 
-/** Libellé du bouton de copie d'un lot : « les 10 premières », « les 3 versions », « sa version ». */
-function libelleLot(nombre) {
+/**
+ * Libellé du bouton de copie d'un lot : « les 10 premières », « les 3 versions », « sa version » ; « Compléter les 3
+ * versions », « Compléter sa version » quand le lot ne contient que des plats à compléter (une version convient déjà).
+ */
+function libelleLot(nombre, aCompleterSeulement = false) {
+  if (aCompleterSeulement) {
+    if (nombre > LOT_VERSIONS) return `Compléter les ${LOT_VERSIONS} premières`;
+    if (nombre > 1) return `Compléter les ${nombre}\u00A0versions`;
+    return 'Compléter sa version';
+  }
   if (nombre > LOT_VERSIONS) return `Demander à Claude les ${LOT_VERSIONS} premières`;
   if (nombre > 1) return `Demander à Claude les ${nombre}\u00A0versions`;
   return 'Demander à Claude sa version';
@@ -104,9 +112,9 @@ function libelleLot(nombre) {
 
 /**
  * Bandeau « Versions pour <Prénom> » (gestionnaire, filtre « ❌ Versions à créer ») : copie du lot des plats qui
- * attendent sa version (les mieux notés du foyer d'abord, ceux déjà envoyés à la fin), puis « Coller la réponse de
- * Claude ». Nœuds gardés d'un rendu à l'autre (le focus reste sur le bouton touché) ; `maj(ctx, profil)` les remet à
- * jour. → { noeud, maj }
+ * attendent sa version (les mieux notés du foyer d'abord, ceux déjà envoyés à la fin), puis des plats à compléter
+ * (une version convient, il en manque d'un style attendu), puis « Coller la réponse de Claude ». Nœuds gardés d'un
+ * rendu à l'autre (le focus reste sur le bouton touché) ; `maj(ctx, profil)` les remet à jour. → { noeud, maj }
  */
 function creerBandeauVersions(lireCtx) {
   let profil = null;
@@ -130,7 +138,7 @@ function creerBandeauVersions(lireCtx) {
       el('div', { class: 'actions-recette' }, boutonDemander, lienColler)),
     jamais);
 
-  /** Plats qui attendent la version de ce profil, dans l'ordre où les demander. */
+  /** Plats qui attendent une version de ce profil (à créer d'abord, puis à compléter), dans l'ordre où les demander. */
   function enAttente(ctx) {
     return platsSansVersion(ctx.plats, profil, {
       demandes: ctx.demandes ?? [],
@@ -177,13 +185,31 @@ function creerBandeauVersions(lireCtx) {
     }
     profil = nouveau;
     const nom = nomDe(profil);
-    const attente = enAttente(ctx).length;
+    const elements = enAttente(ctx);
+    const attente = elements.length;
+    const aCompleter = elements.filter((element) => element.aCompleter);
+    const aCreer = attente - aCompleter.length;
+    // Styles qui manquent aux plats à compléter : « (végétale) », ou « (mer ou végétale) » s'ils diffèrent.
+    const styles = libellesStyles(rangerStyles(aCompleter.flatMap((element) => element.manquants ?? [])), 'ou');
+    const entre = styles ? ` (${styles})` : '';
     const ecartes = nombreNotesJamais(ctx.plats, profil, ctx.compat);
     titre.textContent = `Versions pour ${nom}`;
-    nombre.textContent = attente > 1
-      ? `${attente}\u00A0plats attendent une version pour ${nom}.`
-      : `1\u00A0plat attend une version pour ${nom}.`;
-    boutonDemander.replaceChildren(el('span', { 'aria-hidden': 'true' }, '📋'), libelleLot(attente));
+    const phrases = [];
+    if (aCreer) {
+      phrases.push(aCreer > 1
+        ? `${aCreer}\u00A0plats attendent une version pour ${nom}.`
+        : `1\u00A0plat attend une version pour ${nom}.`);
+    }
+    if (aCompleter.length > 1) {
+      phrases.push(aCreer
+        ? `${aCompleter.length}\u00A0autres sont à compléter${entre}.`
+        : `${aCompleter.length}\u00A0plats sont à compléter pour ${nom}${entre}.`);
+    } else if (aCompleter.length) {
+      phrases.push(aCreer ? `1\u00A0autre est à compléter${entre}.` : `1\u00A0plat est à compléter pour ${nom}${entre}.`);
+    }
+    nombre.textContent = phrases.join(' ');
+    // À créer d'abord : un lot sans plat à créer ne contient que des plats à compléter.
+    boutonDemander.replaceChildren(el('span', { 'aria-hidden': 'true' }, '📋'), libelleLot(attente, aCreer === 0));
     jamais.textContent = ecartes > 1
       ? `${ecartes}\u00A0plats notés «\u00A0Jamais\u00A0» par ${nom} sont laissés de côté.`
       : `1\u00A0plat noté «\u00A0Jamais\u00A0» par ${nom} est laissé de côté.`;

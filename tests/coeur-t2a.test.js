@@ -223,6 +223,7 @@ test('plat ⏳ → inconnu ; dessert à la gélatine exclu ; evaluer ne lit pas 
   const attente = { id: 'a', nom: 'Plat sans recette' };
   assert.deepEqual(evaluer(attente, ADULTE_B), {
     niveau: 'inconnu', variante: null, fautifs: [], restants: [], aCreer: false, aRevoir: false, besoin: null,
+    versions: [], manquants: [], aCompleter: false,
   });
   assert.equal(niveau({ ...attente, ingredients: [] }), 'inconnu');
   assert.equal(niveau(plat('panna', [GELATINE_BOEUF, ing('crème', ['laitier'])], { type: 'dessert' })), 'exclu');
@@ -236,11 +237,20 @@ test('version qui couvre tout → adaptable, source fiche', () => {
   const p = plat('gratin', [PATES, JAMBON], { variantes: [version('profil-b', ['Jambon blanc'], [THON], 'Part au thon')] });
   const r = evaluer(p, ADULTE_B);
   assert.equal(r.niveau, 'adaptable');
-  assert.deepEqual(r.variante, { source: 'fiche', retirer: ['Jambon blanc'], ajouter: [THON], consigne: 'Part au thon' });
+  assert.deepEqual(r.variante, { source: 'fiche', retirer: ['Jambon blanc'], ajouter: [THON], consigne: 'Part au thon', style: 'mer' });
   assert.deepEqual(r.fautifs, [JAMBON]);
   assert.equal(r.aCreer, false);
   assert.equal(r.aRevoir, false);
-  assert.equal(r.besoin, null);
+  // « Pas de viande » attend aussi une version végétale : le plat est à compléter (besoin de la version qui manque).
+  assert.deepEqual(r.manquants, ['vegetal']);
+  assert.equal(r.aCompleter, true);
+  assert.equal(r.besoin, 'sans_viande');
+  // Profil sans style attendu (règles hors régime de l'écran) : comme avant, rien ne manque.
+  const seul = evaluer(p, avecRegles([{ type: 'exclureMarqueurs', marqueurs: ['viande'], severite: 'exclu' }]));
+  assert.equal(seul.niveau, 'adaptable');
+  assert.deepEqual(seul.manquants, []);
+  assert.equal(seul.aCompleter, false);
+  assert.equal(seul.besoin, null);
   // La version d'un autre profil ne compte pas.
   assert.equal(evaluer({ ...p, variantes: [version('profil-a', ['jambon blanc'])] }, ADULTE_B).aCreer, true);
 });
@@ -268,14 +278,20 @@ test('version qui ajoute du saumon pour « ni poisson » → à revoir', () => {
   assert.equal(r.besoin, 'adapter');
 });
 
-test('deux versions pour un profil → la première ; plat ok avec une version → ok', () => {
+test('deux versions pour un profil → celle qui convient ; plat ok avec une version → ok', () => {
   const p = plat('x', [LARDONS], { variantes: [version('profil-b', ['lardons']), version('profil-b', [])] });
   assert.equal(evaluer(p, ADULTE_B).niveau, 'adaptable');
+  // Chaque version est jugée : la seconde convient, le plat n'est plus à revoir.
   const inverse = { ...p, variantes: [...p.variantes].reverse() };
-  assert.equal(evaluer(inverse, ADULTE_B).aRevoir, true);
+  const r = evaluer(inverse, ADULTE_B);
+  assert.equal(r.niveau, 'adaptable');
+  assert.equal(r.aRevoir, false);
+  assert.equal(r.variante.retirer[0], 'lardons');
+  assert.deepEqual(r.versions.map((v) => v.convient), [false, true]);
   const ok = plat('x', [PATES], { variantes: [version('profil-b', ['pâtes'])] });
   assert.deepEqual(evaluer(ok, ADULTE_B), {
     niveau: 'ok', variante: null, fautifs: [], restants: [], aCreer: false, aRevoir: false, besoin: null,
+    versions: [{ variante: ok.variantes[0], style: 'vegetal', convient: true, restants: [] }], manquants: [], aCompleter: false,
   });
 });
 
@@ -307,15 +323,16 @@ test('aAdapterPour, bilanCompatibilite, platsSansVersion : un seul filtre, même
   const aAdapter = CATALOGUE.filter((p) => aAdapterPour(p, ADULTE_B)).map((p) => p.id);
   assert.deepEqual(aAdapter, ['boeuf-carottes', 'quiche', 'risotto', 'panna']);
   const bilan = bilanCompatibilite(CATALOGUE, ADULTE_B, { profils: PROFILS });
-  assert.deepEqual(bilan, { convient: 3, avecVersion: 1, aCreer: 4, orphelines: 1 });
-  assert.equal(platsSansVersion(CATALOGUE, ADULTE_B).length, bilan.aCreer);
+  // Le gratin a sa version mer (thon) : il compte avec les versions, et à compléter (végétale).
+  assert.deepEqual(bilan, { convient: 3, avecVersion: 1, aCreer: 4, aCompleter: 1, orphelines: 1 });
+  assert.equal(platsSansVersion(CATALOGUE, ADULTE_B).length, bilan.aCreer + bilan.aCompleter);
   // Apéro, préparations, ⏳ et « Jamais » exclus partout.
   for (const id of ['rillettes', 'fond-maison', 'attente', 'jamais']) {
     assert.equal(aAdapterPour(CATALOGUE.find((p) => p.id === id), ADULTE_B), false, id);
   }
   // Sans profils donnés, pas d'orphelines comptées ; un profil sans règle : tout convient.
   assert.equal(bilanCompatibilite(CATALOGUE, ADULTE_B).orphelines, 0);
-  assert.deepEqual(bilanCompatibilite(CATALOGUE, ADULTE_A), { convient: 9, avecVersion: 0, aCreer: 0, orphelines: 0 });
+  assert.deepEqual(bilanCompatibilite(CATALOGUE, ADULTE_A), { convient: 9, avecVersion: 0, aCreer: 0, aCompleter: 0, orphelines: 0 });
   // Une fonction d'évaluation fournie (mémorisée par l'app) est utilisée.
   let appels = 0;
   const memorisee = (p, profil) => { appels += 1; return evaluer(p, profil); };
@@ -326,20 +343,24 @@ test('aAdapterPour, bilanCompatibilite, platsSansVersion : un seul filtre, même
 test('platsSansVersion : demande ouverte, puis notes des autres, puis nom, envoyés en fin', () => {
   const ids = (options) => platsSansVersion(CATALOGUE, ADULTE_B, { profils: PROFILS, ...options }).map((e) => e.plat.id);
   // Notes des autres (non noté = 3) : quiche 5 ; bœuf carottes, panna 3 ; risotto max(1, 3 de l'enfant) = 3.
-  assert.deepEqual(ids(), ['quiche', 'boeuf-carottes', 'panna', 'risotto']);
+  // Le gratin (à compléter : version mer seule) vient après tous les plats à créer.
+  assert.deepEqual(ids(), ['quiche', 'boeuf-carottes', 'panna', 'risotto', 'gratin']);
   // Sans les profils, seules les notes présentes : risotto 1 passe en dernier.
-  assert.deepEqual(platsSansVersion(CATALOGUE, ADULTE_B).map((e) => e.plat.id), ['quiche', 'boeuf-carottes', 'panna', 'risotto']);
+  assert.deepEqual(platsSansVersion(CATALOGUE, ADULTE_B).map((e) => e.plat.id), ['quiche', 'boeuf-carottes', 'panna', 'risotto', 'gratin']);
   assert.deepEqual(platsSansVersion(CATALOGUE, ADULTE_B, { profils: [ADULTE_A, ADULTE_B] }).map((e) => e.plat.id),
-    ['quiche', 'boeuf-carottes', 'panna', 'risotto']);
+    ['quiche', 'boeuf-carottes', 'panna', 'risotto', 'gratin']);
   const demandes = [
     { id: 'risotto__profil-b', statut: 'ouverte' },
     { id: 'panna__profil-b', statut: 'traitee' },
     { id: 'boeuf-carottes__profil-a', statut: 'ouverte' },
+    { id: 'gratin__profil-b', statut: 'ouverte' },
   ];
-  assert.deepEqual(ids({ demandes }), ['risotto', 'quiche', 'boeuf-carottes', 'panna']);
-  assert.deepEqual(ids({ demandes, envoyes: ['risotto', 'quiche'] }), ['boeuf-carottes', 'panna', 'risotto', 'quiche']);
+  assert.deepEqual(ids({ demandes }), ['risotto', 'quiche', 'boeuf-carottes', 'panna', 'gratin']);
+  assert.deepEqual(ids({ demandes, envoyes: ['risotto', 'quiche'] }), ['boeuf-carottes', 'panna', 'risotto', 'quiche', 'gratin']);
   const premier = platsSansVersion(CATALOGUE, ADULTE_B, { profils: PROFILS })[0];
-  assert.deepEqual(premier, { plat: CATALOGUE[2], fautifs: [LARDONS], besoin: 'sans_viande', aRevoir: false });
+  assert.deepEqual(premier, {
+    plat: CATALOGUE[2], fautifs: [LARDONS], besoin: 'sans_viande', aRevoir: false, manquants: ['mer', 'vegetal'], aCompleter: false,
+  });
 });
 
 test('marqueursDouteux : mots de viande, bouillons, gélatine, graisses ; fumet de poisson jamais', () => {
@@ -540,7 +561,8 @@ test('filtrerPlats : « Pour <Prénom> » (ok + adaptable, ⏳ exclus), « Versi
   const filtres = filtresPour(profilsContraints(PROFILS), { role: 'gestionnaire' });
   const ids = (id, options = {}) => filtrerPlats(CATALOGUE, { filtre: filtreRetenu(filtres, id), evaluer, ...options }).map((p) => p.id);
   assert.deepEqual(ids('pour-profil-b'), ['gratin', 'orphelin', 'pates-saumon', 'puree']);
-  assert.deepEqual(ids('a-creer'), ['boeuf-carottes', 'panna', 'quiche', 'risotto']);
+  // « Versions à créer » garde aussi le gratin, à compléter (version végétale).
+  assert.deepEqual(ids('a-creer'), ['boeuf-carottes', 'gratin', 'panna', 'quiche', 'risotto']);
   assert.deepEqual(ids('a-creer', { recherche: 'pan' }), ['panna']);
   assert.deepEqual(filtrerPlats(CATALOGUE, { filtre: 'attente' }).map((p) => p.id), ['attente']);
   assert.deepEqual(filtrerPlats(CATALOGUE, { filtre: 'apero', evaluer }).map((p) => p.id), ['rillettes']);

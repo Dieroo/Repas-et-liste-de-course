@@ -3,23 +3,30 @@
 // Chaque texte porte en deuxième ligne la version des instructions attendue (docs/projet-claude.md, section 0).
 // Les identifiants de profil et leurs règles ne vont qu'au presse-papiers ; jamais d'adresse, de prénom ni d'âge.
 // N'importe jamais paquet.js (qui garde la lecture des réponses) : pas de cycle.
-import { decrireRegles, lireRegime } from './regles.js';
+import { decrireRegles, lireRegime, stylesAttendus } from './regles.js';
 import { evaluer, profilsContraints } from './compatibilite.js';
 import { texte } from './vocabulaire.js';
 
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 1;
+export const VERSION_INSTRUCTIONS = 2;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = 'bf65510e6380';
+export const EMPREINTE_INSTRUCTIONS = '49a2dbbaf3bd';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
 
 /** Nombre de plats d'une demande groupée de versions : une réponse plus longue risque d'être coupée. */
 export const LOT_VERSIONS = 10;
+
+// Dernière ligne d'une demande de recette avec des versions.
+const CONSIGNE_RECETTE = '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)';
+// Consigne d'une demande groupée de versions : une seule version par plat (profil sans style attendu)…
+const CONSIGNE_VARIANTES = '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)';
+// … ou une par style de sa ligne « à faire » (fusion par style : les autres versions restent).
+const CONSIGNE_STYLES = '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [les versions de sa ligne « à faire »] }, jamais la recette entière. Une version par style, avec `style` (et `frigoJours` pour `mer`) ; une version que tu rends remplace celle du même style, les autres restent. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)';
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 
@@ -63,7 +70,9 @@ function quantite(ingredient, champ = 'qte') {
 /**
  * (a) Texte copié par « Demander à Claude » pour une recette à ajouter. Sans profil qui a des règles : texte de T1b
  * (plus la ligne de version des instructions). Sinon, une ligne `versions:` par profil contraint (ordre
- * d'affichage), pour que Claude rende la fiche complète avec leurs variantes.
+ * d'affichage), pour que Claude rende la fiche complète avec leurs variantes ; un profil qui attend des styles
+ * (regles.js › stylesAttendus) les annonce en fin de ligne (« — styles: mer, vegetal » ; « — styles: vegetal » pour un
+ * plat déjà connu comme dessert ou accompagnement).
  */
 export function texteDemandeRecette(plat, { profils = [] } = {}) {
   const contraints = profilsContraints(profils).filter((profil) => typeof profil.id === 'string' && profil.id);
@@ -75,12 +84,13 @@ export function texteDemandeRecette(plat, { profils = [] } = {}) {
   ];
   if (contraints.length) {
     lignes.push('versions:');
-    for (const profil of contraints) lignes.push(`- pour: ${profil.id} — ${reglesPourClaude(profil)}`);
+    for (const profil of contraints) {
+      const styles = stylesAttendus(profil, plat);
+      lignes.push(`- pour: ${profil.id} — ${reglesPourClaude(profil)}${styles.length ? ` — styles: ${styles.join(', ')}` : ''}`);
+    }
   }
   lignes.push('(Ajoute un lien, une photo ou la recette dictée.)');
-  if (contraints.length) {
-    lignes.push('(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)');
-  }
+  if (contraints.length) lignes.push(CONSIGNE_RECETTE);
   return lignes.join('\n');
 }
 
@@ -90,11 +100,34 @@ function exclusPour(ingredients, profil) {
   return resultat.niveau === 'exclu' ? new Set(resultat.fautifs) : new Set();
 }
 
+/** Version actuelle d'un plat, pour Claude : « retirer: … ; ajouter: … par portion ✗ ; consigne: … ». */
+function versionActuelle(version, profil) {
+  const ajouts = (Array.isArray(version?.ajouter) ? version.ajouter : []).filter(estObjet);
+  const exclus = exclusPour(ajouts, profil);
+  const morceaux = [
+    `retirer: ${(Array.isArray(version?.retirer) ? version.retirer : []).map(ligne).filter(Boolean).join(', ') || 'rien'}`,
+    `ajouter: ${ajouts.map((a) => `${quantite(a, 'qtePortion')} par portion${exclus.has(a) ? ' ✗' : ''}`).join(', ') || 'rien'}`,
+  ];
+  const consigne = ligne(version?.consigne);
+  if (consigne) morceaux.push(`consigne: ${consigne}`);
+  return morceaux.join(' ; ');
+}
+
 /**
  * (b) Texte copié pour demander à Claude les versions d'un ou plusieurs plats pour un profil (LOT_VERSIONS au plus ;
  * les suivants sont laissés de côté). `plats` : fiches, ou éléments de compatibilite.js › platsSansVersion ({ plat }).
- * Les ingrédients fautifs portent ✗ (Claude reprend leur nom exact dans `retirer`) ; un plat dont la version est à
- * revoir est envoyé avec sa version actuelle. `besoin` : celui du lot si tous les plats ont le même, sinon omis.
+ * Les ingrédients fautifs portent ✗ (Claude reprend leur nom exact dans `retirer`). `besoin` : celui du lot si tous
+ * les plats ont le même, sinon omis.
+ * - Profil sans style attendu : un plat dont la version est à revoir est envoyé avec sa version actuelle (texte de
+ *   T2b à l'identique).
+ * - Profil qui attend des styles (regles.js › stylesAttendus) : ligne `styles:` en tête ; pour chaque plat, la version
+ *   actuelle de chaque style à refaire qui ne convient pas (« version actuelle (mer): … »), puis « à faire: » (styles
+ *   qui manquent, compatibilite.js › evaluer ; tous les styles attendus pour ce plat si rien ne manque : jamais `mer`
+ *   pour un dessert ou un accompagnement). Une version qui convient n'est jamais renvoyée : elle reste (fusion par
+ *   style). Une version d'un style que le profil n'attend pas (mer pour « Ni viande ni poisson ») et qui ne convient
+ *   pas est montrée sous un style qui manque encore, s'il n'a pas déjà sa version à revoir : Claude la refait, et la
+ *   version rendue la remplace. Le `besoin` d'un plat à revoir vient de cette version montrée (compatibilite.js ›
+ *   evaluer).
  */
 export function texteDemandeVariantes(plats, profil) {
   const fiches = (Array.isArray(plats) ? plats : [])
@@ -102,6 +135,7 @@ export function texteDemandeVariantes(plats, profil) {
     .filter(estObjet)
     .slice(0, LOT_VERSIONS);
   const evaluations = fiches.map((plat) => evaluer(plat, profil));
+  const styles = stylesAttendus(profil);
   const besoins = new Set(evaluations.map((r) => r.besoin));
   const [besoin] = besoins;
   const lignes = [
@@ -109,29 +143,41 @@ export function texteDemandeVariantes(plats, profil) {
     LIGNE_INSTRUCTIONS,
     `pour: ${ligne(profil?.id)}`,
   ];
+  if (styles.length) lignes.push(`styles: ${styles.join(', ')}`);
   if (besoins.size === 1 && besoin) lignes.push(`besoin: ${besoin}`);
   lignes.push(`règles: ${reglesPourClaude(profil)}`);
-  lignes.push('(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)');
+  lignes.push(styles.length ? CONSIGNE_STYLES : CONSIGNE_VARIANTES);
   lignes.push('plats:');
   fiches.forEach((plat, i) => {
-    const fautifs = new Set(evaluations[i].fautifs);
+    const resultat = evaluations[i];
+    const fautifs = new Set(resultat.fautifs);
     const ingredients = (Array.isArray(plat.ingredients) ? plat.ingredients : []).filter(estObjet);
     lignes.push(`- id: ${ligne(plat.id)}`);
     lignes.push(`  nom: ${ligne(plat.nom)}`);
     if (plat.portionsBase != null) lignes.push(`  portions: ${ligne(plat.portionsBase)}`);
     lignes.push(`  ingrédients: ${ingredients.map((ingredient) => `${quantite(ingredient)}${fautifs.has(ingredient) ? ' ✗' : ''}`).join(' ; ')}`);
-    if (evaluations[i].aRevoir) {
-      const version = (Array.isArray(plat.variantes) ? plat.variantes : [])
-        .find((v) => estObjet(v) && v.pour === profil?.id);
-      const ajouts = (Array.isArray(version?.ajouter) ? version.ajouter : []).filter(estObjet);
-      const exclus = exclusPour(ajouts, profil);
-      const morceaux = [
-        `retirer: ${(Array.isArray(version?.retirer) ? version.retirer : []).map(ligne).filter(Boolean).join(', ') || 'rien'}`,
-        `ajouter: ${ajouts.map((a) => `${quantite(a, 'qtePortion')} par portion${exclus.has(a) ? ' ✗' : ''}`).join(', ') || 'rien'}`,
-      ];
-      const consigne = ligne(version?.consigne);
-      if (consigne) morceaux.push(`consigne: ${consigne}`);
-      lignes.push(`  version actuelle: ${morceaux.join(' ; ')}`);
+    if (styles.length) {
+      const attendus = stylesAttendus(profil, plat);
+      const aFaire = resultat.manquants.length ? resultat.manquants : attendus;
+      // Version à revoir de chaque style à faire ; puis une version d'un style que le profil n'attend pas (mer pour
+      // « Ni viande ni poisson », ou pour un dessert), montrée sous un style qui manque encore : la version rendue la
+      // remplace (paquet.js › fusionnerVariantes, styles attendus).
+      const actuelles = new Map();
+      for (const { variante, style, convient } of resultat.versions) {
+        if (!convient && aFaire.includes(style) && !actuelles.has(style)) actuelles.set(style, variante);
+      }
+      for (const { variante, style, convient } of resultat.versions) {
+        if (convient || attendus.includes(style)) continue;
+        const libre = resultat.manquants.find((manquant) => !actuelles.has(manquant));
+        if (libre) actuelles.set(libre, variante);
+      }
+      for (const style of aFaire) {
+        if (actuelles.has(style)) lignes.push(`  version actuelle (${style}): ${versionActuelle(actuelles.get(style), profil)}`);
+      }
+      lignes.push(`  à faire: ${aFaire.join(', ')}`);
+    } else if (resultat.aRevoir) {
+      const version = resultat.versions.find((v) => !v.convient)?.variante;
+      lignes.push(`  version actuelle: ${versionActuelle(version, profil)}`);
     }
   });
   return lignes.join('\n');

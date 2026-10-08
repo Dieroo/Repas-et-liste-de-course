@@ -4,9 +4,12 @@
 // recopiés dans le texte de correction à recoller dans le Projet Claude).
 import { sansAccents, slug } from './slug.js';
 import { NOM_MAX, statutDe } from './plats.js';
-import { VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient } from './vocabulaire.js';
-import { evaluer, marqueursEffectifs } from './compatibilite.js';
+import {
+  EMOJIS_STYLE, LIBELLES_STYLE, STYLES, VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient,
+} from './vocabulaire.js';
+import { evaluer, marqueursEffectifs, styleDe } from './compatibilite.js';
 import { VERSION_INSTRUCTIONS } from './claude.js';
+import { stylesAttendus } from './regles.js';
 
 // Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
 export { VOCABULAIRES, SOUS_TYPES_VIANDE, VIANDES, IMPLICATIONS, code, validerIngredient } from './vocabulaire.js';
@@ -26,7 +29,15 @@ export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 
 const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar'];
 const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
-const CHAMPS_VARIANTE = ['pour', 'retirer', 'ajouter', 'consigne'];
+const CHAMPS_VARIANTE = ['pour', 'style', 'retirer', 'ajouter', 'consigne', 'frigoJours'];
+// Style d'une version (`mer`, `vegetal`) : tolérances en plus de celles de code() (casse, accents, séparateurs).
+const SYNONYMES_STYLE = { vegetale: 'vegetal', vegetarien: 'vegetal', vegetarienne: 'vegetal' };
+// Jours au frigo d'une version (part au poisson d'une version `mer`, surtout).
+const FRIGO_JOURS_VERSION_MAX = 30;
+// Ajouts qui font une version `mer` (au moins un) ; jamais dans une version `vegetal`.
+const MARQUEURS_MER = ['poisson', 'fruits_de_mer'];
+// Pluriel des libellés de style, pour « Deux versions végétales… ».
+const PLURIELS_STYLE = { mer: 'mer', vegetal: 'végétales' };
 const ANNONCE_RECETTE = /"(format|plats)"\s*:/;
 // Clés connues à la racine d'une réponse ; `instructions` (version des instructions du projet Claude) est lue par
 // controlerInstructions. Les autres sont ignorées, avec un avertissement.
@@ -146,12 +157,35 @@ function booleen(valeur) {
   return null;
 }
 
+/** Style d'une version : « Mer », « végétale », « Végétarienne »… → 'mer' ou 'vegetal' ; null pour une autre valeur. */
+function styleLu(valeur) {
+  const c = code(valeur);
+  const style = SYNONYMES_STYLE[c] ?? c;
+  return STYLES.includes(style) ? style : null;
+}
+
+/** Valeur reçue, recopiée dans un message (texte sur une ligne ; « ? » pour un objet ou une liste). */
+function lisible(valeur) {
+  if (typeof valeur === 'string') return texte(valeur);
+  if (typeof valeur === 'number' || typeof valeur === 'boolean') return String(valeur);
+  return '?';
+}
+
+/** Vrai si l'ingrédient est un poisson ou un fruit de mer (marqueurs effectifs). */
+function estDeLaMer(ingredient) {
+  const effectifs = marqueursEffectifs(ingredient);
+  return MARQUEURS_MER.some((marqueur) => effectifs.has(marqueur));
+}
+
 // ——— Validation ———
 
 /**
  * Une recette du collage. → { index, id, nom, donnees (null si erreur), erreurs, avertissements }
- * `versionsEnDouble` : deux variantes pour le même profil sont une erreur à l'ajout de recettes ('erreur') ; ailleurs
- * (fiches en base, sauvegardes, empreintes : 'premiere'), seule la première est gardée, comme le fait evaluer.
+ * Versions d'un même profil : une par style (`mer`, `vegetal`), et une version sans style est la seule de son profil.
+ * `versionsEnDouble` : à l'ajout de recettes ('erreur'), deux versions en conflit sont une erreur, comme une version
+ * dont le style ne va pas avec ses ajouts (mer sans poisson ni fruits de mer ni jours au frigo, végétale avec) ;
+ * ailleurs (fiches en base, sauvegardes, empreintes : 'premiere'), seule la première version en conflit est gardée et
+ * une version incohérente reste, avec un avertissement.
  */
 function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } = {}) {
   const erreurs = [];
@@ -330,6 +364,10 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
     if (!Array.isArray(brut.variantes)) {
       signaler(`${affiche}\u00A0: variantes illisibles.`, 'variantes : liste attendue');
     } else {
+      // Cohérence d'une version et de son style (jours au frigo d'une version mer, poisson ajouté ou non) : erreurs à
+      // l'ajout de recettes ; ailleurs (fiches en base, sauvegardes), avertissements, la version reste. La fusion par
+      // style écrit le style déduit d'une ancienne version sans lui inventer de jours au frigo.
+      const incoherence = versionsEnDouble === 'erreur' ? signaler : prevenir;
       const variantes = brut.variantes.map((v, j) => {
         const ici = `${affiche}, variante ${j + 1}`;
         const la = `variantes[${j}]`;
@@ -348,6 +386,17 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
           variante.pour = pour;
           if (idsProfils && !idsProfils.has(pour)) {
             prevenir(`${ici}\u00A0: aucun profil «\u00A0${pour}\u00A0» dans l’app. Elle sera gardée, sans effet pour l’instant.`, `${la}.pour « ${pour} » : profil inconnu`);
+          }
+        }
+        // Style : absent (ou vide) → une version sans style, comme avant.
+        if (!(v.style == null || (typeof v.style === 'string' && !v.style.trim()))) {
+          const style = styleLu(v.style);
+          if (!style) {
+            ok = false;
+            signaler(`${ici}\u00A0: version «\u00A0${lisible(v.style)}\u00A0» inconnue (mer ou végétale).`,
+              `${la}.style « ${lisible(v.style)} » : ${STYLES.map((s) => `\`${s}\``).join(' ou ')}`);
+          } else {
+            variante.style = style;
           }
         }
         // « À retirer » : des noms de produits seulement (un objet deviendrait « [object Object] »).
@@ -373,6 +422,35 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
         }
         const consigne = texte(v.consigne);
         if (consigne) variante.consigne = consigne;
+        // Jours au frigo : absents (ou vides) → rien ; facultatifs, sauf pour une version mer (ci-dessous).
+        const joursDonnes = !(v.frigoJours == null || (typeof v.frigoJours === 'string' && !v.frigoJours.trim()));
+        if (joursDonnes) {
+          const jours = nombre(v.frigoJours);
+          if (!(Number.isInteger(jours) && jours >= 1 && jours <= FRIGO_JOURS_VERSION_MAX)) {
+            ok = false;
+            signaler(`${ici}\u00A0: nombre de jours au frigo invalide (de 1 à ${FRIGO_JOURS_VERSION_MAX}).`,
+              `${la}.frigoJours : nombre entier de jours (1 à ${FRIGO_JOURS_VERSION_MAX})`);
+          } else {
+            variante.frigoJours = jours;
+          }
+        }
+        // Style et ajouts : une version mer ajoute du poisson ou des fruits de mer, une version végétale jamais.
+        if (variante.style === 'mer') {
+          if (!joursDonnes) {
+            incoherence(`Version mer de ${affiche}\u00A0: combien de jours au frigo\u202F?`,
+              `${la} (mer) : \`frigoJours\` manquant (nombre entier de jours)`);
+          }
+          if (variante.ajouter && !variante.ajouter.some(estDeLaMer)) {
+            incoherence(`Version mer de ${affiche}\u00A0: aucun poisson ni fruit de mer ajouté.`,
+              `${la} (mer) : aucun ingrédient \`poisson\` ou \`fruits_de_mer\` dans \`ajouter\``);
+          }
+        } else if (variante.style === 'vegetal') {
+          (variante.ajouter ?? []).forEach((ajout, k) => {
+            if (!estDeLaMer(ajout)) return;
+            incoherence(`Version végétale de ${affiche}\u00A0: «\u00A0${ajout.produit}\u00A0» est un poisson ou un fruit de mer.`,
+              `${la} (vegetal) ajouter[${k}] « ${ajout.produit} » : ni \`poisson\` ni \`fruits_de_mer\` dans une version \`vegetal\``);
+          });
+        }
         if (ok) {
           if (!variante.retirer.length && !variante.ajouter.length) {
             prevenir(`${ici}\u00A0: elle ne change rien à la recette.`, `${la} : ni retirer ni ajouter`);
@@ -388,19 +466,33 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
         }
         return ok ? variante : null;
       });
-      // Une seule version par profil.
-      const vues = new Set();
+      // Versions d'un même profil : une par style ; une version sans style est la seule de son profil.
       const uniques = [];
       variantes.forEach((variante, j) => {
         if (!variante) return;
-        if (!vues.has(variante.pour)) {
-          vues.add(variante.pour);
+        const memeProfil = uniques.filter((gardee) => gardee.pour === variante.pour);
+        let message;
+        let pourClaude;
+        if (!memeProfil.length) {
           uniques.push(variante);
-        } else if (versionsEnDouble === 'erreur') {
-          signaler(`Deux versions pour le même profil dans ${affiche}.`, `variantes[${j}].pour « ${variante.pour} » : deux variantes pour le même profil`);
-        } else {
-          prevenir(`${affiche}\u00A0: deux versions pour le même profil, seule la première est gardée.`, `variantes[${j}].pour « ${variante.pour} » : deux variantes pour le même profil, la première est gardée`);
+          return;
         }
+        if (!variante.style && memeProfil.every((gardee) => !gardee.style)) {
+          // Deux versions sans style : textes d'avant les styles.
+          message = `Deux versions pour le même profil dans ${affiche}.`;
+          pourClaude = `variantes[${j}].pour « ${variante.pour} » : deux variantes pour le même profil`;
+        } else if (!variante.style || memeProfil.some((gardee) => !gardee.style)) {
+          message = `Deux versions pour le même profil dans ${affiche}, dont une qui ne dit pas si elle est mer ou végétale.`;
+          pourClaude = `variantes[${j}] : une variante sans \`style\` doit être la seule du profil \`${variante.pour}\``;
+        } else if (memeProfil.some((gardee) => gardee.style === variante.style)) {
+          message = `Deux versions ${PLURIELS_STYLE[variante.style]} pour le même profil dans ${affiche}.`;
+          pourClaude = `variantes[${j}] : deux versions \`${variante.style}\` pour le profil \`${variante.pour}\``;
+        } else {
+          uniques.push(variante);
+          return;
+        }
+        if (versionsEnDouble === 'erreur') signaler(message, pourClaude);
+        else prevenir(`${message.slice(0, -1)}\u00A0: seule la première est gardée.`, `${pourClaude}, la première est gardée`);
       });
       if (variantes.every(Boolean) && (uniques.length || aRecette)) donnees.variantes = uniques;
     }
@@ -422,7 +514,9 @@ export function estSauvegarde(paquets) {
 /**
  * Valide les recettes retrouvées (CLAUDE.md §8). `profils` : profils de l'app (variante pour un profil inconnu → avertissement).
  * `platsMax` : nombre de recettes accepté ; `doublonsDeNom` : false pour une sauvegarde, restaurée par identifiant ;
- * `versionsEnDouble` : 'erreur' (ajout de recettes) ou 'premiere' (sauvegarde : seule la première est gardée).
+ * `versionsEnDouble` : 'erreur' (ajout de recettes) ou 'premiere' (sauvegarde, fiches en base : seule la première de
+ * deux versions en conflit est gardée ; une version dont le style ne va pas avec ses ajouts ou ses jours au frigo
+ * reste, avec un avertissement).
  * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide }
  *   `donnees` ne contient que des champs présents et valides (aucune valeur undefined, aucune table vide).
  */
@@ -562,27 +656,84 @@ function propre(valeur) {
 
 // ——— Versions (variantes) ———
 
+/** Style écrit d'une version (`mer` ou `vegetal`) ; null s'il est absent ou inconnu. */
+function styleEcrit(variante) {
+  return estObjet(variante) && STYLES.includes(variante.style) ? variante.style : null;
+}
+
 /**
- * Versions d'une fiche après réception de `recues` : chaque version reçue remplace celle du même profil (`pour`), à sa
- * place ; les versions des autres profils restent, dans leur ordre ; les nouvelles vont à la fin. Une version reçue ne
- * retire jamais celle d'un autre profil. Aucune valeur undefined (ni null) dans le résultat.
+ * Vrai si la version reçue remplace la version `actuelle` : même profil et même style (écrit ; déduit par
+ * compatibilite.js › styleDe pour une version d'avant les styles). Une version reçue sans style remplace toutes celles
+ * de son profil. `attendus` ({ [profilId]: [style] }, facultatif) : une version reçue avec un style remplace aussi
+ * celles de son profil d'un style qu'il n'attend pas (mer pour « Ni viande ni poisson », ou pour un dessert).
  */
-export function fusionnerVariantes(actuelles, recues) {
-  const resultat = (Array.isArray(actuelles) ? actuelles : []).filter((v) => v != null).map(propre);
+function remplace(recue, actuelle, attendus = null) {
+  if (!estObjet(actuelle) || actuelle.pour !== recue.pour) return false;
+  const style = styleEcrit(recue);
+  if (!style) return true;
+  const sien = styleDe(actuelle);
+  if (sien === style) return true;
+  const siens = estObjet(attendus) && Object.hasOwn(attendus, recue.pour) ? attendus[recue.pour] : null;
+  return Array.isArray(siens) && siens.length > 0 && !siens.includes(sien);
+}
+
+/**
+ * Styles attendus pour ce plat par les profils de ces versions (regles.js › stylesAttendus ; un dessert ou un
+ * accompagnement n'attend pas de version mer), seulement pour ceux qui en attendent certains mais pas tous (pour les
+ * autres, aucune version n'est d'un style inattendu) : { [profilId]: [style] }, ou null. `profils` : profils de l'app
+ * (un profil inconnu n'attend aucun style).
+ */
+export function stylesAttendusDesVersions(plat, variantes, profils) {
+  const attendus = {};
   const vus = new Set();
-  for (const recue of Array.isArray(recues) ? recues : []) {
-    if (!estObjet(recue) || typeof recue.pour !== 'string' || !recue.pour || vus.has(recue.pour)) continue;
-    vus.add(recue.pour);
-    const position = resultat.findIndex((v) => estObjet(v) && v.pour === recue.pour);
-    if (position === -1) {
-      resultat.push(propre(recue));
-      continue;
-    }
-    resultat[position] = propre(recue);
-    // Une ancienne version en double pour ce profil (fiche abîmée) ne survit pas à la nouvelle.
-    for (let i = resultat.length - 1; i > position; i -= 1) {
-      if (estObjet(resultat[i]) && resultat[i].pour === recue.pour) resultat.splice(i, 1);
-    }
+  const connus = Array.isArray(profils) ? profils.filter(estObjet) : [];
+  for (const variante of Array.isArray(variantes) ? variantes : []) {
+    const pour = variante?.pour;
+    if (typeof pour !== 'string' || !pour || vus.has(pour)) continue;
+    vus.add(pour);
+    const styles = stylesAttendus(connus.find((p) => p.id === pour) ?? { id: pour }, plat);
+    if (styles.length && styles.length < STYLES.length) attendus[pour] = styles;
+  }
+  return Object.keys(attendus).length ? attendus : null;
+}
+
+/**
+ * Versions d'une fiche après réception de `recues`, fusionnées par (profil, style) :
+ * - une version reçue avec un style remplace celle du même profil et du même style (une version sans style compte
+ *   pour son style déduit, styleDe) ; les autres versions de ce profil restent, et celles qui n'avaient pas de style
+ *   reçoivent leur style déduit, écrit (une version sans style doit être la seule de son profil) ;
+ * - avec `attendus` ({ [profilId]: [style] }, stylesAttendusDesVersions), elle remplace aussi les versions de son
+ *   profil d'un style qu'il n'attend pas (une version mer restée d'avant « Ni viande ni poisson », jamais redemandée),
+ *   sauf celles reçues avec elle (jugées et signalées à l'aperçu) ; sans `attendus` (restauration, qui n'ôte rien),
+ *   seulement celle du même style ;
+ * - une version reçue sans style remplace toutes les versions de son profil, comme avant les styles.
+ * La version reçue prend la place de la première remplacée, sinon va à la fin ; deux versions reçues pour le même
+ * profil et le même style : la première compte. Une version reçue ne retire jamais celle d'un autre profil ; les
+ * versions des autres profils restent, dans leur ordre. Aucune valeur undefined (ni null) dans le résultat.
+ */
+export function fusionnerVariantes(actuelles, recues, { attendus = null } = {}) {
+  let resultat = (Array.isArray(actuelles) ? actuelles : []).filter((v) => v != null).map(propre);
+  const vues = new Set();
+  const ajoutees = new Set(); // versions reçues déjà posées : jamais ôtées pour leur style inattendu
+  for (const brute of Array.isArray(recues) ? recues : []) {
+    if (!estObjet(brute) || typeof brute.pour !== 'string' || !brute.pour) continue;
+    const recue = propre(brute);
+    const style = styleEcrit(recue);
+    const cle = JSON.stringify([recue.pour, style]);
+    if (vues.has(cle)) continue;
+    vues.add(cle);
+    const ote = (v) => remplace(recue, v, ajoutees.has(v) ? null : attendus);
+    const position = resultat.findIndex(ote);
+    const suite = [];
+    resultat.forEach((v, i) => {
+      if (i === position) suite.push(recue);
+      else if (ote(v)) return; // même style, style plus attendu, ou doublon d'une fiche abîmée
+      else if (style && estObjet(v) && v.pour === recue.pour && !styleEcrit(v)) suite.push({ ...v, style: styleDe(v) });
+      else suite.push(v);
+    });
+    if (position === -1) suite.push(recue);
+    ajoutees.add(recue);
+    resultat = suite;
   }
   return resultat;
 }
@@ -593,39 +744,64 @@ function profilDe(profils, pour) {
 }
 
 /**
- * Ce que donne la version de `pour` sur la fiche (déjà fusionnée) : { convient, restants: [{ nom, marqueurs }] }.
- * Une version convient si le plat a sa recette et n'est plus « à créer » ni « à revoir » pour ce profil
- * (compatibilite.js › evaluer).
+ * Vrai si le plat (fiche déjà fusionnée) a sa recette et n'est plus « à créer » ni « à revoir » pour ce profil : il se
+ * mange tel quel, ou au moins une de ses versions convient (compatibilite.js › evaluer).
  */
-function versionConvient(fiche, profil) {
+function platAdapte(fiche, profil) {
   const resultat = evaluer(fiche, profil);
-  // Plat sans recette (⏳) : rien ne dit encore que la version convient.
-  if (resultat.niveau === 'inconnu') return { convient: false, restants: [] };
-  if (!resultat.aCreer && !resultat.aRevoir) return { convient: true, restants: [] };
-  // Marqueurs exclus par le profil, pour nommer la cause à Claude.
+  return resultat.niveau !== 'inconnu' && !resultat.aCreer && !resultat.aRevoir;
+}
+
+/** Marqueurs que le profil exclut (règles `exclureMarqueurs` actives), pour nommer la cause à Claude. */
+function marqueursExclusPar(profil) {
   const exclus = new Set();
   for (const regle of Array.isArray(profil?.regles) ? profil.regles : []) {
     if (estObjet(regle) && regle.actif !== false && regle.severite === 'exclu' && regle.type === 'exclureMarqueurs') {
       for (const marqueur of Array.isArray(regle.marqueurs) ? regle.marqueurs : []) exclus.add(marqueur);
     }
   }
-  const version = (Array.isArray(fiche.variantes) ? fiche.variantes : []).find((v) => estObjet(v) && v.pour === profil.id);
+  return exclus;
+}
+
+/**
+ * Ce que donne, sur la fiche (déjà fusionnée), la version de `profil` de style `style` (écrit, ou déduit) :
+ * { convient, restants: [{ nom, marqueurs }] }. Jugée par compatibilite.js › evaluer (entrée de même style dans
+ * `versions`) ; sans entrée de ce style, jugée sur le plat entier, comme avant les styles.
+ */
+function versionConvient(fiche, profil, style) {
+  const resultat = evaluer(fiche, profil);
+  // Plat sans recette (⏳) : rien ne dit encore que la version convient.
+  if (resultat.niveau === 'inconnu') return { convient: false, restants: [] };
+  const entree = (Array.isArray(resultat.versions) ? resultat.versions : [])
+    .find((version) => estObjet(version) && version.style === style);
+  let noms;
+  let version;
+  if (entree) {
+    if (entree.convient) return { convient: true, restants: [] };
+    noms = Array.isArray(entree.restants) ? entree.restants : [];
+    version = entree.variante;
+  } else {
+    if (!resultat.aCreer && !resultat.aRevoir) return { convient: true, restants: [] };
+    noms = resultat.restants.length ? resultat.restants : resultat.fautifs.map((i) => texte(i.produit));
+    version = (Array.isArray(fiche.variantes) ? fiche.variantes : []).find((v) => estObjet(v) && v.pour === profil.id);
+  }
+  const exclus = marqueursExclusPar(profil);
   const candidats = [...(Array.isArray(fiche.ingredients) ? fiche.ingredients : []),
     ...(Array.isArray(version?.ajouter) ? version.ajouter : [])].filter(estObjet);
-  const restants = (resultat.restants.length ? resultat.restants : resultat.fautifs.map((i) => texte(i.produit)))
-    .map((nom) => {
-      const ingredient = candidats.find((i) => texte(i.produit) === nom);
-      const marqueurs = ingredient ? [...marqueursEffectifs(ingredient)].filter((m) => exclus.has(m)) : [];
-      return { nom, marqueurs };
-    });
+  const restants = noms.map((nom) => {
+    const ingredient = candidats.find((i) => texte(i.produit) === nom);
+    const marqueurs = ingredient ? [...marqueursEffectifs(ingredient)].filter((m) => exclus.has(m)) : [];
+    return { nom, marqueurs };
+  });
   return { convient: false, restants };
 }
 
 /**
  * Demandes ouvertes que la recette reçue par le plat `id` satisfait : `<id>__recette` si elle a des ingrédients ;
- * `<id>__<profil>` pour chaque variante reçue, seulement si la version convient vraiment à ce profil sur la fiche
- * qui en résulte (`plat` : fiche fusionnée ; à défaut, `donnees`). `ouvertes` : identifiants des demandes ouvertes
- * (Set ou liste). `profils` (obligatoire) : profils de l'app, pour juger les versions.
+ * `<id>__<profil>` pour chaque profil qui reçoit une version, seulement si, sur la fiche qui en résulte (`plat` : fiche
+ * fusionnée ; à défaut, `donnees`), le plat n'est plus à créer ni à revoir pour ce profil (au moins une de ses versions
+ * lui convient). `ouvertes` : identifiants des demandes ouvertes (Set ou liste). `profils` (obligatoire) : profils de
+ * l'app, pour juger les versions.
  */
 export function demandesSatisfaites(id, donnees, ouvertes, { plat = null, profils } = {}) {
   if (!Array.isArray(profils)) throw new TypeError('demandesSatisfaites : profils obligatoire');
@@ -637,7 +813,7 @@ export function demandesSatisfaites(id, donnees, ouvertes, { plat = null, profil
   for (const variante of Array.isArray(donnees?.variantes) ? donnees.variantes : []) {
     const demande = `${id}__${variante?.pour}`;
     if (!ouverte(demande) || satisfaites.includes(demande)) continue;
-    if (versionConvient(fiche, profilDe(connus, variante.pour)).convient) satisfaites.push(demande);
+    if (platAdapte(fiche, profilDe(connus, variante.pour))) satisfaites.push(demande);
   }
   return satisfaites;
 }
@@ -669,12 +845,16 @@ function recetteSansVersions(plat) {
  * → { elements: [{ index, id, nom, statut, ancienNom?, modifieeA?, ingredients, etapes, avertissements, versions,
  *       choix? }],
  *   `index` : position de l'entrée dans `valides` (une entrée ignorée ou en erreur n'a pas d'élément).
- *     ecritures: [{ id, donnees, effacerModification? } | { id, mode: 'versions', variantes }],
- *     demandesAClore: [id], erreurs, avertissements, corrections: [{ id, pour, message, pourClaude }] }
+ *     ecritures: [{ id, donnees, effacerModification? } | { id, mode: 'versions', variantes, attendus? }],
+ *   `attendus` : styles attendus des profils de ces versions (stylesAttendusDesVersions), pour refaire la même fusion
+ *   à l'écriture ;
+ *     demandesAClore: [id], erreurs, avertissements, corrections: [{ id, pour, style, message, pourClaude }] }
  *   statut ∈ nouveau, complete (⏳ complété), remplace (recette remplacée), inchange (plat ⏳ sans ingrédients reçus),
- *   versions (seules les versions reçues s'écrivent, fusionnées par profil : ni nom, ni statut, ni recette, marque
- *   « modifiée à la main » gardée), identique (rien n'est écrit ; les demandes satisfaites sont closes).
- *   `versions` : [{ pour, nom, action: 'ajoutee' | 'remplacee', convient, libelle }] (versions reçues qui changent).
+ *   versions (seules les versions reçues s'écrivent, fusionnées par profil et par style : ni nom, ni statut, ni
+ *   recette, marque « modifiée à la main » gardée), identique (rien n'est écrit ; les demandes satisfaites sont closes).
+ *   `versions` : [{ pour, style, nom, action: 'ajoutee' | 'remplacee', convient, libelle }] (versions reçues qui
+ *   changent ; `style` : celui de la version reçue, ou null). Une version reçue est comparée à celle du même profil et
+ *   du même style (déduit pour une version d'avant les styles), et jugée seule (evaluer › versions).
  *   `choix` : { retenu, parDefaut } ('version' ou 'remplacer' ; « Ne prendre que sa version » d'avance si la fiche
  *   est vérifiée ou modifiée à la main).
  *   Une entrée sans ingrédients porteuse de versions, pour un plat inconnu ou ⏳, n'est qu'un avertissement : le
@@ -707,44 +887,75 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     for (const id of ids) if (!demandesAClore.includes(id)) demandesAClore.push(id);
   };
 
-  /** Versions reçues jugées sur la fiche qui en résulte : libellés, avertissements et corrections. */
-  const jugerVersions = (vise, fiche, recues, actuelles, avertissementsPlat) => {
+  /**
+   * Versions reçues jugées sur la fiche qui en résulte : libellés, avertissements et corrections.
+   * → { versions (éléments de l'aperçu), changees (versions reçues qui changent la fiche, à écrire) }
+   */
+  const jugerVersions = (vise, fiche, recues, actuelles, avertissementsPlat, attendus = null) => {
     const versions = [];
+    const changees = [];
+    const avant = (Array.isArray(actuelles) ? actuelles : []).filter(estObjet);
     for (const variante of recues) {
-      const avant = (Array.isArray(actuelles) ? actuelles : []).find((v) => estObjet(v) && v.pour === variante.pour);
-      if (avant && egales(propre(avant), variante)) continue;
+      const style = styleEcrit(variante);
+      // Un profil qui attend des versions par style (mer, végétale) : une version sans style remplacerait toutes les
+      // siennes ; si l'une est d'un autre style que la reçue, elle serait perdue. Refusée : Claude doit dire laquelle
+      // c'est (les réponses d'avant les styles, sur une fiche sans autre style, passent comme avant).
+      const attendusIci = stylesAttendus(profilDe(connus, variante.pour), fiche);
+      const deduit = style ? null : styleDe(variante);
+      const perdue = !style && attendusIci.length > 0 && avant.some((v) => v.pour === variante.pour
+        && (styleEcrit(v) ?? styleDe(v)) !== deduit);
+      if (perdue) {
+        erreurs.push({
+          message: `La version pour ${prenom(variante.pour)} de «\u00A0${fiche.nom}\u00A0» ne dit pas si elle est ${attendusIci.map((s) => LIBELLES_STYLE[s]).join(' ou ')}.`,
+          pourClaude: `id ${vise} variantes[pour=${variante.pour}] : \`style\` attendu (${attendusIci.map((s) => `\`${s}\``).join(' ou ')}) : ce profil a une version par style`,
+        });
+        continue;
+      }
+      // Version actuelle de même clé (profil, style) ; une version sans style compte pour son style déduit. Une
+      // version d'un style que le profil n'attend pas est remplacée aussi (fusionnerVariantes, `attendus`).
+      const memeCle = avant.filter((v) => remplace(variante, v, attendus));
+      const [ancienne] = memeCle;
+      if (memeCle.length === 1 && egales(propre(style && !styleEcrit(ancienne) ? { ...ancienne, style } : ancienne), variante)) continue;
+      changees.push(variante);
       const nom = prenom(variante.pour);
-      const { convient, restants } = versionConvient(fiche, profilDe(connus, variante.pour));
-      versions.push({
-        pour: variante.pour,
-        nom,
-        action: avant ? 'remplacee' : 'ajoutee',
-        convient,
+      const { convient, restants } = versionConvient(fiche, profilDe(connus, variante.pour), style ?? styleDe(variante));
+      let libelle;
+      if (style) {
+        libelle = `${convient ? `${EMOJIS_STYLE[style]} ` : ''}Version ${LIBELLES_STYLE[style]} pour ${nom} ${ancienne ? 'remplacée' : 'ajoutée'}`;
+      } else {
         // 🌿 seulement pour une version qui convient : sinon le plat reste « à revoir ».
-        libelle: avant ? `Version pour ${nom} remplacée` : `${convient ? '🌿 ' : ''}Version pour ${nom} ajoutée`,
-      });
+        libelle = ancienne ? `Version pour ${nom} remplacée` : `${convient ? '🌿 ' : ''}Version pour ${nom} ajoutée`;
+      }
+      versions.push({ pour: variante.pour, style, nom, action: ancienne ? 'remplacee' : 'ajoutee', convient, libelle });
       if (!convient) {
-        const message = `La version pour ${nom} contient encore\u00A0: ${restants.map((r) => r.nom).join(', ')}.`;
+        const laVersion = style ? `La version ${LIBELLES_STYLE[style]} pour ${nom}` : `La version pour ${nom}`;
+        const message = restants.length
+          ? `${laVersion} contient encore\u00A0: ${restants.map((r) => r.nom).join(', ')}.`
+          : `${laVersion} ne lui convient pas encore.`;
         avertissementsPlat.push(message);
+        const cle = style ? `pour=${variante.pour}, style=${style}` : `pour=${variante.pour}`;
         corrections.push({
           id: vise,
           pour: variante.pour,
+          style,
           message,
-          pourClaude: `id ${vise} variantes[pour=${variante.pour}] : contient ${restants
-            .map((r) => (r.marqueurs.length ? `${r.nom} (${r.marqueurs.join(', ')})` : r.nom)).join(', ')}, exclu pour ${variante.pour}`,
+          pourClaude: restants.length
+            ? `id ${vise} variantes[${cle}] : contient ${restants
+              .map((r) => (r.marqueurs.length ? `${r.nom} (${r.marqueurs.join(', ')})` : r.nom)).join(', ')}, exclu pour ${variante.pour}`
+            : `id ${vise} variantes[${cle}] : ne convient pas au profil ${variante.pour}`,
         });
       }
     }
-    return versions;
+    return { versions, changees };
   };
 
   /** Seules les versions reçues pour un plat rempli : statut `versions`, ou `identique` si rien ne change. */
   const prendreVersions = (existant, recues, avertissementsPlat, extra = {}, recette = null) => {
     const vise = existant.id;
-    const fusion = fusionnerVariantes(existant.variantes, recues);
+    const attendus = stylesAttendusDesVersions(existant, recues, connus);
+    const fusion = fusionnerVariantes(existant.variantes, recues, { attendus });
     const fiche = { ...existant, variantes: fusion };
-    const versions = jugerVersions(vise, fiche, recues, existant.variantes, avertissementsPlat);
-    const changees = recues.filter((v) => versions.some((version) => version.pour === v.pour));
+    const { versions, changees } = jugerVersions(vise, fiche, recues, existant.variantes, avertissementsPlat, attendus);
     elements.push({
       index: indexCourant,
       id: vise,
@@ -756,7 +967,12 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       versions,
       ...extra,
     });
-    if (changees.length) ecritures.push({ id: vise, mode: 'versions', variantes: changees.map(propre) });
+    // À l'écriture, la fusion se refait dans une transaction (donnees.js), sur les versions lues à cet instant, avec
+    // les mêmes styles attendus.
+    if (changees.length) {
+      const styles = stylesAttendusDesVersions(existant, changees, connus);
+      ecritures.push({ id: vise, mode: 'versions', variantes: changees.map(propre), ...(styles ? { attendus: styles } : {}) });
+    }
     // Recette reçue identique : une demande de recette restée ouverte est satisfaite aussi.
     const recu = recette?.ingredients?.length ? { ingredients: recette.ingredients, variantes: recues } : { variantes: recues };
     clore(demandesSatisfaites(vise, recu, ouvertes, { plat: fiche, profils: connus }));
@@ -808,7 +1024,8 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       for (const variante of recues) {
         for (const produit of variante.retirer ?? []) {
           if (!presents.has(slug(produit))) {
-            avertissementsPlat.push(`Version pour ${prenom(variante.pour)}\u00A0: «\u00A0${produit}\u00A0» n’est pas dans la recette.`);
+            const style = styleEcrit(variante);
+            avertissementsPlat.push(`Version ${style ? `${LIBELLES_STYLE[style]} ` : ''}pour ${prenom(variante.pour)}\u00A0: «\u00A0${produit}\u00A0» n’est pas dans la recette.`);
           }
         }
       }
@@ -905,8 +1122,11 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       }
     }
 
-    // Versions reçues avec une fiche complète : fusionnées avec celles de la fiche (celles des autres profils restent).
-    if (existant && ecriture.variantes) ecriture.variantes = fusionnerVariantes(existant.variantes, ecriture.variantes);
+    // Versions reçues avec une fiche complète : fusionnées avec celles de la fiche (celles des autres profils restent,
+    // celles d'un style que leur profil n'attend pas partent).
+    const attendus = existant && ecriture.variantes
+      ? stylesAttendusDesVersions({ ...existant, ...ecriture }, ecriture.variantes, connus) : null;
+    if (existant && ecriture.variantes) ecriture.variantes = fusionnerVariantes(existant.variantes, ecriture.variantes, { attendus });
     // Sans ingrédients reçus, un plat qui a déjà sa recette garde son statut (il ne repasse pas en ⏳).
     let statut = 'nouveau';
     if (existant) statut = !recue ? 'inchange' : rempli ? 'remplace' : 'complete';
@@ -914,7 +1134,7 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     const effacerModification = (statut === 'remplace' || statut === 'complete') && modifieeALaMain(existant);
     const secondes = existant?.modifieeLe?.seconds;
     const fiche = { ...(existant ?? {}), ...ecriture };
-    const versions = jugerVersions(vise, fiche, recues, existant?.variantes, avertissementsPlat);
+    const { versions } = jugerVersions(vise, fiche, recues, existant?.variantes, avertissementsPlat, attendus);
     elements.push({
       index,
       id: vise,

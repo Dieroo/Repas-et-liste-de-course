@@ -2,8 +2,9 @@
 // venues d'un fichier, description pour Claude. Logique pure : ni DOM ni Firebase.
 // Le modèle du §7 reste entier : toute règle valide est gardée, même d'un type que T2 n'évalue pas.
 import { slug } from './slug.js';
-import { VOCABULAIRES, code } from './vocabulaire.js';
+import { VIANDES, VOCABULAIRES, code } from './vocabulaire.js';
 import { deNom } from './notes.js';
+import { typeDe } from './plats.js';
 
 export const REGIMES = {
   tout: { libelle: 'Mange de tout', emoji: '🍽️' },
@@ -109,6 +110,30 @@ export function ecrireRegime({ regime, precisions, position = 0 } = {}, autres =
   if (!regle) return reste;
   const ici = Number.isInteger(position) && position >= 0 ? Math.min(position, reste.length) : 0;
   return [...reste.slice(0, ici), regle, ...reste.slice(ici)];
+}
+
+/** Types de plats qui n'attendent jamais de version mer : du poisson dans un dessert ou un accompagnement n'a pas de sens. */
+export const TYPES_SANS_MER = ['dessert', 'accompagnement'];
+
+/**
+ * Styles de versions attendus pour ce profil, déduits de son régime : [] | ['vegetal'] | ['mer', 'vegetal'].
+ * « Pas de viande » (mange du poisson) attend une version mer et une version végétale ; « Ni viande ni poisson », la
+ * seule végétale ; tout autre régime ou règle, aucun style (une seule version, sans style). Profil sans règles → [].
+ * `plat` (facultatif) : un dessert ou un accompagnement (TYPES_SANS_MER) n'attend que la version végétale ; un plat
+ * dont la recette ne contient aucune viande (exclu seulement par un bouillon, une gélatine ou une graisse) aussi : la
+ * version mer sert à remplacer la viande, pas à ajouter du poisson partout. Un plat sans ingrédients (⏳) garde les
+ * deux styles.
+ */
+export function stylesAttendus(profil, plat = null) {
+  const { regime } = lireRegime(profil?.regles);
+  let styles = [];
+  if (regime === 'sans_viande') styles = ['mer', 'vegetal'];
+  else if (regime === 'sans_viande_ni_poisson') styles = ['vegetal'];
+  if (!plat) return styles;
+  const ingredients = Array.isArray(plat.ingredients) ? plat.ingredients.filter((i) => i && typeof i === 'object') : [];
+  const sansViande = ingredients.length > 0
+    && !ingredients.some((i) => Array.isArray(i.marqueurs) && i.marqueurs.some((m) => VIANDES.includes(m)));
+  return TYPES_SANS_MER.includes(typeDe(plat)) || sansViande ? styles.filter((style) => style !== 'mer') : styles;
 }
 
 // ——— Règles venues d'un fichier ———

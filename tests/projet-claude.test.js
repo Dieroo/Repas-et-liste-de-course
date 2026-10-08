@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { VOCABULAIRES } from '../js/coeur/vocabulaire.js';
+import { STYLES, VOCABULAIRES } from '../js/coeur/vocabulaire.js';
 import { CHAMPS_PLAT, FORMAT, validerPaquet, extrairePaquet, controlerInstructions } from '../js/coeur/paquet.js';
 import {
   VERSION_INSTRUCTIONS, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
@@ -33,11 +33,13 @@ test('chaque valeur des vocabulaires fermés figure dans les instructions', () =
   for (const [champ, valeurs] of Object.entries(VOCABULAIRES)) {
     for (const valeur of valeurs) assert.ok(doc.includes(`\`${valeur}\``), `${champ} : « ${valeur} » absent`);
   }
+  // Styles d'une version (mer, végétale) : hors VOCABULAIRES, mais dans les instructions.
+  for (const style of STYLES) assert.ok(doc.includes(`\`${style}\``), `style : « ${style} » absent`);
 });
 
 test('chaque champ d’une fiche figure dans les instructions', () => {
   for (const champ of CHAMPS_PLAT) assert.ok(doc.includes(`\`${champ}\``), `champ « ${champ} » absent`);
-  for (const champ of ['format', 'plats', 'qtePortion', 'forme', 'role', 'pour', 'retirer', 'ajouter', 'consigne']) {
+  for (const champ of ['format', 'plats', 'qtePortion', 'forme', 'role', 'pour', 'style', 'retirer', 'ajouter', 'consigne', 'frigoJours']) {
     assert.ok(doc.includes(`\`${champ}\``), `champ « ${champ} » absent`);
   }
 });
@@ -80,6 +82,11 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
         ing('bouillon de volaille', 1, 'l', ['bouillon_viande']),
         ing('parmesan', 50, 'g', ['laitier']),
       ],
+      // Sa version mer convient déjà : seule la végétale est « à faire ».
+      variantes: [{ pour: 'profil-a', style: 'mer', frigoJours: 2, retirer: ['bouillon de volaille'], ajouter: [
+        { produit: 'fumet de poisson', qtePortion: 25, unite: 'cl', rayon: 'epicerie_salee', marqueurs: ['poisson'] },
+        { produit: 'crevette décortiquée', qtePortion: 80, unite: 'g', rayon: 'poissonnerie', marqueurs: ['fruits_de_mer'] },
+      ], consigne: 'Cuire sa part au fumet de poisson ; crevettes poêlées ajoutées à la fin.' }],
     },
   ];
   assert.ok(exemples.includes(texteDemandeVariantes(lot, profils[0])), 'exemple DEMANDE-VARIANTES différent du texte copié');
