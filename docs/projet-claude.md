@@ -158,6 +158,7 @@ Une version qui se contente d'enlever la viande n'apporte rien. Ce qui est retir
 - Une viande retirée est remplacée par environ 100 à 150 g par portion de l'alternative.
 - Un bouillon de viande ou de volaille devient un bouillon de légumes relevé (champignons séchés, sauce soja, miso).
 - La `consigne` dit la technique qui donne texture et saveur : presser et mariner le tofu, saisir à feu vif pour colorer, réhydrater les protéines de soja dans le bouillon, ajouter du goût (sauce soja, miso, paprika fumé, ail, herbes).
+- Pas de version connue pour ce plat (recherche ou mémoire) : **invente-la**. Compense ce qui est retiré avec tout ce que les règles du profil permettent (protéines végétales, légumineuses, champignons, œuf, fromage, poisson ou fruits de mer s'ils sont permis…), avec bon sens : saveurs qui s'accordent, texture et mâche proches, cuisson adaptée à l'alternative (temps, feu, ordre d'ajout). Dis dans la `consigne` que c'est une version inventée, à goûter.
 - Retirer sans remplacer n'est permis que pour un ingrédient d'appoint qui ne manque pas au plat (une garniture facultative) ; dis-le dans la `consigne`.
 
 ## 5. Répondre selon le code de la demande
