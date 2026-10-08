@@ -520,7 +520,9 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
     demandesAClore.push(`${plat.id}__recette`);
   }
 
-  // Dernier filet : la fiche telle qu'elle sera enregistrée doit rester valide pour le format d'import.
+  // Dernier filet : la fiche telle qu'elle sera enregistrée doit rester valide pour le format d'import. Les versions
+  // ne se modifient pas ici : elles sont jugées comme une fiche en base (`versionsEnDouble: 'premiere'` : versions en
+  // double ou incohérentes, par exemple une ancienne version mer sans jours au frigo, ne bloquent pas l'enregistrement).
   if (!erreurs.length) {
     const candidat = {};
     for (const champ of CHAMPS_RECETTE) if (plat[champ] != null) candidat[champ] = copier(plat[champ]);
@@ -529,7 +531,7 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
       candidat.conservation = { ...(estObjet(plat.conservation) ? copier(plat.conservation) : {}), ...champs.conservation };
     }
     for (const champ of supprimer) delete candidat[champ];
-    const resultat = validerPaquet({ format: FORMAT, plats: [candidat] });
+    const resultat = validerPaquet({ format: FORMAT, plats: [candidat] }, { versionsEnDouble: 'premiere' });
     for (const e of [...resultat.erreurs, ...resultat.plats.flatMap((p) => p.erreurs)]) erreur('recette', e.message);
   }
 

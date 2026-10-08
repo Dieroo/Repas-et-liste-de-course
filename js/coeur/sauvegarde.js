@@ -8,7 +8,9 @@ import { normaliserEmail } from './roles.js';
 import { preparerProfil, trierProfils } from './profils.js';
 import { cheminNote, noteValide } from './notes.js';
 import { egalProfonde } from './edition.js';
-import { validerRegles } from './regles.js';
+import { stylesAttendus, validerRegles } from './regles.js';
+import { styleDe } from './compatibilite.js';
+import { STYLES } from './vocabulaire.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
   validerPaquet,
@@ -139,7 +141,11 @@ function notesValides(notes) {
   return propres;
 }
 
-/** Plat tel qu'il est écrit dans le fichier : champs du §8 dans leur ordre, défauts d'un ⏳, notes et suivi. */
+/**
+ * Plat tel qu'il est écrit dans le fichier : champs du §8 dans leur ordre, défauts d'un ⏳, notes et suivi. Les
+ * versions partent telles qu'elles sont sur la fiche, `style` et `frigoJours` compris (une version d'avant les styles
+ * reste sans style : il se déduit à la lecture).
+ */
 function platPourSauvegarde(plat) {
   const sortie = {};
   for (const champ of CHAMPS_PLAT) {
@@ -640,17 +646,35 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
       resume.identiques += 1;
     }
 
-    // Versions du fichier pour des profils qui n'en ont pas sur la fiche : elles reviennent ; une version présente
-    // n'est jamais remplacée.
-    // Sur un plat ⏳ dont la recette n'est pas reprise, une version n'aurait rien à adapter : elle attend.
-    const presentes = new Set((Array.isArray(existant.variantes) ? existant.variantes : [])
-      .filter(estObjet).map((v) => v.pour));
+    // Versions du fichier qui manquent sur la fiche : toutes celles d'un profil qui n'en a aucune (une par style, avec
+    // leurs jours au frigo) ; pour un profil qui en a déjà, celle d'un style écrit qu'il attend pour ce plat
+    // (regles.js › stylesAttendus) et dont la fiche n'a aucune version (compatibilite.js › styleDe) : une version de
+    // chaque style qui manque revient. Une version de la fiche n'est jamais remplacée ; une version sans style ne
+    // revient que pour un profil qui n'en a aucune (elle doit être la seule de son profil). Sur un plat ⏳ dont la
+    // recette n'est pas reprise, une version n'aurait rien à adapter : elle attend.
+    const surFiche = (Array.isArray(existant.variantes) ? existant.variantes : []).filter(estObjet);
     const avecRecette = reprise || (Array.isArray(existant.ingredients) && existant.ingredients.length > 0);
-    const absentes = (avecRecette && Array.isArray(recette?.variantes) ? recette.variantes : [])
-      .filter((v) => estObjet(v) && !presentes.has(v.pour));
+    const ficheJugee = { ...existant, ...(reprise ? recette : {}) };
+    const absentes = [];
+    const profilsSansVersion = []; // conditions revues à l'envoi (appliquerConditions)
+    const stylesAbsents = [];
+    for (const variante of (avecRecette && Array.isArray(recette?.variantes) ? recette.variantes : []).filter(estObjet)) {
+      const siennes = surFiche.filter((v) => v.pour === variante.pour);
+      const style = STYLES.includes(variante.style) ? variante.style : null;
+      if (!siennes.length) {
+        absentes.push(variante);
+        // Un profil peut revenir avec plusieurs versions (une par style) : une fois dans la condition.
+        if (!profilsSansVersion.includes(variante.pour)) profilsSansVersion.push(variante.pour);
+      } else if (style && !siennes.some((v) => styleDe(v) === style)
+        && stylesAttendus(profilsJuges.find((p) => p.id === variante.pour), ficheJugee).includes(style)) {
+        absentes.push(variante);
+        stylesAbsents.push({ pour: variante.pour, style });
+      }
+    }
     if (absentes.length) {
       donnees.variantes = fusionnerVariantes(existant.variantes, absentes);
-      condition.variantesAbsentes = absentes.map((v) => v.pour);
+      if (profilsSansVersion.length) condition.variantesAbsentes = profilsSansVersion;
+      if (stylesAbsents.length) condition.stylesAbsents = stylesAbsents;
       for (const { pour } of absentes) versionsRemises.set(pour, (versionsRemises.get(pour) ?? 0) + 1);
     }
     if (reprise || absentes.length) {
@@ -731,8 +755,9 @@ function empreinteRecette(plat) {
  * - `derniereFois` : seulement si elle reste plus récente ;
  * - recette cochée : seulement si la fiche est encore celle de l'aperçu ;
  * - règles d'un profil (`reglesAbsentes`) : seulement s'il n'en a toujours aucune (une liste, même vide, reste) ;
- * - versions (`variantesAbsentes`) : seulement celles dont le profil n'a toujours pas de version sur la fiche,
- *   ajoutées à la fin des versions lues (celles de la fiche gagnent).
+ * - versions : seulement celles dont le profil n'a toujours aucune version sur la fiche (`variantesAbsentes` : [pour]),
+ *   ou aucune de ce style (`stylesAbsents` : [{ pour, style }], compatibilite.js › styleDe), ajoutées à la fin des
+ *   versions lues (celles de la fiche gagnent).
  * → l'écriture à faire (même forme, `clore` gardé seulement pour ce qui est écrit), ou null s'il ne reste rien.
  */
 export function appliquerConditions(ecriture, actuel) {
@@ -754,10 +779,16 @@ export function appliquerConditions(ecriture, actuel) {
     if (actuelle && !(donnees.derniereFois > actuelle)) delete donnees.derniereFois;
   }
   let ajoutees = null;
-  if (condition.variantesAbsentes) {
-    const presentes = new Set((Array.isArray(actuel.variantes) ? actuel.variantes : []).filter(estObjet).map((v) => v.pour));
+  if (condition.variantesAbsentes || condition.stylesAbsents) {
+    const lues = (Array.isArray(actuel.variantes) ? actuel.variantes : []).filter(estObjet);
+    // Ce qui manque encore : le profil n'a toujours aucune version, ou aucune de ce style.
+    const encore = [
+      ...(condition.variantesAbsentes ?? []).map((pour) => ({ pour })),
+      ...(condition.stylesAbsents ?? []),
+    ].filter((m) => estObjet(m) && !lues.some((v) => v.pour === m.pour && (!m.style || styleDe(v) === m.style)));
+    // Versions du fichier dans l'écriture prévue : toutes celles d'un profil qui n'en avait aucune, ou celle du style.
     const fichier = (Array.isArray(ecriture.donnees?.variantes) ? ecriture.donnees.variantes : [])
-      .filter((v) => estObjet(v) && condition.variantesAbsentes.includes(v.pour) && !presentes.has(v.pour));
+      .filter((v) => estObjet(v) && encore.some((m) => v.pour === m.pour && (!m.style || styleDe(v) === m.style)));
     ajoutees = new Set(fichier.map((v) => v.pour));
     if (fichier.length) donnees.variantes = fusionnerVariantes(actuel.variantes, fichier);
     else delete donnees.variantes;

@@ -20,6 +20,11 @@ export const VOCABULAIRES = {
   role: ['principal', 'incorpore'],
 };
 
+/** Styles d'une version (variante) : mer (poisson ou fruits de mer), vegetal (végétarienne : œufs et fromage permis). */
+export const STYLES = ['mer', 'vegetal'];
+export const LIBELLES_STYLE = { mer: 'mer', vegetal: 'végétale' };
+export const EMOJIS_STYLE = { mer: '🐟', vegetal: '🌿' };
+
 /** Sous-types de viande : chacun implique `viande` (CLAUDE.md §7). */
 export const SOUS_TYPES_VIANDE = ['boeuf', 'porc', 'volaille', 'agneau', 'charcuterie'];
 export const VIANDES = ['viande', ...SOUS_TYPES_VIANDE];

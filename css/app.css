@@ -2682,3 +2682,37 @@ select.champ {
 .choix-import { margin-top: 8px; }
 
 .badge-versions { background: var(--olive-doux); }
+
+/* ——— Deux versions par profil : mer et végétale ——— */
+
+/* Fiche : une partie par version d'un profil (« 🐟 Version mer », « 🌿 Version végétale »), séparées d'un filet. */
+.version-style {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--bordure);
+}
+
+.section-version h2 + .version-style {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.version-style h3 { font-size: 1.0625rem; }
+
+/* « À manger dans les 2 jours après cuisson ». Texte doux : 5,9:1 sur le fond et 6,3:1 sur une surface (clair),
+   7,5:1 et 6,8:1 (sombre). */
+.version-frigo { color: var(--texte-doux); }
+
+/* « 🌿 Version végétale à demander » (gestionnaire) : une version attendue, pas encore écrite. */
+.version-a-demander {
+  color: var(--texte-doux);
+  font-weight: 600;
+}
+
+/* Ligne d'un plat : « · végétale à demander » (gestionnaire), plus discret que la version qui convient. */
+.compat-a-demander {
+  color: var(--texte-doux);
+  font-weight: 400;
+}

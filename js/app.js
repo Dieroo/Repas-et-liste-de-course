@@ -470,10 +470,13 @@ const actions = {
       if (etat.utilisateur?.uid !== uid) return { manquants: noms };
       const parProfil = profilsDesVersions(ecritures).map((pour) => {
         const profil = etat.profils.find((p) => p.id === pour);
+        const bilan = profil ? bilanCompatibilite(etat.plats, profil, { evaluer: compat }) : null;
         return {
           nom: profil?.nom ?? '',
           ajoutees: versionsEcrites(ecritures, pour, manquants),
-          restants: profil ? bilanCompatibilite(etat.plats, profil, { evaluer: compat }).aCreer : 0,
+          restants: bilan?.aCreer ?? 0,
+          // Plats dont une version convient, mais pas encore de chaque style attendu (« 3 plats à compléter… »).
+          aCompleter: bilan?.aCompleter ?? 0,
         };
       });
       const texte = annonceVersions(parProfil, noms);
