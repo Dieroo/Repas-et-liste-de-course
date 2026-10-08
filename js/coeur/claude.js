@@ -68,7 +68,7 @@ export function texteDemandeRecette(plat, { profils = [] } = {}) {
   }
   lignes.push('(Ajoute un lien, une photo ou la recette dictée.)');
   if (contraints.length) {
-    lignes.push('(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante. Rends la fiche complète, en un seul bloc.)');
+    lignes.push('(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)');
   }
   return lignes.join('\n');
 }
@@ -99,7 +99,7 @@ export function texteDemandeVariantes(plats, profil) {
   ];
   if (besoins.size === 1 && besoin) lignes.push(`besoin: ${besoin}`);
   lignes.push(`règles: ${reglesPourClaude(profil)}`);
-  lignes.push('(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)');
+  lignes.push('(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)');
   lignes.push('plats:');
   fiches.forEach((plat, i) => {
     const fautifs = new Set(evaluations[i].fautifs);

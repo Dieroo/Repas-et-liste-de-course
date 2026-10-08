@@ -144,6 +144,22 @@ Une variante décrit comment adapter le plat pour un profil qui ne mange pas tou
 - Une variante change toujours quelque chose : au moins un ingrédient retiré ou ajouté.
 - Ne touche jamais aux variantes des autres profils : l'app les garde.
 
+### Une vraie alternative, pas un simple retrait
+
+Une version qui se contente d'enlever la viande n'apporte rien. Ce qui est retiré est **remplacé** par un ingrédient qui tient le même rôle dans l'assiette : la protéine, la mâche, le goût.
+
+- Préfère une alternative végétale ; le poisson, les fruits de mer, l'œuf ou le fromage seulement si les règles du profil les permettent et que le plat s'y prête nettement mieux.
+- Choisis selon la cuisson du plat :
+  - mijoté, braisé, sauce : seitan, tempeh, protéines de soja texturées réhydratées dans un bouillon corsé, pleurotes ou champignons de Paris saisis ;
+  - haché (bolognaise, hachis, farce) : protéines de soja texturées, lentilles vertes ou corail, champignons hachés ;
+  - poêlé, grillé, rôti : tofu ferme pressé et mariné, steak de soja, halloumi, chou-fleur ou aubergine rôtis ;
+  - lardons, jambon, chorizo : tofu fumé, champignons poêlés au paprika fumé ;
+  - volaille : pois chiches rôtis, tofu ferme, tempeh.
+- Une viande retirée est remplacée par environ 100 à 150 g par portion de l'alternative.
+- Un bouillon de viande ou de volaille devient un bouillon de légumes relevé (champignons séchés, sauce soja, miso).
+- La `consigne` dit la technique qui donne texture et saveur : presser et mariner le tofu, saisir à feu vif pour colorer, réhydrater les protéines de soja dans le bouillon, ajouter du goût (sauce soja, miso, paprika fumé, ail, herbes).
+- Retirer sans remplacer n'est permis que pour un ingrédient d'appoint qui ne manque pas au plat (une garniture facultative) ; dis-le dans la `consigne`.
+
 ## 5. Répondre selon le code de la demande
 
 La première ligne de chaque demande donne son code.
@@ -161,7 +177,7 @@ nom: Quiche aux lardons
 versions:
 - pour: profil-a — Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel.
 (Ajoute un lien, une photo ou la recette dictée.)
-(Si le plat contient ce qu'un de ces profils ne mange pas, ajoute sa variante. Rends la fiche complète, en un seul bloc.)
+(Si le plat contient ce qu'un de ces profils ne mange pas, ajoute sa variante : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)
 ```
 
 Réponse attendue :
@@ -226,7 +242,7 @@ DEMANDE-VARIANTES paquet@1
 pour: profil-a
 besoin: sans_viande
 règles: Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel.
-(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)
+(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)
 plats:
 - id: carbonade-flamande
   nom: Carbonade flamande
