@@ -3,8 +3,12 @@
 // Claude ne sait pas adapter ne revienne pas en tête à chaque lot. Simple confort : le stockage est partagé avec les
 // autres sites du même domaine github.io, d'où le préfixe, et tout accès peut échouer (stockage plein ou bloqué) :
 // l'ordre reste alors celui des notes.
+// Le fichier garde aussi la version des instructions du projet Claude copiée en dernier (Réglages › Projet Claude),
+// pour rappeler de les recopier quand elles changent.
 
 const PREFIXE = 'repas-courses:envoyes:';
+// Hors de PREFIXE : effacerEnvoyes ne la touche pas (une version d'instructions n'est pas une donnée personnelle).
+const PREFIXE_INSTRUCTIONS = 'repas-courses:instructions-copiees:';
 const DUREE_MAX_MS = 30 * 24 * 60 * 60 * 1000; // au-delà de 30 jours, un plat envoyé est oublié
 const ENVOYES_MAX = 500;
 
@@ -55,7 +59,7 @@ export function noterEnvoyes(uid, platIds, { maintenant = Date.now() } = {}) {
   }
 }
 
-/** Oublie tous les plats envoyés (déconnexion) : rien ne reste sur le téléphone. */
+/** Oublie tous les plats envoyés (déconnexion). La version des instructions copiée reste (lireInstructionsCopiees). */
 export function effacerEnvoyes() {
   try {
     const cles = [];
@@ -66,5 +70,29 @@ export function effacerEnvoyes() {
     for (const nom of cles) localStorage.removeItem(nom);
   } catch {
     // Rien à faire.
+  }
+}
+
+/**
+ * Version des instructions copiée en dernier par ce compte sur ce téléphone, ou null (jamais copiées, stockage abîmé
+ * ou inaccessible).
+ */
+export function lireInstructionsCopiees(uid) {
+  if (!uid) return null;
+  try {
+    const brut = localStorage.getItem(`${PREFIXE_INSTRUCTIONS}${uid}`);
+    return typeof brut === 'string' && /^[1-9]\d{0,8}$/.test(brut) ? Number(brut) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Retient la version copiée (après une copie réussie). Échec silencieux : le rappel reviendra. */
+export function noterInstructionsCopiees(uid, version) {
+  if (!uid || !Number.isInteger(version) || version < 1) return;
+  try {
+    localStorage.setItem(`${PREFIXE_INSTRUCTIONS}${uid}`, String(version));
+  } catch {
+    // Stockage plein ou bloqué : rien à faire.
   }
 }

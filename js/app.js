@@ -15,6 +15,7 @@ import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
 import { evaluer, bilanCompatibilite } from './coeur/compatibilite.js';
 import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions } from './coeur/import-local.js';
+import { VERSION_INSTRUCTIONS } from './coeur/claude.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -40,7 +41,9 @@ import * as restaurer from './ui/restaurer.js';
 import * as regime from './ui/regime.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
-import { lireEnvoyes, noterEnvoyes, effacerEnvoyes } from './ui/envoyes.js';
+import {
+  lireEnvoyes, noterEnvoyes, effacerEnvoyes, lireInstructionsCopiees, noterInstructionsCopiees,
+} from './ui/envoyes.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -282,10 +285,29 @@ function compat(plat, profil) {
   return parProfil.get(profil);
 }
 
+// Instructions du projet Claude copiées pendant cette visite ({ uid, version }) : repli si le stockage du téléphone
+// est plein ou bloqué, pour que le rappel ne revienne pas avant la prochaine ouverture.
+let instructionsCopieesIci = null;
+
+/**
+ * Les instructions de cette version de l'app ont été copiées : sur n'importe quel appareil du gestionnaire
+ * (`reglages/foyer.instructionsCopiees`, une version plus récente compte aussi), ou par ce compte sur ce téléphone
+ * (repli tant que l'écriture n'est pas revenue du serveur). Rappel sinon.
+ */
+function instructionsAJour() {
+  const uid = etat.utilisateur?.uid;
+  if (!uid) return true;
+  const partagee = etat.donnees.reglages?.instructionsCopiees;
+  return (Number.isInteger(partagee) && partagee >= VERSION_INSTRUCTIONS)
+    || lireInstructionsCopiees(uid) === VERSION_INSTRUCTIONS
+    || (instructionsCopieesIci?.uid === uid && instructionsCopieesIci.version === VERSION_INSTRUCTIONS);
+}
+
 /**
  * Contexte passé aux écrans, et aux feuilles ouvertes hors du rendu (panneau du profil, « Qui êtes-vous ? ») : il
  * est recalculé à chaque appel, pour des profils et des plats à jour.
  * `moi` : profil relié à l'adresse connectée, ou null ; en aperçu « Repas et courses », celui du gestionnaire.
+ * `instructionsAJour` : faux tant que les instructions du projet Claude de cette version n'ont pas été copiées ici.
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -304,6 +326,7 @@ function contexteCourant() {
     demandesChargees: etat.demandesChargees,
     parametre,
     routePrecedente,
+    instructionsAJour: instructionsAJour(),
     compat,
     actions,
   };
@@ -482,6 +505,18 @@ const actions = {
       });
     }
     return instructionsClaude;
+  },
+  /** Instructions du projet Claude copiées (Réglages) : le rappel disparaît de la carte et du panneau du profil. */
+  noterInstructionsCopiees() {
+    const uid = etat.utilisateur?.uid;
+    if (!uid) return;
+    noterInstructionsCopiees(uid, VERSION_INSTRUCTIONS);
+    instructionsCopieesIci = { uid, version: VERSION_INSTRUCTIONS };
+    // Partagée avec les autres appareils du gestionnaire ; un échec laisse le rappel ailleurs, sans gêner ici.
+    if (etat.donnees.reglages && Number(etat.donnees.reglages.instructionsCopiees ?? 0) < VERSION_INSTRUCTIONS) {
+      donnees.noterInstructionsCopiees(VERSION_INSTRUCTIONS).catch(() => {});
+    }
+    rendre();
   },
   /**
    * Recette modifiée à la main, préparée par coeur/edition.js › preparerModification. Affichée tout de suite
@@ -682,6 +717,9 @@ function ouvrirPanneauProfil() {
       ? { derniere: dateDeSauvegarde(ctx.reglages?.derniereSauvegarde) }
       : null,
     onSauvegarder: sauvegarderDepuisLePanneau,
+    // Rappel de recopier les instructions du projet Claude quand elles ont changé (gestionnaire, hors aperçu).
+    instructionsAJour: ctx.instructionsAJour,
+    onInstructions: () => { location.hash = '#/reglages'; },
     version: etat.version,
     versionPrete: etat.versionPrete,
   });

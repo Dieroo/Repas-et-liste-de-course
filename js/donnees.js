@@ -432,6 +432,16 @@ export async function restaurer({ lots }, auteur) {
  * Date de la dernière sauvegarde (date du téléphone, lisible tout de suite, contrairement à un serverTimestamp() en
  * attente). À n'appeler qu'en ligne. → promesse de l'envoi.
  */
+/**
+ * Version des instructions du projet Claude copiée par le gestionnaire (Réglages), partagée par ses appareils : une
+ * copie faite sur l'ordinateur éteint aussi le rappel du téléphone.
+ */
+export function noterInstructionsCopiees(version) {
+  const lot = writeBatch(db);
+  lot.update(doc(db, 'reglages', 'foyer'), { instructionsCopiees: version });
+  return lot.commit();
+}
+
 export function marquerSauvegarde(date) {
   const lot = writeBatch(db);
   lot.update(doc(db, 'reglages', 'foyer'), { derniereSauvegarde: date });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   extrairePaquet, validerPaquet, preparerImport, code, PLATS_MAX,
 } from '../js/coeur/paquet.js';
-import { texteDemandeRecette, texteCorrectionPourClaude } from '../js/coeur/claude.js';
+import { VERSION_INSTRUCTIONS, texteDemandeRecette, texteCorrectionPourClaude } from '../js/coeur/claude.js';
 import { lireHash, resoudreRoute, parametreDe } from '../js/coeur/roles.js';
 
 // ——— Fixtures génériques (aucune donnée du foyer) ———
@@ -399,7 +399,7 @@ test('preparerImport : l’écriture ne contient ni vignette, ni notes, ni table
 
 test('texteDemandeRecette : texte exact', () => {
   assert.equal(texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }),
-    'DEMANDE-RECETTE paquet@1\nid: plat-x\nnom: Plat X\n(Ajoute un lien, une photo ou la recette dictée.)');
+    `DEMANDE-RECETTE paquet@1\ninstructions: ${VERSION_INSTRUCTIONS}\nid: plat-x\nnom: Plat X\n(Ajoute un lien, une photo ou la recette dictée.)`);
 });
 
 test('texteCorrectionPourClaude : consignes exactes, plat par plat', () => {
@@ -409,7 +409,8 @@ test('texteCorrectionPourClaude : consignes exactes, plat par plat', () => {
   const texte = texteCorrectionPourClaude(validerPaquet([paquet(plat)]));
   const lignes = texte.split('\n');
   assert.equal(lignes[0], 'CORRECTION paquet@1');
-  assert.equal(lignes[1], 'id: risotto-test');
+  assert.equal(lignes[1], `instructions: ${VERSION_INSTRUCTIONS}`);
+  assert.equal(lignes[2], 'id: risotto-test');
   assert.match(texte, /ingredients\[2\] « oignon jaune » : role manquant ou inconnu pour un légume : `principal`, `incorpore`/);
   assert.match(texte, /ingredients\[1\] « pavé de saumon » : forme manquante/);
   assert.equal(lignes.at(-1), '(Rends la fiche complète corrigée, en un seul bloc.)');

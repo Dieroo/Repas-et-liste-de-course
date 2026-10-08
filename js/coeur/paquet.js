@@ -2,10 +2,11 @@
 // la valider, préparer les écritures. Logique pure : ni DOM ni Firebase.
 // Chaque erreur porte deux textes : `message` (affiché, en français courant) et `pourClaude` (codes exacts,
 // recopiés dans le texte de correction à recoller dans le Projet Claude).
-import { slug } from './slug.js';
+import { sansAccents, slug } from './slug.js';
 import { NOM_MAX, statutDe } from './plats.js';
 import { VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient } from './vocabulaire.js';
 import { evaluer, marqueursEffectifs } from './compatibilite.js';
+import { VERSION_INSTRUCTIONS } from './claude.js';
 
 // Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
 export { VOCABULAIRES, SOUS_TYPES_VIANDE, VIANDES, IMPLICATIONS, code, validerIngredient } from './vocabulaire.js';
@@ -27,6 +28,17 @@ const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
 const CHAMPS_VARIANTE = ['pour', 'retirer', 'ajouter', 'consigne'];
 const ANNONCE_RECETTE = /"(format|plats)"\s*:/;
+// Clés connues à la racine d'une réponse ; `instructions` (version des instructions du projet Claude) est lue par
+// controlerInstructions. Les autres sont ignorées, avec un avertissement.
+const CLES_PAQUET = ['format', 'instructions', 'plats'];
+// Phrases de refus du projet Claude (docs/projet-claude.md, section 0), reconnues en tête de ligne seulement (la
+// prose d'une réponse peut citer ces mots), sans casse ni accents.
+const REFUS = [
+  ['instructions', /^instructions a mettre a jour(?![a-z0-9])/],
+  ['app', /^app a mettre a jour(?![a-z0-9])/],
+];
+// Habillage possible en tête de la ligne de refus : espaces, citation, gras ou italique, titre, guillemets, ⚠️.
+const HABILLAGE_REFUS = /^[\s>*_#«"“`\u26A0\uFE0F]+/;
 
 // ——— Retrouver la recette dans le texte collé ———
 
@@ -67,9 +79,25 @@ function lireObjet(morceau) {
 }
 
 /**
+ * Code du refus de Claude (la première ligne qui commence par l'une des phrases) : 'instructions', 'app' ou null.
+ * Les lignes sont séparées avant sansAccents, qui fond les retours à la ligne en espaces.
+ */
+function refusDeClaude(brut) {
+  for (const ligne of brut.split(/\r\n?|\n|\u2028|\u2029/)) {
+    const lu = sansAccents(ligne.replace(HABILLAGE_REFUS, ''));
+    const refus = REFUS.find(([, phrase]) => phrase.test(lu));
+    if (refus) return refus[0];
+  }
+  return null;
+}
+
+/**
  * Retrouve les recettes dans un texte : réponse complète de Claude (prose et blocs de code), bloc seul ou fichier.
  * `max` : longueur acceptée (collage : TEXTE_MAX ; fichier : coeur/sauvegarde.js › FICHIER_MAX).
- * → { paquets: [objet, …] } ou { erreur } avec erreur ∈ vide, trop_long, demande, coupee, aucune.
+ * → { paquets: [objet, …] } ou { erreur } avec erreur ∈ vide, trop_long, demande, coupee, aucune, instructions
+ *   (Claude signale que ses instructions sont plus anciennes que la demande), app (la demande vient d'une app plus
+ *   ancienne que ses instructions), reconnues en tête de ligne. Une recette lue ou coupée l'emporte sur une phrase
+ *   de refus.
  */
 export function extrairePaquet(texte, { max = TEXTE_MAX } = {}) {
   const brut = String(texte ?? '');
@@ -103,7 +131,9 @@ export function extrairePaquet(texte, { max = TEXTE_MAX } = {}) {
   // Une recette commencée après la dernière lue mais jamais terminée : rien n'est retenu (tout ou rien).
   if (coupe > finDernier) return { erreur: 'coupee' };
   if (paquets.length) return { paquets };
-  return { erreur: ANNONCE_RECETTE.test(brut) ? 'coupee' : 'aucune' };
+  if (ANNONCE_RECETTE.test(brut)) return { erreur: 'coupee' };
+  // Aucune recette, même commencée : Claude a peut-être refusé la demande, faute d'instructions de la même version.
+  return { erreur: refusDeClaude(brut) ?? 'aucune' };
 }
 
 // ——— Valeurs tolérées ———
@@ -408,7 +438,7 @@ export function validerPaquet(paquets, {
       erreurs.push({ message: 'Ce texte ne vient pas de votre projet Claude, ou d’une version que l’app ne connaît pas.', pourClaude: `format : \`${FORMAT}\` attendu` });
       continue;
     }
-    if (Object.keys(paquet).some((cle) => cle !== 'format' && cle !== 'plats')) clesIgnorees = true;
+    if (Object.keys(paquet).some((cle) => !CLES_PAQUET.includes(cle))) clesIgnorees = true;
     if (paquet.plats == null) continue;
     if (!Array.isArray(paquet.plats)) {
       erreurs.push({ message: 'La liste des recettes est illisible.', pourClaude: 'plats : liste attendue' });
@@ -453,6 +483,44 @@ export function validerPaquet(paquets, {
 
   const valide = !erreurs.length && plats.every((plat) => !plat.erreurs.length);
   return { plats, erreurs, avertissements, valide };
+}
+
+// ——— Version des instructions ———
+
+// Du moins au plus sérieux : une app pas à jour (réponse plus récente qu'elle) est le problème le plus sérieux.
+const GRAVITE_INSTRUCTIONS = ['absente', 'ancienne', 'recente'];
+const MESSAGES_INSTRUCTIONS = {
+  absente: 'Cette réponse ne dit pas avec quelles instructions elle a été écrite\u00A0: votre projet Claude a peut-être d’anciennes instructions. Recopiez-les depuis Réglages › Projet Claude.',
+  ancienne: 'Cette réponse vient d’anciennes instructions du projet Claude. Recopiez-les depuis Réglages › Projet Claude, puis redemandez si quelque chose cloche.',
+  recente: 'Cette réponse vient d’instructions plus récentes que votre app. Fermez puis rouvrez l’app avant d’ajouter ces recettes.',
+};
+
+/** Version lue à la racine d'une réponse : entier, ou texte de chiffres (« 1 ») ; null pour toute autre valeur. */
+function versionLue(valeur) {
+  if (typeof valeur === 'number') return Number.isInteger(valeur) && valeur >= 0 ? valeur : null;
+  if (typeof valeur === 'string' && /^\s*\d+\s*$/.test(valeur)) return Number(valeur);
+  return null;
+}
+
+/**
+ * Version des instructions de la réponse comparée à celle de l'app. `paquets` : objets retrouvés (extrairePaquet).
+ * → null si toutes les recettes portent la version attendue ;
+ *   sinon { sens: 'absente' | 'ancienne' | 'recente', message, pourClaude }.
+ * Avertissement non bloquant, montré à l'aperçu de l'ajout de recettes ; jamais appelé pour une sauvegarde.
+ */
+export function controlerInstructions(paquets, attendue = VERSION_INSTRUCTIONS) {
+  let pire = -1;
+  for (const paquet of Array.isArray(paquets) ? paquets : [paquets]) {
+    const lue = versionLue(estObjet(paquet) ? paquet.instructions : undefined);
+    let sens = null;
+    if (lue === null) sens = 'absente';
+    else if (lue < attendue) sens = 'ancienne';
+    else if (lue > attendue) sens = 'recente';
+    if (sens) pire = Math.max(pire, GRAVITE_INSTRUCTIONS.indexOf(sens));
+  }
+  if (pire === -1) return null;
+  const sens = GRAVITE_INSTRUCTIONS[pire];
+  return { sens, message: MESSAGES_INSTRUCTIONS[sens], pourClaude: `instructions : ${attendue} attendu` };
 }
 
 // ——— Préparer les écritures ———

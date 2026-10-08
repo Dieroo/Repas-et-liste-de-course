@@ -108,7 +108,8 @@ js/
                           relier.js (« Qui êtes-vous ? »), fichier.js (choisir, lire, télécharger un fichier),
                           restaurer.js (écran « Restaurer une sauvegarde »), regime.js (« Ce que <Prénom> mange »),
                           compat.js (lignes 🌿 / ❌ d'un plat pour chaque profil qui a des règles),
-                          envoyes.js (plats déjà envoyés à Claude, gardés sur le téléphone quelques jours)
+                          envoyes.js (plats déjà envoyés à Claude, gardés sur le téléphone quelques jours ; version des
+                          instructions du projet Claude copiée en dernier sur ce téléphone, gardée à la déconnexion)
   coeur/                  logique pure : ni DOM ni Firebase
     roles.js              rôle de la personne connectée, écrans permis
     slug.js               identifiants et recherche sans accents
@@ -122,13 +123,16 @@ js/
     proposition.js
     batch.js
     congelateur.js
-    paquet.js             format d'import : extraction, validation, plat visé, textes pour Claude
+    paquet.js             format d'import : extraction (dont les phrases de refus de Claude), validation, plat visé,
+                          version des instructions d'une réponse (`controlerInstructions`)
     edition.js            « Modifier » : libellés, natures, catalogue des produits connus, saisie d'un ingrédient, écritures
     notes.js              notes 0–5 (lecture, libellés, chemin d'écriture), file de Découvrir, résumé des notes
-    claude.js             textes copiés pour Claude : DEMANDE-RECETTE (avec `versions:`), DEMANDE-VARIANTES, CORRECTION
+    claude.js             textes copiés pour Claude : DEMANDE-RECETTE (avec `versions:`), DEMANDE-VARIANTES, CORRECTION,
+                          chacun avec la ligne `instructions: <n>` ; `VERSION_INSTRUCTIONS` et `EMPREINTE_INSTRUCTIONS`
     import-local.js       effet local d'un import (fiches à jour avant la réponse du serveur), annonces des versions
     sauvegarde.js         fichier de sauvegarde (création, lecture, validation), restauration additive, revue à l'envoi
-docs/projet-claude.md     instructions du Projet Claude (format, versions), copiées depuis Réglages ; précachée
+docs/projet-claude.md     instructions du Projet Claude (format, versions), copiées depuis Réglages ; précachée ;
+                          seule source du format et des demandes, en version `VERSION_INSTRUCTIONS` (§12)
 tests/                    node:test, fixtures génériques
 .gitignore                repas-courses-*.json : une sauvegarde (adresses des profils) n'est jamais publiée
 firestore.rules           adresses en espaces réservés (<EMAIL_1>, <EMAIL_2>)
@@ -139,7 +143,7 @@ package.json              uniquement "type": "module" et le script de test
 
 | Chemin | Contenu |
 |---|---|
-| `reglages/foyer` | `versionSchema: 1`, `gestionnaire` (e-mail), `debutSemaine`, `nbPlats {min, max}`, `dessertParSemaine` (0 ou 1), `frigoJoursDefaut` (3), `dureeBatchMaxMin`, `rayons[]` (ordre du parcours en magasin), `appareils[]`, `apero {actif, jour, nbSuggestions, incontournables[]}`, `drive {nom, urlRecherche}` (modèle contenant `{q}`), `notifications {ntfySujet}`, `derniereSauvegarde` (date du téléphone, écrite seulement si plats et profils viennent du serveur) |
+| `reglages/foyer` | `versionSchema: 1`, `gestionnaire` (e-mail), `debutSemaine`, `nbPlats {min, max}`, `dessertParSemaine` (0 ou 1), `frigoJoursDefaut` (3), `dureeBatchMaxMin`, `rayons[]` (ordre du parcours en magasin), `appareils[]`, `apero {actif, jour, nbSuggestions, incontournables[]}`, `drive {nom, urlRecherche}` (modèle contenant `{q}`), `notifications {ntfySujet}`, `derniereSauvegarde` (date du téléphone, écrite seulement si plats et profils viennent du serveur), `instructionsCopiees` (dernière version des instructions du projet Claude copiée par le gestionnaire, sur n'importe lequel de ses appareils ; éteint le rappel 🔔 partout) |
 | `profils/{id}` | `nom`, `email` (facultatif, sert à reconnaître la personne connectée ; posé par « C'est moi » et effacé par « Ce n'est pas moi », en transaction), `ordre`, `repas {midis: [jours], soirs: [jours]}`, `coefPortion` (1 adulte, 0,5 enfant), `regles[]` (§7 ; absent = jamais réglé, `[]` = « Mange de tout » choisi exprès ; la règle de l'écran « Ce que <Prénom> mange » porte `id: 'regime'`, les autres sont gardées telles quelles ; écrit par `update` de la liste entière) |
 | `plats/{id}` | fiche `paquet@1` (§8) + `notes {profilId: 0–5}` (0 = « jamais » : plus jamais proposé à ce profil ; écrite par le chemin `notes.<profilId>` en `update`, `deleteField` pour effacer, sans `majPar` ni `majLe`, jamais par l'import ni par « Modifier » ; absente = non notée, compte 3 pour le score (`noteRetenue`) mais reste distincte de 3 pour l'équilibre des propositions (`estNote`) ; aucune note n'est écrite par défaut ; les notes d'un profil retiré restent dans la fiche et dans la sauvegarde, ignorées ailleurs), `derniereFois`, `vignette` (petite image ~10 Ko pour les listes et Découvrir, facultative), `majPar`, `majLe`, `modifieeLe` et `modifieePar` (posés par « Modifier », effacés quand une recette de Claude remplace ou complète la fiche). « Modifier » écrit par `update` les seuls champs touchés : portions et ingrédients toujours ensemble, `conservation` sous-champ par sous-champ |
 | `photos/{platId}` | `image` (JPEG compressé dans le navigateur, 1024 px max, ~200 Ko max), `majPar`, `majLe` ; lu seulement à l'ouverture de la fiche, pour que la liste des plats reste légère |
@@ -230,7 +234,7 @@ Sens inverse : un plat sans viande ni poisson affecté à un profil qui a `prote
 
 ## 8. Format d'import `paquet@1`
 
-Un seul format pour le catalogue de départ, l'import unitaire (recette produite par le Projet Claude) et la sauvegarde. Import par collage **ou par fichier `.json`**. Clé principale : `plats`. Clés facultatives, pour la configuration et la sauvegarde complète : `reglages` (objet fusionné dans `reglages/foyer`), `profils` (`id`, `nom`, `email`, `ordre`, `coefPortion`, `repas`, `regles`), `produits`, `congelateur`, `semaines`. Chaque document est créé ou fusionné par `id` (champs absents conservés) ; une mise à jour de plat conserve `notes` et `derniereFois`.
+Un seul format pour le catalogue de départ, l'import unitaire (recette produite par le Projet Claude) et la sauvegarde. Import par collage **ou par fichier `.json`**. Clé principale : `plats`. Une réponse du Projet Claude porte aussi, à la racine, `"instructions": <n>` (version de ses instructions, voir « Alignement avec le Projet Claude » plus bas ; jamais dans une sauvegarde). Clés facultatives, pour la configuration et la sauvegarde complète : `reglages` (objet fusionné dans `reglages/foyer`), `profils` (`id`, `nom`, `email`, `ordre`, `coefPortion`, `repas`, `regles`), `produits`, `congelateur`, `semaines`. Chaque document est créé ou fusionné par `id` (champs absents conservés) ; une mise à jour de plat conserve `notes` et `derniereFois`.
 
 **Sauvegarde** (Réglages › « Télécharger une sauvegarde », gestionnaire ; rappel dans le panneau du profil sans sauvegarde ou au-delà de 30 jours) : fichier `repas-courses-sauvegarde-AAAA-MM-JJ.json` (`FICHIER_MAX` 5 Mo) avec `format`, `sauvegardeLe` (ISO, marque une sauvegarde), `profils` et `plats` triés par `id` (recette, défauts des ⏳, `notes`, `derniereFois`, `modifieeLe` en ISO, `modifieePar`). Jamais : `vignette`, photos, `majPar`, `majLe`, demandes, réglages. **Règle : chaque tranche qui ajoute des données ou des champs les ajoute à la sauvegarde et à la restauration** (garde-fous d'aller-retour dans les tests).
 
@@ -312,16 +316,18 @@ Vocabulaires fermés :
 
 **Ajouter des recettes** (écran `#/import`, gestionnaire ; `#/import/<platId>` depuis « Coller la recette » d'une fiche ; collage ou « 📄 Choisir un fichier », même chemin) :
 - Recette identique à la fiche : rien n'est réécrit (marque « modifiée à la main » gardée) ; une demande de recette restée ouverte se clôt par « Marquer la recette comme ajoutée ». `notes`, `derniereFois`, `modifieeLe`, `modifieePar` : connus mais ignorés (« Les notes ne sont pas reprises ici. »).
-- Le gestionnaire colle la **réponse entière** de Claude : l'app y retrouve chaque objet `paquet@1` (prose, blocs de code, plusieurs blocs réunis). Elle distingue texte vide, demande recollée par erreur (`DEMANDE-…`), réponse coupée et absence de recette.
-- Tolérances : casse, accents et séparateurs des vocabulaires fermés (`Incorporé` → `incorpore`), nombres écrits en texte (`"0,5"`), `produit` mis en minuscules. Champs inconnus, `notes`, `derniereFois` et clés autres que `plats` ignorés avec un avertissement (repris dans la tranche qui les utilise : notes et sauvegarde en T1d, réglages et profils ensuite).
+- Le gestionnaire colle la **réponse entière** de Claude : l'app y retrouve chaque objet `paquet@1` (prose, blocs de code, plusieurs blocs réunis). Elle distingue texte vide, demande recollée par erreur (`DEMANDE-…`), réponse coupée et absence de recette ; sans recette, elle reconnaît les deux phrases de refus du Projet Claude, en tête de ligne (casse, accents, citation, gras et ⚠️ ignorés ; une simple mention dans la prose ne compte pas) : « INSTRUCTIONS À METTRE À JOUR » (titre « Instructions à mettre à jour », bouton « Ouvrir Réglages ») et « APP À METTRE À JOUR » (« App à mettre à jour » : fermer puis rouvrir l'app). Une recette lue ou coupée l'emporte sur ces phrases.
+- Tolérances : casse, accents et séparateurs des vocabulaires fermés (`Incorporé` → `incorpore`), nombres écrits en texte (`"0,5"`), `produit` mis en minuscules. Champs inconnus, `notes`, `derniereFois` et clés autres que `format`, `instructions` et `plats` ignorés avec un avertissement (repris dans la tranche qui les utilise : notes et sauvegarde en T1d, réglages et profils ensuite).
 - Grille : `id` et `nom` toujours ; `portionsBase` et `ingredients` sauf plat sans recette ; avec des ingrédients, le statut devient au moins `brouillon` ; `tempC` conseillé pour four et airfryer.
 - Plat visé : la cible (une seule recette collée), sinon le même `id` s'il s'agit du même plat (même nom, plat ⏳, demande ouverte, ou fiche modifiée à la main, donc peut-être renommée, sauf si un plat ⏳ ou une demande ouverte porte exactement le nom collé), sinon le même nom, sinon un nouveau plat (identifiant libre `-2` si un autre plat, déjà rempli, utilise le sien). Deux recettes visant le même plat : erreur.
 - Écriture : seulement les champs présents (`mergeFields`), jamais `vignette` ni `notes`, jamais de table vide ni de valeur `undefined` ; demandes satisfaites closes dans un second lot (`update`, `statut: traitee`, `traiteeLe`).
 - Fiche modifiée à la main (`modifieePar`) : l'aperçu annonce « Remplace les modifications faites à la main le … » ; la recette remplacée ou complétée efface `modifieeLe` et `modifieePar`.
+- Version des instructions (`controlerInstructions`) : à l'aperçu, une réponse sans `instructions`, d'une version plus ancienne ou plus récente que `VERSION_INSTRUCTIONS` ajoute en tête des avertissements « …recopiez les instructions depuis Réglages › Projet Claude » (ou « fermez puis rouvrez l'app » si la réponse est plus récente que l'app). Non bloquant, absent du texte de correction, jamais pour une sauvegarde.
 - Tout ou rien : la moindre erreur bloque l'enregistrement ; « Copier les corrections pour Claude » copie un texte avec les codes exacts. Les messages affichés n'emploient aucun mot technique (§4) ; le texte collé n'est jamais affiché.
 
 ```
 CORRECTION paquet@1
+instructions: <VERSION_INSTRUCTIONS>
 id: <id du plat>
 - <consigne avec les codes exacts>
 (Rends la fiche complète corrigée, en un seul bloc.)
@@ -331,6 +337,7 @@ Textes copiés par les boutons « Demander à Claude » (gestionnaire uniquement
 
 ```
 DEMANDE-RECETTE paquet@1
+instructions: <VERSION_INSTRUCTIONS>
 id: <id du plat>
 nom: <nom du plat>
 (Ajoute un lien, une photo ou la recette dictée.)
@@ -340,6 +347,7 @@ DEMANDE-RECETTE ajoute, si des profils ont des règles, un bloc `versions:` (une
 
 ```
 DEMANDE-VARIANTES paquet@1
+instructions: <VERSION_INSTRUCTIONS>
 pour: <id du profil>
 besoin: sans_viande | adapter      (si tous les plats ont le même besoin)
 règles: <ce que mange le profil>
@@ -355,6 +363,8 @@ plats:
 - Demande groupée par lots de `LOT_VERSIONS` (10) plats, depuis le bandeau « Versions pour <Prénom> » de Plats (gestionnaire, filtre « ❌ Versions à créer ») ; un second toucher recopie le même lot ; les plats déjà envoyés sont gardés quelques jours sur le téléphone (`ui/envoyes.js`) pour proposer le lot suivant.
 - Une réponse « versions seules » (`id`, `nom`, `variantes`, sans ingrédients) n'écrit que les versions : transaction par plat, fusion par `pour` (la version reçue remplace celle du même profil, les autres restent) ; un statut recopié par habitude ne bloque pas le lot. Une fiche complète différente de la recette actuelle et porteuse de versions laisse choisir « version seule » ou « remplacer ». Une demande de variante n'est close que si la version reçue convient au profil.
 - Deux versions pour le même profil : erreur à l'ajout de recettes, première gardée dans une sauvegarde. La correction d'une réponse « versions seules » redemande les seules versions, avec celles des autres plats du lot (rien n'est enregistré tant qu'une erreur reste).
+
+**Alignement avec le Projet Claude** : `docs/projet-claude.md` (fourni par l'app, copié depuis Réglages) est la seule source du format et des demandes ; il porte sa version (`VERSION_INSTRUCTIONS`, entier, `coeur/claude.js`) en en-tête et en section 0. Chaque texte copié (DEMANDE-RECETTE, DEMANDE-VARIANTES, CORRECTION) porte en deuxième ligne `instructions: <n>` ; le Projet Claude compare à sa version et, si elles diffèrent, ne rend aucune fiche mais l'une des deux phrases de refus ci-dessus. Chaque bloc qu'il rend porte `"instructions": <n>` après `"format"`. Il ne réécrit jamais le format : une évolution utile devient une « PROPOSITION pour Claude Code » (objet, pourquoi, changement, exemple). Un fichier de contexte du foyer peut compléter le projet, sans jamais contredire les instructions.
 
 ## 9. Algorithmes (`js/coeur/`, couverts par des tests)
 
@@ -415,7 +425,7 @@ plats:
    - Fiche en lecture, un seul bouton « ✏️ Modifier la recette » (les deux membres ; « Écrire la recette moi-même » sur un plat ⏳) → écran `#/modifier/<id>` : nom, type, portions (« Ces quantités sont pour N portions »), ingrédients (ajouter, retirer, quantité, unité, nature), étapes (ajouter, déplacer, retirer), cuisson principale (« Cuit surtout au » + durée), jours au frigo, congélation, boîte à emporter, « Recette vérifiée ». Restent à Claude : variantes, temps de travail, source, récurrence, étapes de cuisson secondaires.
    - Une seule barre « Enregistrer » (onglets masqués). Seuls les champs touchés sont écrits ; un bandeau prévient si l'autre téléphone a changé l'un d'eux entre-temps. La modification en cours est gardée sur le téléphone (`localStorage`, par compte et par plat) jusqu'à l'enregistrement, l'annulation ou la déconnexion : la fiche propose alors « Reprendre ».
    - Ajout d'un ingrédient : suggestions dès les premières lettres, tirées de tous les ingrédients déjà connus, unité, rayon et nature préremplis ; pour un produit jamais vu, une question « Viande / Poisson / Légume / Autre » (viande « en morceaux », légume « fondu dans le plat » par défaut, modifiables dans « Plus de précisions »).
-6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, carte « Projet Claude » (copier les instructions du projet), sauvegarde : « Télécharger une sauvegarde », « Restaurer une sauvegarde »).
+6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, carte « Projet Claude » (« Version <n> des instructions », copier les instructions du projet ; tant que cette version n'a été copiée ni sur ce téléphone par ce compte ni sur un autre appareil (`reglages/foyer.instructionsCopiees`), bandeau « 🔔 Nouvelles instructions : copiez-les dans votre projet Claude » et copie en action principale ; même rappel dans le panneau du profil du gestionnaire, « 🔔 Nouvelles instructions pour votre projet Claude » + « Les recopier », vers Réglages), sauvegarde : « Télécharger une sauvegarde », « Restaurer une sauvegarde »).
 
 ## 11. Tranches
 
@@ -440,6 +450,7 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 - Un abonnement `onSnapshot` par requête, créé une fois ; écritures uniquement sur action de l'utilisateur.
 - États visibles : chargement, vide, hors ligne, accès refusé, import invalide.
 - Petits commits ; mettre à jour §14 à chaque fin de tranche.
+- Toute modification de `docs/projet-claude.md` augmente `VERSION_INSTRUCTIONS` (`js/coeur/claude.js`) et la version écrite dans le document (en-tête, section 0, exemples) ; un garde-fou d'empreinte (`EMPREINTE_INSTRUCTIONS`, `tests/coeur-alignement.test.js`) échoue sinon et donne la nouvelle valeur. Le propriétaire recopie ensuite les instructions dans le Projet Claude (Réglages › Projet Claude, rappel 🔔 dans l'app) ; le dire dans la pull request.
 - À chaque push, donner au propriétaire le lien de la pull request et le code de version attendu (6 premiers caractères de `VERSION` dans `sw.js`, affichés en bas du panneau du profil).
 
 ## 13. Mise en place (actions du propriétaire, hors Claude Code)
@@ -463,7 +474,8 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
     - [x] T1d-2 sauvegarde et restauration par fichier, ajout de recettes par fichier — publié le 2026-10-07 ; essai court fait sur le téléphone du gestionnaire (sauvegarde téléchargée, restauration du même fichier « Tout est déjà à jour ») ; grand essai de restauration (plat supprimé, recette cochée) reporté à la demande du propriétaire
 - [ ] T2 Compatibilité & variantes — en cinq livraisons (plan détaillé hors du dépôt, données du foyer dans Firestore seulement) :
   - [x] T2a « Ce que <Prénom> mange » (régime d'un profil, lignes 🌿 / ❌ dans la liste, la fiche et Découvrir, filtres, repères dans « Modifier », règles dans la sauvegarde) — publié et essayé sur le téléphone du gestionnaire le 2026-10-07
-  - [ ] T2b versions écrites par Claude, dix plats à la fois (demande groupée, import des seules versions, `docs/projet-claude.md`, carte « Projet Claude » dans Réglages) — publié le 2026-10-08 ; premier essai : la version reçue retirait la viande sans la remplacer → instructions renforcées (« une vraie alternative »), second essai concluant le 2026-10-08
+  - [x] T2b versions écrites par Claude, dix plats à la fois (demande groupée, import des seules versions, `docs/projet-claude.md`, carte « Projet Claude » dans Réglages) — publié le 2026-10-08 ; premier essai : la version reçue retirait la viande sans la remplacer → instructions renforcées (« une vraie alternative »), second essai concluant sur le téléphone du gestionnaire le 2026-10-08
+  - [ ] Alignement app ↔ projet Claude (version des instructions dans chaque demande et chaque réponse, phrases de refus reconnues, avertissement à l'aperçu, rappel 🔔 de recopier les instructions dans Réglages et le panneau du profil) — pull request ouverte le 2026-10-08, essai sur téléphone à faire
   - [ ] T2b+ « Demander à Claude 15 idées de plats » (avec leurs versions)
   - [ ] Corbeille : supprimer un plat (les deux membres), « Remettre », « Vider la corbeille » (gestionnaire), suggestion quand tous les profils ont dit « Jamais »
   - [ ] T2c précautions de l'enfant selon son âge (date de naissance, barème générique français, ❌ / ! avec la cause, carte 🧸🎂 qui propose d'assouplir, règles désactivables)
@@ -501,3 +513,4 @@ Décisions :
 - 2026-10-08 — Versions sans viande : ce qui est retiré est remplacé par une alternative qui apporte goût et texture (tofu, seitan, tempeh, protéines de soja, légumineuses, champignons…), végétale de préférence ; technique dans la consigne (`docs/projet-claude.md` §4).
 - 2026-10-08 — Sans version connue d'un plat, Claude en invente une : il compense ce qui est retiré avec tout ce que les règles du profil permettent, en gardant l'accord des saveurs, la texture, la mâche et une cuisson adaptée ; la consigne signale une version inventée, à goûter.
 - 2026-10-08 — Bas du panneau du profil : « Version du <date> · <6 premiers caractères de VERSION> », annoncée par le service worker qui a servi l'ouverture ; « Une mise à jour est prête : fermez puis rouvrez l'app » si une version plus récente arrive pendant la visite. Chaque pull request donne le code attendu.
+- 2026-10-08 — Alignement app ↔ projet Claude : une seule source pour le format et les demandes, `docs/projet-claude.md`, fourni par l'app et versionné (`VERSION_INSTRUCTIONS`, entier qui augmente à chaque modification). Un décalage se voit des deux côtés : chaque demande copiée porte la version attendue (Claude refuse par une phrase fixe si ce n'est pas la sienne), chaque réponse porte la sienne (l'app prévient à l'aperçu), et l'app rappelle de recopier les instructions quand elles changent (version copiée retenue sur le téléphone et dans `reglages/foyer`, pour qu'une copie faite sur l'ordinateur éteigne aussi le rappel du téléphone). Le projet Claude ne réécrit jamais le format, même sur demande : il rédige une « PROPOSITION pour Claude Code », et l'app et les instructions évoluent ensemble. Le contexte du foyer (matériel, habitudes, enseigne) vit dans un fichier séparé du projet Claude, subordonné aux instructions ; les règles des profils viennent toujours des demandes de l'app.

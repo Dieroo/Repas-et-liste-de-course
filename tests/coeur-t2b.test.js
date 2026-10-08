@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  LOT_VERSIONS, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
+  LOT_VERSIONS, VERSION_INSTRUCTIONS, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
 } from '../js/coeur/claude.js';
 import {
   extrairePaquet, validerPaquet, preparerImport, fusionnerVariantes, demandesSatisfaites, filtrerPreparation,
@@ -70,8 +70,8 @@ test('LOT_VERSIONS vaut 10', () => {
   assert.equal(LOT_VERSIONS, 10);
 });
 
-test('texteDemandeRecette : sans profil contraint, texte de T1b à l’identique', () => {
-  const t1b = 'DEMANDE-RECETTE paquet@1\nid: plat-x\nnom: Plat X\n(Ajoute un lien, une photo ou la recette dictée.)';
+test('texteDemandeRecette : sans profil contraint, texte de T1b à l’identique (plus la version des instructions)', () => {
+  const t1b = `DEMANDE-RECETTE paquet@1\ninstructions: ${VERSION_INSTRUCTIONS}\nid: plat-x\nnom: Plat X\n(Ajoute un lien, une photo ou la recette dictée.)`;
   assert.equal(texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }), t1b);
   assert.equal(texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }, { profils: [] }), t1b);
   assert.equal(texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }, { profils: [ADULTE_A, { ...ADULTE_B, regles: [] }] }), t1b);
@@ -81,6 +81,7 @@ test('texteDemandeRecette : une ligne de versions par profil contraint, dans l�
   const texte = texteDemandeRecette({ id: 'plat-x', nom: 'Plat X' }, { profils: PROFILS });
   assert.equal(texte, [
     'DEMANDE-RECETTE paquet@1',
+    `instructions: ${VERSION_INSTRUCTIONS}`,
     'id: plat-x',
     'nom: Plat X',
     'versions:',
@@ -94,6 +95,7 @@ test('texteDemandeRecette : une ligne de versions par profil contraint, dans l�
 test('texteDemandeVariantes : texte exact, fautifs marqués ✗, unité « pc » sous-entendue', () => {
   assert.equal(texteDemandeVariantes([CARBONADE], ADULTE_B), [
     'DEMANDE-VARIANTES paquet@1',
+    `instructions: ${VERSION_INSTRUCTIONS}`,
     'pour: profil-b',
     'besoin: sans_viande',
     'règles: Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel.',
@@ -338,6 +340,7 @@ test('clôture : version qui convient → close ; qui laisse un fautif → ouver
   const texte = texteCorrectionPourClaude(r);
   assert.equal(texte, [
     'CORRECTION paquet@1',
+    `instructions: ${VERSION_INSTRUCTIONS}`,
     '- id carbonade-flamande variantes[pour=profil-b] : contient fond de veau (bouillon_viande), exclu pour profil-b',
     '(Rends seulement { "id", "nom", "variantes" } de chaque plat corrigé, en un seul bloc.)',
   ].join('\n'));
@@ -496,6 +499,7 @@ test('correction d’une réponse de versions refusée : versions seules, tout l
   assert.equal(v.valide, false);
   assert.equal(texteCorrectionPourClaude(v), [
     'CORRECTION paquet@1',
+    `instructions: ${VERSION_INSTRUCTIONS}`,
     'id: gratin-test',
     '- plats[0] (gratin-test) variantes[0].ajouter[0] « thon au naturel » : `qtePortion` attendu (quantité par portion) au lieu de `qte`',
     '- Rien n’a été enregistré : rends aussi, telles quelles, les versions des autres plats du lot (carbonade-flamande).',
