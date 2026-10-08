@@ -91,7 +91,7 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 ```
 index.html
 manifest.webmanifest
-sw.js                     liste de précache à tenir à jour (vérifiée par tests/hors-ligne.test.js)
+sw.js                     liste de précache à tenir à jour (vérifiée par tests/hors-ligne.test.js) ; `PUBLIEE` (date de mise en ligne, à changer à chaque publication) et `VERSION`, affichées en bas du panneau du profil
 .nojekyll                 GitHub Pages sert les fichiers tels quels
 icons/
 css/app.css               tokens du §4, composants
@@ -499,3 +499,4 @@ Décisions :
 - 2026-10-07 — T2b : Claude propose les versions des profils qui ont des règles avec chaque recette demandée, et par lots de dix pour les plats existants. Ajouts du propriétaire : bouton « 15 idées de plats » juste après T2b ; corbeille (les deux membres suppriment, jamais automatique) avant T2c ; l'utilisatrice des courses demande elle-même sa version (T2e).
 - 2026-10-08 — Versions sans viande : ce qui est retiré est remplacé par une alternative qui apporte goût et texture (tofu, seitan, tempeh, protéines de soja, légumineuses, champignons…), végétale de préférence ; technique dans la consigne (`docs/projet-claude.md` §4).
 - 2026-10-08 — Sans version connue d'un plat, Claude en invente une : il compense ce qui est retiré avec tout ce que les règles du profil permettent, en gardant l'accord des saveurs, la texture, la mâche et une cuisson adaptée ; la consigne signale une version inventée, à goûter.
+- 2026-10-08 — Bas du panneau du profil : « Version du <date> · <6 premiers caractères de VERSION> », annoncée par le service worker qui a servi l'ouverture ; « Une mise à jour est prête : fermez puis rouvrez l'app » si une version plus récente arrive pendant la visite. Chaque pull request donne le code attendu.

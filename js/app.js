@@ -77,6 +77,8 @@ const panneauProfil = document.getElementById('panneau-profil');
 const bandeauApercu = document.getElementById('bandeau-apercu');
 
 const etat = {
+  version: null, // { version, publiee } du service worker qui a servi l'app ; null : inconnue
+  versionPrete: false, // une version plus récente est installée : elle s'applique à la prochaine ouverture
   utilisateur: undefined, // undefined : pas encore connu ; null : déconnecté
   donnees: { statut: 'chargement' },
   abonnementDepuis: 0,
@@ -680,6 +682,8 @@ function ouvrirPanneauProfil() {
       ? { derniere: dateDeSauvegarde(ctx.reglages?.derniereSauvegarde) }
       : null,
     onSauvegarder: sauvegarderDepuisLePanneau,
+    version: etat.version,
+    versionPrete: etat.versionPrete,
   });
 }
 
@@ -812,6 +816,38 @@ function majHorsLigne() {
   rendre();
 }
 
+// ——— Version de l'app ———
+
+/** Version annoncée par un service worker (sw.js), ou null s'il ne répond pas. */
+function demanderVersion(travailleur) {
+  if (!travailleur) return Promise.resolve(null);
+  return new Promise((resoudre) => {
+    const canal = new MessageChannel();
+    const delai = setTimeout(() => resoudre(null), 3000);
+    canal.port1.onmessage = ({ data }) => {
+      clearTimeout(delai);
+      resoudre(data?.type === 'version' && typeof data.version === 'string' ? data : null);
+    };
+    travailleur.postMessage({ type: 'version' }, [canal.port2]);
+  });
+}
+
+/**
+ * Version qui a servi cette ouverture (celle du service worker en place au chargement), puis, si une plus récente
+ * prend la main pendant la visite, « elle s'appliquera à la prochaine ouverture ».
+ */
+function suivreVersion() {
+  const conteneur = navigator.serviceWorker;
+  demanderVersion(conteneur.controller).then((version) => { etat.version = version; });
+  conteneur.addEventListener('controllerchange', () => {
+    demanderVersion(conteneur.controller).then((nouvelle) => {
+      if (!nouvelle) return;
+      if (!etat.version) etat.version = nouvelle;
+      else if (nouvelle.version !== etat.version.version) etat.versionPrete = true;
+    });
+  });
+}
+
 // ——— Démarrage ———
 
 function demarrer() {
@@ -819,6 +855,7 @@ function demarrer() {
     navigator.serviceWorker.register('./sw.js').catch(() => {
       // Sans service worker, l'app marche quand même en ligne.
     });
+    suivreVersion();
   }
   // Demande à Chrome de ne pas effacer les données de l'app quand le téléphone manque de place.
   navigator.storage?.persist?.().catch(() => {});

@@ -115,3 +115,11 @@ test('les règles Firestore du dépôt ne contiennent pas de vraie adresse', asy
   assert.ok(regles.includes('<EMAIL_1>') && regles.includes('<EMAIL_2>'));
   assert.doesNotMatch(regles, /[\w.+-]+@[\w-]+\.[\w.]+/);
 });
+
+test('sw.js donne sa date de publication (PUBLIEE, AAAA-MM-JJ) et répond à la demande de version de l’app', async () => {
+  const sw = await lire('sw.js');
+  const publiee = constante(sw, 'PUBLIEE');
+  assert.match(publiee ?? '', /^\d{4}-\d{2}-\d{2}$/, 'PUBLIEE introuvable ou mal écrite dans sw.js');
+  assert.ok(!Number.isNaN(Date.parse(publiee)), 'PUBLIEE n’est pas une date');
+  assert.match(sw, /type !== 'version'/, 'sw.js doit répondre au message « version »');
+});

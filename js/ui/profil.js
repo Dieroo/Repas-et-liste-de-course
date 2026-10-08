@@ -121,6 +121,32 @@ function blocSauvegarde(sauvegarde, onSauvegarder, bouton) {
   ];
 }
 
+/** « 8 octobre 2026 » pour '2026-10-08' ; null si la date est illisible. */
+function dateLongue(iso) {
+  const morceaux = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ''));
+  if (!morceaux) return null;
+  const date = new Date(Number(morceaux[1]), Number(morceaux[2]) - 1, Number(morceaux[3]));
+  return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/**
+ * Bas du panneau : version de l'app qui tourne (« Version du 8 octobre 2026 · b33d02 »), pour savoir si une mise à
+ * jour est appliquée ; et, si une plus récente est arrivée pendant la visite, comment l'appliquer.
+ */
+function lignesVersion(version, versionPrete) {
+  const code = typeof version?.version === 'string' ? version.version.slice(0, 6) : '';
+  const date = dateLongue(version?.publiee);
+  const texte = code
+    ? `Version ${date ? `du ${date} ` : ''}·\u00A0${code}`
+    : 'Version\u00A0: pas encore installée sur ce téléphone.';
+  return [
+    el('p', { class: 'aide version-app' }, texte),
+    versionPrete
+      ? el('p', { class: 'aide version-app' }, 'Une mise à jour est prête\u00A0: fermez puis rouvrez l’app pour l’appliquer.')
+      : null,
+  ];
+}
+
 /**
  * Remplit et ouvre le panneau du profil. `role` est le rôle réel ; `apercu` : vue « Repas et courses » affichée.
  * `moi` : profil relié à l'adresse connectée, ou null ; `aRelier` : prénoms que « Qui êtes-vous ? » proposerait
@@ -131,7 +157,7 @@ function blocSauvegarde(sauvegarde, onSauvegarder, bouton) {
 export function ouvrirProfil(dialogue, {
   utilisateur, role, apercu, moi = null, aRelier = [], avecProfils = false,
   onReglages, onAjouterRecettes, onApercu, onDeconnecter, onQuiEtesVous, onDelier,
-  sauvegarde = null, onSauvegarder,
+  sauvegarde = null, onSauvegarder, version = null, versionPrete = false,
 }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
@@ -161,6 +187,7 @@ export function ouvrirProfil(dialogue, {
         : null,
       bouton('Se déconnecter', onDeconnecter),
       el('button', { class: 'bouton bouton-texte', type: 'button', onclick: fermer }, 'Fermer'),
+      ...lignesVersion(version, versionPrete),
     ),
   );
 

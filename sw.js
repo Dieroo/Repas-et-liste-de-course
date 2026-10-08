@@ -9,8 +9,10 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = 'b33d0203ab66';
+const VERSION = '30f798451645';
 const VERSION_SDK = '12.19.0';
+// Date de publication affichée dans le panneau du profil (« Version du … ») : à changer à chaque mise en ligne.
+const PUBLIEE = '2026-10-08';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
 const CACHE_EXTERNE = `${PREFIXE}externe-${VERSION_SDK}`;
@@ -74,6 +76,14 @@ const URL_POLICE = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,
 const URL_INDEX = new URL('./index.html', self.location.href).href;
 // Seules les ouvertures de l'accueil de l'app sont servies hors ligne (pas les autres pages du site).
 const CHEMINS_ACCUEIL = [new URL('./', self.location.href).pathname, new URL(URL_INDEX).pathname];
+
+// L'app demande la version qui l'a servie, pour l'afficher dans le panneau du profil.
+self.addEventListener('message', (evenement) => {
+  if (evenement.data?.type !== 'version') return;
+  const reponse = { type: 'version', version: VERSION, publiee: PUBLIEE };
+  if (evenement.ports?.[0]) evenement.ports[0].postMessage(reponse);
+  else evenement.source?.postMessage(reponse);
+});
 
 self.addEventListener('install', (evenement) => {
   evenement.waitUntil((async () => {

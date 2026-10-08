@@ -980,6 +980,11 @@ body:has(.barre-gestes:not([hidden])) .annonce.visible { transform: translate(-5
   font-size: 0.875rem;
 }
 
+.version-app {
+  margin: 0;
+  text-align: center;
+}
+
 .formulaire .message-erreur {
   display: flex;
   flex-direction: column;
