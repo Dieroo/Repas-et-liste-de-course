@@ -440,6 +440,7 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 - Un abonnement `onSnapshot` par requête, créé une fois ; écritures uniquement sur action de l'utilisateur.
 - États visibles : chargement, vide, hors ligne, accès refusé, import invalide.
 - Petits commits ; mettre à jour §14 à chaque fin de tranche.
+- À chaque push, donner au propriétaire le lien de la pull request et le code de version attendu (6 premiers caractères de `VERSION` dans `sw.js`, affichés en bas du panneau du profil).
 
 ## 13. Mise en place (actions du propriétaire, hors Claude Code)
 
