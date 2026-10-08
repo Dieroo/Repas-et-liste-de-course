@@ -4,8 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { VOCABULAIRES } from '../js/coeur/vocabulaire.js';
-import { CHAMPS_PLAT, FORMAT, validerPaquet, extrairePaquet } from '../js/coeur/paquet.js';
-import { texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude } from '../js/coeur/claude.js';
+import { CHAMPS_PLAT, FORMAT, validerPaquet, extrairePaquet, controlerInstructions } from '../js/coeur/paquet.js';
+import {
+  VERSION_INSTRUCTIONS, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
+} from '../js/coeur/claude.js';
 import { ecrireRegime } from '../js/coeur/regles.js';
 
 const doc = await readFile(new URL('../docs/projet-claude.md', import.meta.url), 'utf8');
@@ -24,7 +26,7 @@ function blocs(langage) {
 const ing = (produit, qte, unite, marqueurs = [], extra = {}) => ({ produit, qte, unite, rayon: 'divers', marqueurs, ...extra });
 
 test('en tête : titre et version des instructions', () => {
-  assert.match(doc.split('\n')[0], /^# Instructions du projet Claude — version T2 \(2026-10\)$/);
+  assert.equal(doc.split('\n')[0], `# Instructions du projet Claude — version ${VERSION_INSTRUCTIONS}`);
 });
 
 test('chaque valeur des vocabulaires fermés figure dans les instructions', () => {
@@ -114,6 +116,8 @@ test('les exemples de réponses s’ajoutent sans erreur ni avertissement', () =
       ...resultat.plats.flatMap((p) => [...p.erreurs, ...p.avertissements])].map((e) => e.pourClaude);
     assert.equal(resultat.valide, true, messages.join('\n'));
     assert.deepEqual(messages, []);
+    // Chaque exemple porte la version des instructions de l'app : aucun avertissement de version.
+    assert.equal(controlerInstructions(extrait.paquets), null, `version des instructions : ${reponse.slice(0, 60)}`);
   }
   // L'exemple de versions ne rend que { id, nom, variantes }.
   const versions = JSON.parse(reponses.find((r) => !r.includes('"ingredients"')));

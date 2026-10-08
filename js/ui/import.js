@@ -5,10 +5,22 @@ import { el, annoncer } from './dom.js';
 import { copier, lirePressePapiers, lectureBloquee } from './presse-papiers.js';
 import { choisirFichier, lireTexte } from './fichier.js';
 import {
-  extrairePaquet, validerPaquet, preparerImport, filtrerPreparation, estSauvegarde,
+  extrairePaquet, validerPaquet, preparerImport, filtrerPreparation, estSauvegarde, controlerInstructions,
 } from '../coeur/paquet.js';
 import { texteCorrectionPourClaude } from '../coeur/claude.js';
 import { FICHIER_MAX } from '../coeur/sauvegarde.js';
+
+// Claude refuse une demande écrite pour d'autres instructions que les siennes (docs/projet-claude.md §0) : mêmes
+// messages pour un collage et pour un fichier.
+const MESSAGES_ALIGNEMENT = {
+  instructions: 'Claude signale que ses instructions ne sont plus à jour. Recopiez-les depuis Réglages › Projet Claude, puis renvoyez la demande dans une nouvelle conversation.',
+  app: 'Claude signale que votre app n’est pas à jour. Fermez puis rouvrez l’app, puis recopiez la demande.',
+};
+
+const TITRES_ALIGNEMENT = {
+  instructions: 'Instructions à mettre à jour',
+  app: 'App à mettre à jour',
+};
 
 const MESSAGES_EXTRACTION = {
   vide: 'Rien à coller. Dans l’app Claude, copiez toute la réponse, puis revenez ici.',
@@ -16,6 +28,7 @@ const MESSAGES_EXTRACTION = {
   demande: 'C’est votre demande, pas la réponse de Claude. Collez-la dans votre projet Claude, puis copiez sa réponse.',
   coupee: 'La recette semble coupée ou abîmée. Copiez toute la réponse de Claude, jusqu’à la fin.',
   aucune: 'Aucune recette trouvée dans ce texte. Copiez toute la réponse de Claude.',
+  ...MESSAGES_ALIGNEMENT,
 };
 
 const TITRES_EXTRACTION = {
@@ -24,6 +37,7 @@ const TITRES_EXTRACTION = {
   demande: 'Ce n’est pas encore la réponse',
   coupee: 'Recette illisible',
   aucune: 'Aucune recette trouvée',
+  ...TITRES_ALIGNEMENT,
 };
 
 // Messages d'un fichier choisi (les codes de lecture du fichier s'ajoutent à ceux de l'extraction).
@@ -34,6 +48,7 @@ const MESSAGES_FICHIER = {
   demande: 'Ce fichier contient votre demande, pas la réponse de Claude.',
   coupee: 'Ce fichier semble coupé ou abîmé.',
   aucune: 'Aucune recette trouvée dans ce fichier.',
+  ...MESSAGES_ALIGNEMENT,
 };
 
 const TITRES_FICHIER = {
@@ -43,6 +58,7 @@ const TITRES_FICHIER = {
   demande: 'Ce n’est pas encore la réponse',
   coupee: 'Fichier abîmé',
   aucune: 'Aucune recette trouvée',
+  ...TITRES_ALIGNEMENT,
 };
 
 const LIBELLES_STATUT = {
@@ -335,7 +351,9 @@ export function creer(ctx) {
     if (prepares.erreurs.length) {
       return { type: 'erreurs', validation: { ...validation, plats: validation.plats.map((plat) => ({ ...plat, erreurs: [] })), erreurs: prepares.erreurs } };
     }
-    return { type: 'pret', validation, preparation: prepares };
+    // Réponse écrite avec d'autres instructions que celles de l'app : prévenu, sans bloquer (message seul).
+    const instructions = controlerInstructions(extrait.paquets)?.message ?? null;
+    return { type: 'pret', validation, preparation: prepares, instructions };
   }
 
   function titreResultat(texteTitre) {
@@ -373,6 +391,10 @@ export function creer(ctx) {
         return [el('section', { class: 'carte resultat-erreur' },
           titreResultat(titres[etat.code] ?? titres.aucune),
           el('p', { role: 'alert' }, messages[etat.code] ?? messages.aucune),
+          etat.code === 'instructions'
+            ? el('a', { class: 'bouton bouton-principal bouton-plein', href: '#/reglages', 'data-action': 'reglages' },
+              'Ouvrir Réglages')
+            : null,
           corrigeable ? boutonCopierCorrections({ erreur: etat.code }) : null,
           corrigeable && copieFaite ? messageCopie() : null,
         )];
@@ -475,7 +497,7 @@ export function creer(ctx) {
       .filter(Boolean).join(' · ');
   }
 
-  function renduPret({ validation, preparation: prepares }) {
+  function renduPret({ validation, preparation: prepares, instructions }) {
     const n = prepares.elements.length;
     const ecrivables = prepares.elements.filter((element) => element.statut !== 'identique');
     const filtree = preparation ?? prepares;
@@ -487,7 +509,11 @@ export function creer(ctx) {
     const versionsSeules = ecrivables.length > 0 && ecrivables.every((element) => element.statut === 'versions');
     const avecVersions = filtree.ecritures.some((ecriture) => ecriture.mode === 'versions');
     const horsLigne = !navigator.onLine && avecVersions;
-    const avertissementsGeneraux = [...validation.avertissements, ...prepares.avertissements].map((a) => a.message);
+    // La version des instructions d'abord ; jamais dans le texte « Copier les corrections pour Claude ».
+    const avertissementsGeneraux = [
+      instructions,
+      ...[...validation.avertissements, ...prepares.avertissements].map((a) => a.message),
+    ].filter(Boolean);
     let titre;
     if (!ecrivables.length) titre = n > 1 ? 'Ces recettes sont déjà dans l’app, à l’identique.' : 'Cette recette est déjà dans l’app, à l’identique.';
     else if (versionsSeules) {

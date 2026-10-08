@@ -5,6 +5,7 @@ import { copier } from './presse-papiers.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
 import { dateDeSauvegarde, joursDepuis } from '../coeur/sauvegarde.js';
 import { REGIMES, lireRegime } from '../coeur/regles.js';
+import { VERSION_INSTRUCTIONS } from '../coeur/claude.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -171,12 +172,21 @@ export function resumeSauvegarde({ horsLigne, aCorriger = [] }, { dansReglages =
 /**
  * Carte « Projet Claude » : copie les instructions à coller dans le projet Claude (`docs/projet-claude.md`). Le texte
  * est lu à l'ouverture de Réglages (gardé par l'app, donc tout de suite là) : la copie part dans le toucher, sans
- * attente, et le repli de copie fonctionne. → { noeud, detruire }
+ * attente, et le repli de copie fonctionne. Tant que les instructions de cette version de l'app n'ont pas été copiées
+ * sur ce téléphone (`ctx.instructionsAJour` faux), un bandeau le rappelle et la copie devient l'action principale.
+ * → { noeud, maj, detruire }
  */
 function creerCarteProjetClaude(ctx) {
+  let courant = ctx;
   let instructions = null;
   let detruit = false;
+  let aJour = null; // dernier état montré : bandeau et bouton ne changent que s'il change
   const etat = el('p', { class: 'aide', role: 'status' });
+  // Région vivante toujours présente : le bandeau, s'il apparaît pendant la visite, est lu une fois.
+  const bandeau = el('p', { class: 'bandeau bandeau-alerte', hidden: true },
+    el('span', { 'aria-hidden': 'true' }, '🔔'),
+    el('span', {}, 'Nouvelles instructions\u00A0: copiez-les dans votre projet Claude.'));
+  const rappel = el('div', { class: 'rappel-instructions', role: 'status' }, bandeau);
   const bouton = el('button', {
     class: 'bouton bouton-secondaire bouton-plein',
     type: 'button',
@@ -184,13 +194,27 @@ function creerCarteProjetClaude(ctx) {
     onclick: async () => {
       if (!instructions) return;
       const reussi = await copier(instructions);
+      // Retenue sur ce téléphone : l'app se redessine, le bandeau disparaît et le bouton redevient secondaire.
+      if (reussi) courant.actions?.noterInstructionsCopiees?.();
+      if (detruit) return;
       etat.textContent = reussi
-        ? 'Copié. Collez-le dans les instructions de votre projet Claude.'
+        ? 'Copié. Collez-le dans les instructions de votre projet Claude, à la place des anciennes.'
         : 'La copie n’a pas marché. Réessayez.';
       etat.hidden = false;
     },
   }, el('span', { 'aria-hidden': 'true' }, '📋'), 'Copier les instructions du projet');
   const reessayer = el('button', { class: 'bouton bouton-texte', type: 'button', hidden: true, onclick: lire }, 'Réessayer');
+
+  /** Bandeau et bouton selon `instructionsAJour`, sans reconstruire la carte (le focus reste sur le bouton). */
+  function suivre(nouveau) {
+    courant = nouveau;
+    const copiees = Boolean(nouveau.instructionsAJour);
+    if (copiees === aJour) return;
+    aJour = copiees;
+    bandeau.hidden = copiees;
+    bouton.classList.toggle('bouton-principal', !copiees);
+    bouton.classList.toggle('bouton-secondaire', copiees);
+  }
 
   function lire() {
     reessayer.hidden = true;
@@ -213,12 +237,15 @@ function creerCarteProjetClaude(ctx) {
     });
   }
 
+  suivre(ctx);
   lire();
   return {
     noeud: el('section', { class: 'carte carte-projet-claude' },
       el('h2', {}, 'Projet Claude'),
+      rappel,
       el('p', { class: 'texte-doux' },
         'Les instructions qui apprennent à votre projet Claude à écrire les recettes et les versions pour l’app.'),
+      el('p', { class: 'aide' }, `Version ${VERSION_INSTRUCTIONS} des instructions.`),
       bouton,
       etat,
       reessayer,
@@ -226,6 +253,7 @@ function creerCarteProjetClaude(ctx) {
       el('a', { class: 'lien-fiche', href: './docs/projet-claude.md', target: '_blank', rel: 'noopener' },
         'Ouvrir les instructions ›'),
     ),
+    maj: suivre,
     detruire() {
       detruit = true;
     },
@@ -344,6 +372,7 @@ export function creer(ctx) {
     maj(nouveau) {
       courant = nouveau;
       remplir();
+      carteProjetClaude.maj(nouveau);
     },
     detruire() {
       carteProjetClaude.detruire();

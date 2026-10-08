@@ -1,5 +1,6 @@
 // Textes copiés pour le Projet Claude (CLAUDE.md §8, T2b) : demande de recette (avec les versions des profils qui ont
 // des règles), demande groupée de versions, corrections. Logique pure : ni DOM ni Firebase.
+// Chaque texte porte en deuxième ligne la version des instructions attendue (docs/projet-claude.md, section 0).
 // Les identifiants de profil et leurs règles ne vont qu'au presse-papiers ; jamais d'adresse, de prénom ni d'âge.
 // N'importe jamais paquet.js (qui garde la lecture des réponses) : pas de cycle.
 import { decrireRegles, lireRegime } from './regles.js';
@@ -7,6 +8,15 @@ import { evaluer, profilsContraints } from './compatibilite.js';
 import { texte } from './vocabulaire.js';
 
 const FORMAT = 'paquet@1';
+
+/** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
+export const VERSION_INSTRUCTIONS = 1;
+/** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
+ * que VERSION_INSTRUCTIONS augmente. */
+export const EMPREINTE_INSTRUCTIONS = 'bf65510e6380';
+
+/** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
+const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
 
 /** Nombre de plats d'une demande groupée de versions : une réponse plus longue risque d'être coupée. */
 export const LOT_VERSIONS = 10;
@@ -51,14 +61,15 @@ function quantite(ingredient, champ = 'qte') {
 }
 
 /**
- * (a) Texte copié par « Demander à Claude » pour une recette à ajouter. Sans profil qui a des règles : texte de T1b,
- * à l'identique. Sinon, une ligne `versions:` par profil contraint (ordre d'affichage), pour que Claude rende la
- * fiche complète avec leurs variantes.
+ * (a) Texte copié par « Demander à Claude » pour une recette à ajouter. Sans profil qui a des règles : texte de T1b
+ * (plus la ligne de version des instructions). Sinon, une ligne `versions:` par profil contraint (ordre
+ * d'affichage), pour que Claude rende la fiche complète avec leurs variantes.
  */
 export function texteDemandeRecette(plat, { profils = [] } = {}) {
   const contraints = profilsContraints(profils).filter((profil) => typeof profil.id === 'string' && profil.id);
   const lignes = [
     `DEMANDE-RECETTE ${FORMAT}`,
+    LIGNE_INSTRUCTIONS,
     `id: ${ligne(plat?.id)}`,
     `nom: ${ligne(plat?.nom)}`,
   ];
@@ -95,6 +106,7 @@ export function texteDemandeVariantes(plats, profil) {
   const [besoin] = besoins;
   const lignes = [
     `DEMANDE-VARIANTES ${FORMAT}`,
+    LIGNE_INSTRUCTIONS,
     `pour: ${ligne(profil?.id)}`,
   ];
   if (besoins.size === 1 && besoin) lignes.push(`besoin: ${besoin}`);
@@ -135,7 +147,7 @@ export function texteDemandeVariantes(plats, profil) {
  * entières (il les inventerait).
  */
 export function texteCorrectionPourClaude(probleme) {
-  const lignes = [`CORRECTION ${FORMAT}`];
+  const lignes = [`CORRECTION ${FORMAT}`, LIGNE_INSTRUCTIONS];
   let erreurs = 0;
   if (probleme?.erreur) {
     erreurs += 1;

@@ -2630,6 +2630,9 @@ select.champ {
 
 .carte-projet-claude .lien-fiche { align-self: flex-start; }
 
+/* Rappel « Nouvelles instructions » (bandeau-alerte) : sans bandeau, sa région vivante, vide, ne laisse pas d'espace. */
+.rappel-instructions:not(:has(> :not([hidden]))) { margin-top: -10px; }
+
 /* Ajouter des recettes : case « enregistrer » de chaque plat d'un lot, toute la hauteur touchable (48 px). */
 .apercu-plat.avec-case {
   flex-direction: row;

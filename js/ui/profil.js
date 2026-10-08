@@ -121,6 +121,18 @@ function blocSauvegarde(sauvegarde, onSauvegarder, bouton) {
   ];
 }
 
+/**
+ * Rappel des instructions du projet Claude (gestionnaire) : quand celles de l'app n'ont pas encore été copiées sur ce
+ * téléphone, une ligne et le bouton « Les recopier » (vers Réglages › Projet Claude).
+ */
+function blocInstructions(instructionsAJour, onInstructions, bouton) {
+  if (instructionsAJour !== false || !onInstructions) return [];
+  return [
+    el('p', {}, '🔔 Nouvelles instructions pour votre projet Claude.'),
+    bouton('Les recopier', onInstructions),
+  ];
+}
+
 /** « 8 octobre 2026 » pour '2026-10-08' ; null si la date est illisible. */
 function dateLongue(iso) {
   const morceaux = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ''));
@@ -153,11 +165,13 @@ function lignesVersion(version, versionPrete) {
  * (coeur/profils.js › profilsARelier) ; `avecProfils` : le foyer a au moins un profil.
  * `sauvegarde` : { derniere: Date | null } pour le rappel de sauvegarde (gestionnaire), null sinon ;
  * `onSauvegarder()` est appelé dans le toucher, panneau déjà fermé.
+ * `instructionsAJour` : faux si les instructions du projet Claude ont changé depuis la dernière copie (rappel et
+ * `onInstructions()`, panneau déjà fermé) ; vrai par défaut, sans rappel.
  */
 export function ouvrirProfil(dialogue, {
   utilisateur, role, apercu, moi = null, aRelier = [], avecProfils = false,
   onReglages, onAjouterRecettes, onApercu, onDeconnecter, onQuiEtesVous, onDelier,
-  sauvegarde = null, onSauvegarder, version = null, versionPrete = false,
+  sauvegarde = null, onSauvegarder, instructionsAJour = true, onInstructions, version = null, versionPrete = false,
 }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
@@ -180,6 +194,7 @@ export function ouvrirProfil(dialogue, {
       el('p', { class: 'etiquette' }, LIBELLES_ROLE[role] ?? ''),
       blocReliure({ moi, aRelier, avecProfils, role, bouton, onQuiEtesVous, onDelier, fermer }),
       role === 'gestionnaire' && !apercu ? blocSauvegarde(sauvegarde, onSauvegarder, bouton) : null,
+      role === 'gestionnaire' && !apercu ? blocInstructions(instructionsAJour, onInstructions, bouton) : null,
       role === 'gestionnaire' && !apercu ? bouton('📋 Ajouter des recettes', onAjouterRecettes) : null,
       role === 'gestionnaire' && !apercu ? bouton('⚙️ Réglages', onReglages) : null,
       role === 'gestionnaire'
