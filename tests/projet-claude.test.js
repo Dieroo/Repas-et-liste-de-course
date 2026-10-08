@@ -6,9 +6,10 @@ import { readFile } from 'node:fs/promises';
 import { STYLES, VOCABULAIRES } from '../js/coeur/vocabulaire.js';
 import { CHAMPS_PLAT, FORMAT, validerPaquet, extrairePaquet, controlerInstructions } from '../js/coeur/paquet.js';
 import {
-  VERSION_INSTRUCTIONS, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
+  VERSION_INSTRUCTIONS, texteDemandeIdees, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
 } from '../js/coeur/claude.js';
 import { ecrireRegime } from '../js/coeur/regles.js';
+import { slug } from '../js/coeur/slug.js';
 
 const doc = await readFile(new URL('../docs/projet-claude.md', import.meta.url), 'utf8');
 
@@ -51,10 +52,10 @@ test('les en-têtes des demandes produites par l’app figurent dans les instruc
     texteDemandeRecette(plat, { profils }).split('\n')[0],
     texteDemandeVariantes([plat], profils[0]).split('\n')[0],
     texteCorrectionPourClaude({ erreur: 'aucune' }).split('\n')[0],
+    texteDemandeIdees({ profils }).split('\n')[0],
   ];
-  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1']);
+  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1']);
   for (const enTete of enTetes) assert.ok(doc.includes(`\`${enTete}\``), `« ${enTete} » absent`);
-  assert.ok(doc.includes('`DEMANDE-IDEES`'), 'DEMANDE-IDEES (annoncé pour plus tard) absent');
   // Chaque code DEMANDE-… cité est connu.
   const cites = new Set(doc.match(/DEMANDE-[A-Z]+/g));
   assert.deepEqual([...cites].sort(), ['DEMANDE-IDEES', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
@@ -108,8 +109,47 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
   ] };
   assert.ok(exemples.includes(texteCorrectionPourClaude(validerPaquet(versionsRefusees, { profils }))), 'exemple CORRECTION de versions différent du texte copié');
 
+  // Message d'idées refusé (une viande sans forme) : toutes les fiches du message sont redemandées (T2b+).
+  const ideeRendue = (nom, ingredient) => ({
+    id: slug(nom), nom, statutRecette: 'brouillon', portionsBase: 4, ingredients: [ingredient], source: 'Idée de Claude',
+  });
+  const messageRefuse = { format: FORMAT, instructions: VERSION_INSTRUCTIONS, plats: [
+    ideeRendue('Dahl de lentilles corail', ing('lentille corail', 300, 'g', ['feculent'])),
+    ideeRendue('Boulettes de pois chiches au cumin', ing('pois chiche', 400, 'g', ['feculent'])),
+    ideeRendue('Poulet au miso et patate douce', ing('haut de cuisse de poulet', 800, 'g', ['viande', 'volaille'])),
+    ideeRendue('Tajine de poisson aux olives', ing('filet de lieu', 600, 'g', ['poisson'])),
+    ideeRendue('Gâteau carotte et orange', ing('carotte', 300, 'g', ['legume'], { role: 'incorpore' })),
+  ] };
+  assert.ok(exemples.includes(texteCorrectionPourClaude(validerPaquet(messageRefuse, { profils }))), 'exemple CORRECTION d’un message d’idées différent du texte copié');
+
+  // Demande d'idées : envie, versions avec styles, aimés, évités et plats déjà dans l'app (T2b+).
+  const platsDeLApp = [
+    { id: 'carbonade-flamande', nom: 'Carbonade flamande', notes: { 'profil-b': 5 } },
+    { id: 'risotto-champignons', nom: 'Risotto aux champignons', notes: { 'profil-a': 5, 'profil-b': 3 } },
+    { id: 'chou-farci', nom: 'Chou farci', notes: { 'profil-a': 0, 'profil-b': 0 } },
+    { id: 'quiche-lardons', nom: 'Quiche aux lardons' },
+    { id: 'gratin-pates-jambon', nom: 'Gratin de pâtes au jambon', notes: { 'profil-b': 4 } },
+  ];
+  const idees = texteDemandeIdees({ nombre: 10, envie: 'cuisine du monde', plats: platsDeLApp, profils });
+  for (const debut of ['envie: ', 'versions:', 'aimés: ', 'évités: ', 'déjà dans l\'app: ']) {
+    assert.ok(idees.split('\n').some((l) => l.startsWith(debut)), `ligne « ${debut} » absente de l’exemple`);
+  }
+  assert.ok(exemples.includes(idees), 'exemple DEMANDE-IDEES différent du texte copié');
+
   // Une demande recollée par erreur n'est jamais prise pour une réponse.
   for (const exemple of exemples) assert.equal(extrairePaquet(exemple).erreur, 'demande');
+});
+
+test('l’exemple de fiche de DEMANDE-IDEES est une idée de Claude, au statut brouillon, avec ses versions', () => {
+  const idees = blocs('json').map((r) => JSON.parse(r)).filter((p) => p.plats.some((plat) => plat.source === 'Idée de Claude'));
+  assert.equal(idees.length, 1, 'un exemple de fiche rendue à DEMANDE-IDEES');
+  for (const plat of idees[0].plats) {
+    // L'identifiant d'une idée est le slug de son nom (section 5), comme Claude doit le créer.
+    assert.equal(plat.id, slug(plat.nom));
+    assert.equal(plat.statutRecette, 'brouillon');
+    assert.ok(plat.ingredients.length > 0);
+    assert.deepEqual(plat.variantes.map((v) => `${v.pour}/${v.style}`).sort(), ['profil-a/mer', 'profil-a/vegetal']);
+  }
 });
 
 test('les exemples de réponses s’ajoutent sans erreur ni avertissement', () => {

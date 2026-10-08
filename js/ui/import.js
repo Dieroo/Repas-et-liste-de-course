@@ -68,7 +68,14 @@ const LIBELLES_STATUT = {
   inchange: 'Recette inchangée',
   versions: 'Recette gardée',
   identique: 'Déjà dans l’app',
+  deja: 'Déjà dans vos plats',
 };
+
+/**
+ * Éléments de l'aperçu qui n'écrivent rien : recette identique à la fiche, ou idée de Claude (DEMANDE-IDEES) pour un
+ * plat qui a déjà sa recette (`deja` : son avertissement le dit, elle n'est pas reprise).
+ */
+const sansEcriture = (element) => element.statut === 'identique' || element.statut === 'deja';
 
 // Fiche complète reçue, différente de la recette actuelle, avec des versions : ce que l'on en prend.
 const CHOIX = [
@@ -491,15 +498,17 @@ export function creer(ctx) {
   /** Ligne de détail d'un plat de l'aperçu. */
   function detailDuPlat(element) {
     if (element.statut === 'identique') return 'Identique à la fiche actuelle.';
-    if (element.statut === 'versions' || element.statut === 'inchange') return 'La recette actuelle est gardée.';
+    if (['versions', 'inchange', 'deja'].includes(element.statut)) return 'La recette actuelle est gardée.';
     if (!element.ingredients) return 'Sans recette pour l’instant (⏳)';
     return [pluriel(element.ingredients, 'ingrédient', 'ingrédients'), element.etapes ? pluriel(element.etapes, 'étape', 'étapes') : null]
       .filter(Boolean).join(' · ');
   }
 
   function renduPret({ validation, preparation: prepares, instructions }) {
-    const n = prepares.elements.length;
-    const ecrivables = prepares.elements.filter((element) => element.statut !== 'identique');
+    // Une idée déjà dans les plats n'est pas reprise : elle ne compte pas parmi les recettes prêtes.
+    const deja = prepares.elements.filter((element) => element.statut === 'deja').length;
+    const n = prepares.elements.length - deja;
+    const ecrivables = prepares.elements.filter((element) => !sansEcriture(element));
     const filtree = preparation ?? prepares;
     const comptes = compterEcritures(filtree.ecritures);
     const aEcrire = comptes.recettes + comptes.versions;
@@ -515,7 +524,10 @@ export function creer(ctx) {
       ...[...validation.avertissements, ...prepares.avertissements].map((a) => a.message),
     ].filter(Boolean);
     let titre;
-    if (!ecrivables.length) titre = n > 1 ? 'Ces recettes sont déjà dans l’app, à l’identique.' : 'Cette recette est déjà dans l’app, à l’identique.';
+    if (!ecrivables.length && deja) {
+      if (n) titre = 'Ces recettes sont déjà dans l’app.';
+      else titre = deja > 1 ? 'Ces idées sont déjà dans vos plats.' : 'Cette idée est déjà dans vos plats.';
+    } else if (!ecrivables.length) titre = n > 1 ? 'Ces recettes sont déjà dans l’app, à l’identique.' : 'Cette recette est déjà dans l’app, à l’identique.';
     else if (versionsSeules) {
       const versions = ecrivables.reduce((total, element) => total + (element.versions?.length ?? 0), 0);
       titre = versions > 1 ? `${versions}\u00A0versions prêtes` : '1\u00A0version prête';
@@ -527,26 +539,28 @@ export function creer(ctx) {
         ? el('ul', { class: 'liste-avertissements' }, avertissementsGeneraux.map((m) => el('li', {}, `⚠️ ${m}`)))
         : null,
       el('ul', { class: 'liste-apercu' }, prepares.elements.map((element, i) => {
-        const identique = element.statut === 'identique';
+        const identique = sansEcriture(element);
+        const nonReprise = element.statut === 'deja';
         const garde = !decoches.has(element.id);
+        // Idée non reprise : seul son avertissement compte (ceux de sa recette, jamais écrite, n'ont plus d'objet).
         const avertissements = [
           identique || element.statut === 'versions' ? null : avertissementModification(element.modifieeA),
-          ...(validationDe(validation, prepares.elements, element, i)?.avertissements ?? []).map((a) => a.message),
-          ...element.avertissements,
+          ...(nonReprise ? [] : (validationDe(validation, prepares.elements, element, i)?.avertissements ?? []).map((a) => a.message)),
+          ...(element.avertissements ?? []),
         ].filter(Boolean);
         return el('li', { class: `apercu-plat${avecCases && !identique ? ' avec-case' : ''}${garde ? '' : ' decoche'}` },
           avecCases && !identique ? caseDuPlat(element) : null,
           el('div', { class: 'apercu-corps' },
             el('p', { class: 'apercu-nom' }, element.nom),
             el('p', { class: 'badges' }, el('span', { class: `badge badge-${element.statut}` }, LIBELLES_STATUT[element.statut] ?? '')),
-            element.ancienNom ? el('p', { class: 'texte-doux' }, `Renommé\u00A0: «\u00A0${element.ancienNom}\u00A0» → «\u00A0${element.nom}\u00A0»`) : null,
-            (element.versions ?? []).length
+            element.ancienNom && !nonReprise ? el('p', { class: 'texte-doux' }, `Renommé\u00A0: «\u00A0${element.ancienNom}\u00A0» → «\u00A0${element.nom}\u00A0»`) : null,
+            !nonReprise && (element.versions ?? []).length
               ? el('ul', { class: 'apercu-versions' }, element.versions.map((version) => el('li', {
                 class: version.convient ? 'compat-version' : 'compat-discret',
               }, version.libelle)))
               : null,
             el('p', { class: 'texte-doux' }, detailDuPlat(element)),
-            element.choix ? choixDuPlat(element) : null,
+            element.choix && !nonReprise ? choixDuPlat(element) : null,
             avertissements.length
               ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
               : null,

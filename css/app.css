@@ -975,6 +975,11 @@ body:has(.barre-gestes:not([hidden])) .annonce.visible { transform: translate(-5
   font-weight: 600;
 }
 
+/* Une légende de groupe (« Combien ? ») s'aligne sur les étiquettes de champ. */
+legend.etiquette-champ {
+  padding: 0;
+}
+
 .aide {
   color: var(--texte-doux);
   font-size: 0.875rem;
@@ -2716,3 +2721,14 @@ select.champ {
   color: var(--texte-doux);
   font-weight: 400;
 }
+
+/* ——— Idées de plats (Semaine, gestionnaire) ——— */
+
+/* Feuille « Idées de plats » : trois choix sur une ligne (5 · 10 · 15). */
+.choix-ligne.choix-trois { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Message après la copie, entre « Copier la demande » et « Ajouter des recettes › ». */
+.feuille-idees .message-idees { margin: 6px 0; }
+
+/* Aperçu d'« Ajouter des recettes » : idée de Claude déjà dans les plats, non reprise (badge neutre). */
+.badge-deja { background: var(--surface); box-shadow: inset 0 0 0 1px var(--bordure); }
