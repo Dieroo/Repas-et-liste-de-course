@@ -9,7 +9,7 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = '1b7183c775b9';
+const VERSION = '17f75b0d9a53';
 const VERSION_SDK = '12.19.0';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
@@ -34,6 +34,8 @@ const FICHIERS_APP = [
   './js/coeur/sauvegarde.js',
   './js/coeur/compatibilite.js',
   './js/coeur/regles.js',
+  './js/coeur/claude.js',
+  './js/coeur/import-local.js',
   './js/ui/dom.js',
   './js/ui/feuille.js',
   './js/ui/fichier.js',
@@ -56,6 +58,8 @@ const FICHIERS_APP = [
   './js/ui/import.js',
   './js/ui/restaurer.js',
   './js/ui/regime.js',
+  './js/ui/envoyes.js',
+  './docs/projet-claude.md',
   './icons/icone.svg',
   './icons/icone-192.png',
   './icons/icone-512.png',

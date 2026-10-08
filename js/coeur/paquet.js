@@ -5,6 +5,7 @@
 import { slug } from './slug.js';
 import { NOM_MAX, statutDe } from './plats.js';
 import { VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient } from './vocabulaire.js';
+import { evaluer, marqueursEffectifs } from './compatibilite.js';
 
 // Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
 export { VOCABULAIRES, SOUS_TYPES_VIANDE, VIANDES, IMPLICATIONS, code, validerIngredient } from './vocabulaire.js';
@@ -117,8 +118,12 @@ function booleen(valeur) {
 
 // ——— Validation ———
 
-/** Une recette du collage. → { index, id, nom, donnees (null si erreur), erreurs, avertissements } */
-function validerPlat(brut, index, idsProfils) {
+/**
+ * Une recette du collage. → { index, id, nom, donnees (null si erreur), erreurs, avertissements }
+ * `versionsEnDouble` : deux variantes pour le même profil sont une erreur à l'ajout de recettes ('erreur') ; ailleurs
+ * (fiches en base, sauvegardes, empreintes : 'premiere'), seule la première est gardée, comme le fait evaluer.
+ */
+function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } = {}) {
   const erreurs = [];
   const avertissements = [];
   const nom = texte(brut?.nom);
@@ -129,7 +134,13 @@ function validerPlat(brut, index, idsProfils) {
   const prevenir = (message, pourClaude) => avertissements.push({ message, pourClaude: `${claude} ${pourClaude}` });
   let champsInconnus = false;
   const inconnu = () => { champsInconnus = true; };
-  const resultat = (donnees) => ({ index, id, nom, donnees: erreurs.length ? null : donnees, erreurs, avertissements });
+  // Entrée sans ingrédients porteuse de versions (réponse à DEMANDE-VARIANTES) : seule sa version sera reprise, et
+  // une correction pour Claude doit redemander les seules versions (claude.js › texteCorrectionPourClaude).
+  const versionsSeules = estObjet(brut) && !(Array.isArray(brut.ingredients) && brut.ingredients.length)
+    && Array.isArray(brut.variantes) && brut.variantes.length > 0;
+  const resultat = (donnees) => ({
+    index, id, nom, donnees: erreurs.length ? null : donnees, erreurs, avertissements, ...(versionsSeules ? { versionsSeules } : {}),
+  });
 
   if (!estObjet(brut)) {
     signaler(`${affiche}\u00A0: recette illisible.`, ': objet attendu');
@@ -176,7 +187,9 @@ function validerPlat(brut, index, idsProfils) {
     } else if (statut === undefined) {
       statut = 'brouillon';
     }
-  } else if (statut === 'brouillon' || statut === 'validee') {
+  } else if ((statut === 'brouillon' || statut === 'validee') && !(versionsSeules && versionsEnDouble === 'erreur')) {
+    // À l'ajout de recettes, un statut recopié par habitude sur une réponse « versions seules » ne bloque pas le lot :
+    // preparerImport n'en garde que les versions (« Seule la version de «X» est reprise. »).
     signaler(`${affiche}\u00A0: ingrédients manquants.`, 'ingredients : liste non vide obligatoire (sauf statutRecette `attente`)');
   }
   if (statut) donnees.statutRecette = statut;
@@ -330,9 +343,36 @@ function validerPlat(brut, index, idsProfils) {
         }
         const consigne = texte(v.consigne);
         if (consigne) variante.consigne = consigne;
+        if (ok) {
+          if (!variante.retirer.length && !variante.ajouter.length) {
+            prevenir(`${ici}\u00A0: elle ne change rien à la recette.`, `${la} : ni retirer ni ajouter`);
+          } else if (aRecette && Array.isArray(donnees.ingredients)) {
+            // « À retirer » doit citer les ingrédients de la fiche, mot pour mot (au slug près).
+            const presents = new Set(donnees.ingredients.map((ingredient) => slug(ingredient.produit)));
+            for (const produit of variante.retirer) {
+              if (!presents.has(slug(produit))) {
+                prevenir(`${ici}\u00A0: «\u00A0${produit}\u00A0» n’est pas dans la recette.`, `${la}.retirer « ${produit} » : absent des ingredients`);
+              }
+            }
+          }
+        }
         return ok ? variante : null;
       });
-      if (variantes.every(Boolean) && (variantes.length || aRecette)) donnees.variantes = variantes;
+      // Une seule version par profil.
+      const vues = new Set();
+      const uniques = [];
+      variantes.forEach((variante, j) => {
+        if (!variante) return;
+        if (!vues.has(variante.pour)) {
+          vues.add(variante.pour);
+          uniques.push(variante);
+        } else if (versionsEnDouble === 'erreur') {
+          signaler(`Deux versions pour le même profil dans ${affiche}.`, `variantes[${j}].pour « ${variante.pour} » : deux variantes pour le même profil`);
+        } else {
+          prevenir(`${affiche}\u00A0: deux versions pour le même profil, seule la première est gardée.`, `variantes[${j}].pour « ${variante.pour} » : deux variantes pour le même profil, la première est gardée`);
+        }
+      });
+      if (variantes.every(Boolean) && (uniques.length || aRecette)) donnees.variantes = uniques;
     }
   }
 
@@ -351,11 +391,14 @@ export function estSauvegarde(paquets) {
 
 /**
  * Valide les recettes retrouvées (CLAUDE.md §8). `profils` : profils de l'app (variante pour un profil inconnu → avertissement).
- * `platsMax` : nombre de recettes accepté ; `doublonsDeNom` : false pour une sauvegarde, restaurée par identifiant.
+ * `platsMax` : nombre de recettes accepté ; `doublonsDeNom` : false pour une sauvegarde, restaurée par identifiant ;
+ * `versionsEnDouble` : 'erreur' (ajout de recettes) ou 'premiere' (sauvegarde : seule la première est gardée).
  * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide }
  *   `donnees` ne contient que des champs présents et valides (aucune valeur undefined, aucune table vide).
  */
-export function validerPaquet(paquets, { profils = null, platsMax = PLATS_MAX, doublonsDeNom = true } = {}) {
+export function validerPaquet(paquets, {
+  profils = null, platsMax = PLATS_MAX, doublonsDeNom = true, versionsEnDouble = 'erreur',
+} = {}) {
   const erreurs = [];
   const avertissements = [];
   const bruts = [];
@@ -388,7 +431,7 @@ export function validerPaquet(paquets, { profils = null, platsMax = PLATS_MAX, d
   }
 
   const idsProfils = Array.isArray(profils) && profils.length ? new Set(profils.map((p) => p.id)) : null;
-  const plats = bruts.map((brut, index) => validerPlat(brut, index, idsProfils));
+  const plats = bruts.map((brut, index) => validerPlat(brut, index, idsProfils, { versionsEnDouble }));
 
   // Doublons dans le collage : même identifiant ou même nom (sauf demande contraire).
   const vus = new Map();
@@ -437,17 +480,96 @@ function egales(a, b) {
   return [...new Set([...Object.keys(a), ...Object.keys(b)])].every((cle) => egales(a[cle], b[cle]));
 }
 
+
+/** Copie d'une valeur sans aucune valeur undefined, à toute profondeur (clés absentes plutôt qu'undefined). */
+function propre(valeur) {
+  if (Array.isArray(valeur)) return valeur.filter((v) => v !== undefined).map(propre);
+  if (estObjet(valeur)) {
+    const copie = {};
+    for (const [cle, v] of Object.entries(valeur)) if (v !== undefined) copie[cle] = propre(v);
+    return copie;
+  }
+  return valeur;
+}
+
+// ——— Versions (variantes) ———
+
 /**
- * Demandes ouvertes que la recette reçue par le plat `id` satisfait : `<id>__recette` si elle a des ingrédients,
- * `<id>__<profil>` pour chaque variante. `ouvertes` : identifiants des demandes ouvertes (Set ou liste).
+ * Versions d'une fiche après réception de `recues` : chaque version reçue remplace celle du même profil (`pour`), à sa
+ * place ; les versions des autres profils restent, dans leur ordre ; les nouvelles vont à la fin. Une version reçue ne
+ * retire jamais celle d'un autre profil. Aucune valeur undefined (ni null) dans le résultat.
  */
-export function demandesSatisfaites(id, donnees, ouvertes) {
+export function fusionnerVariantes(actuelles, recues) {
+  const resultat = (Array.isArray(actuelles) ? actuelles : []).filter((v) => v != null).map(propre);
+  const vus = new Set();
+  for (const recue of Array.isArray(recues) ? recues : []) {
+    if (!estObjet(recue) || typeof recue.pour !== 'string' || !recue.pour || vus.has(recue.pour)) continue;
+    vus.add(recue.pour);
+    const position = resultat.findIndex((v) => estObjet(v) && v.pour === recue.pour);
+    if (position === -1) {
+      resultat.push(propre(recue));
+      continue;
+    }
+    resultat[position] = propre(recue);
+    // Une ancienne version en double pour ce profil (fiche abîmée) ne survit pas à la nouvelle.
+    for (let i = resultat.length - 1; i > position; i -= 1) {
+      if (estObjet(resultat[i]) && resultat[i].pour === recue.pour) resultat.splice(i, 1);
+    }
+  }
+  return resultat;
+}
+
+/** Profil d'identifiant `pour` ; un profil inconnu compte comme un profil sans règle. */
+function profilDe(profils, pour) {
+  return profils.find((p) => p.id === pour) ?? { id: pour };
+}
+
+/**
+ * Ce que donne la version de `pour` sur la fiche (déjà fusionnée) : { convient, restants: [{ nom, marqueurs }] }.
+ * Une version convient si le plat a sa recette et n'est plus « à créer » ni « à revoir » pour ce profil
+ * (compatibilite.js › evaluer).
+ */
+function versionConvient(fiche, profil) {
+  const resultat = evaluer(fiche, profil);
+  // Plat sans recette (⏳) : rien ne dit encore que la version convient.
+  if (resultat.niveau === 'inconnu') return { convient: false, restants: [] };
+  if (!resultat.aCreer && !resultat.aRevoir) return { convient: true, restants: [] };
+  // Marqueurs exclus par le profil, pour nommer la cause à Claude.
+  const exclus = new Set();
+  for (const regle of Array.isArray(profil?.regles) ? profil.regles : []) {
+    if (estObjet(regle) && regle.actif !== false && regle.severite === 'exclu' && regle.type === 'exclureMarqueurs') {
+      for (const marqueur of Array.isArray(regle.marqueurs) ? regle.marqueurs : []) exclus.add(marqueur);
+    }
+  }
+  const version = (Array.isArray(fiche.variantes) ? fiche.variantes : []).find((v) => estObjet(v) && v.pour === profil.id);
+  const candidats = [...(Array.isArray(fiche.ingredients) ? fiche.ingredients : []),
+    ...(Array.isArray(version?.ajouter) ? version.ajouter : [])].filter(estObjet);
+  const restants = (resultat.restants.length ? resultat.restants : resultat.fautifs.map((i) => texte(i.produit)))
+    .map((nom) => {
+      const ingredient = candidats.find((i) => texte(i.produit) === nom);
+      const marqueurs = ingredient ? [...marqueursEffectifs(ingredient)].filter((m) => exclus.has(m)) : [];
+      return { nom, marqueurs };
+    });
+  return { convient: false, restants };
+}
+
+/**
+ * Demandes ouvertes que la recette reçue par le plat `id` satisfait : `<id>__recette` si elle a des ingrédients ;
+ * `<id>__<profil>` pour chaque variante reçue, seulement si la version convient vraiment à ce profil sur la fiche
+ * qui en résulte (`plat` : fiche fusionnée ; à défaut, `donnees`). `ouvertes` : identifiants des demandes ouvertes
+ * (Set ou liste). `profils` (obligatoire) : profils de l'app, pour juger les versions.
+ */
+export function demandesSatisfaites(id, donnees, ouvertes, { plat = null, profils } = {}) {
+  if (!Array.isArray(profils)) throw new TypeError('demandesSatisfaites : profils obligatoire');
   const ouverte = ouvertes instanceof Set ? (cle) => ouvertes.has(cle) : (cle) => (ouvertes ?? []).includes(cle);
+  const fiche = estObjet(plat) ? plat : donnees;
+  const connus = profils.filter(estObjet);
   const satisfaites = [];
   if (donnees?.ingredients?.length && ouverte(`${id}__recette`)) satisfaites.push(`${id}__recette`);
   for (const variante of Array.isArray(donnees?.variantes) ? donnees.variantes : []) {
     const demande = `${id}__${variante?.pour}`;
-    if (ouverte(demande) && !satisfaites.includes(demande)) satisfaites.push(demande);
+    if (!ouverte(demande) || satisfaites.includes(demande)) continue;
+    if (versionConvient(fiche, profilDe(connus, variante.pour)).convient) satisfaites.push(demande);
   }
   return satisfaites;
 }
@@ -463,20 +585,41 @@ function modifieeALaMain(plat) {
   return Boolean(plat?.modifieePar) || plat?.modifieeLe != null;
 }
 
+/** Recette d'une fiche sans ses versions, son nom ni son statut : ce qui compte pour « même recette ». */
+function recetteSansVersions(plat) {
+  const recette = recetteValidee(plat);
+  if (!recette) return null;
+  const { variantes: _v, nom: _n, statutRecette: _s, ...reste } = recette;
+  return reste;
+}
+
 /**
- * Plat visé par chaque recette valide, écritures et demandes à clore (CLAUDE.md §8).
- * `valides` : `donnees` des plats validés. `cible` : plat depuis lequel on a touché « Coller la recette ».
- * → { elements: [{ id, nom, statut, ancienNom?, modifieeA?, ingredients, etapes, avertissements }],
- *     ecritures: [{ id, donnees, effacerModification? }], demandesAClore: [id], erreurs, avertissements }
- *   statut ∈ nouveau, complete (⏳ complété), remplace (recette existante remplacée), inchange (pas d'ingrédients
- *   reçus pour un plat existant : sa recette reste), identique (recette égale à la fiche, nom compris : rien n'est
- *   écrit, la marque « modifiée à la main » reste).
- *   Fiche modifiée à la main, complétée ou remplacée : `modifieeA` (secondes de `modifieeLe`, ou true tant que
- *   l'écriture n'est pas confirmée) et `effacerModification: true` (la marque de modification est retirée).
+ * Plat visé par chaque recette valide, écritures et demandes à clore (CLAUDE.md §8, T2b).
+ * `valides` : `donnees` des plats validés. `cible` : plat depuis lequel on a touché « Coller la réponse » (prime si une
+ * seule entrée est collée). `profils` : profils de l'app (libellés, versions qui conviennent). `choix` : { [platId]:
+ * 'version' | 'remplacer' }, pour une fiche complète reçue, différente de la recette actuelle et porteuse de versions.
+ * → { elements: [{ index, id, nom, statut, ancienNom?, modifieeA?, ingredients, etapes, avertissements, versions,
+ *       choix? }],
+ *   `index` : position de l'entrée dans `valides` (une entrée ignorée ou en erreur n'a pas d'élément).
+ *     ecritures: [{ id, donnees, effacerModification? } | { id, mode: 'versions', variantes }],
+ *     demandesAClore: [id], erreurs, avertissements, corrections: [{ id, pour, message, pourClaude }] }
+ *   statut ∈ nouveau, complete (⏳ complété), remplace (recette remplacée), inchange (plat ⏳ sans ingrédients reçus),
+ *   versions (seules les versions reçues s'écrivent, fusionnées par profil : ni nom, ni statut, ni recette, marque
+ *   « modifiée à la main » gardée), identique (rien n'est écrit ; les demandes satisfaites sont closes).
+ *   `versions` : [{ pour, nom, action: 'ajoutee' | 'remplacee', convient, libelle }] (versions reçues qui changent).
+ *   `choix` : { retenu, parDefaut } ('version' ou 'remplacer' ; « Ne prendre que sa version » d'avance si la fiche
+ *   est vérifiée ou modifiée à la main).
+ *   Une entrée sans ingrédients porteuse de versions, pour un plat inconnu ou ⏳, n'est qu'un avertissement : le
+ *   reste s'enregistre. Une version qui ne convient pas encore est importée, avec un avertissement et une
+ *   correction pour Claude ; sa demande reste ouverte.
  */
-export function preparerImport(valides, { plats = [], demandes = [], cible = null } = {}) {
+export function preparerImport(valides, { plats = [], demandes = [], cible = null, profils = [], choix = {} } = {}) {
   const erreurs = [];
   const avertissements = [];
+  const corrections = [];
+  const connus = (Array.isArray(profils) ? profils : []).filter(estObjet);
+  const prenom = (pour) => texte(connus.find((p) => p.id === pour)?.nom) || pour;
+  const choixRetenus = estObjet(choix) ? choix : {};
   const parId = new Map(plats.map((p) => [p.id, p]));
   const parNom = new Map(plats.map((p) => [slug(p.nom), p]));
   const ouvertes = new Set(demandes.filter((d) => d.statut === 'ouverte').map((d) => d.id));
@@ -491,14 +634,125 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
   const elements = [];
   const ecritures = [];
   const demandesAClore = [];
-  for (const donnees of valides) {
+  let indexCourant = 0; // position de l'entrée dans `valides` (une entrée ignorée n'a pas d'élément)
+  const clore = (ids) => {
+    for (const id of ids) if (!demandesAClore.includes(id)) demandesAClore.push(id);
+  };
+
+  /** Versions reçues jugées sur la fiche qui en résulte : libellés, avertissements et corrections. */
+  const jugerVersions = (vise, fiche, recues, actuelles, avertissementsPlat) => {
+    const versions = [];
+    for (const variante of recues) {
+      const avant = (Array.isArray(actuelles) ? actuelles : []).find((v) => estObjet(v) && v.pour === variante.pour);
+      if (avant && egales(propre(avant), variante)) continue;
+      const nom = prenom(variante.pour);
+      const { convient, restants } = versionConvient(fiche, profilDe(connus, variante.pour));
+      versions.push({
+        pour: variante.pour,
+        nom,
+        action: avant ? 'remplacee' : 'ajoutee',
+        convient,
+        // 🌿 seulement pour une version qui convient : sinon le plat reste « à revoir ».
+        libelle: avant ? `Version pour ${nom} remplacée` : `${convient ? '🌿 ' : ''}Version pour ${nom} ajoutée`,
+      });
+      if (!convient) {
+        const message = `La version pour ${nom} contient encore\u00A0: ${restants.map((r) => r.nom).join(', ')}.`;
+        avertissementsPlat.push(message);
+        corrections.push({
+          id: vise,
+          pour: variante.pour,
+          message,
+          pourClaude: `id ${vise} variantes[pour=${variante.pour}] : contient ${restants
+            .map((r) => (r.marqueurs.length ? `${r.nom} (${r.marqueurs.join(', ')})` : r.nom)).join(', ')}, exclu pour ${variante.pour}`,
+        });
+      }
+    }
+    return versions;
+  };
+
+  /** Seules les versions reçues pour un plat rempli : statut `versions`, ou `identique` si rien ne change. */
+  const prendreVersions = (existant, recues, avertissementsPlat, extra = {}, recette = null) => {
+    const vise = existant.id;
+    const fusion = fusionnerVariantes(existant.variantes, recues);
+    const fiche = { ...existant, variantes: fusion };
+    const versions = jugerVersions(vise, fiche, recues, existant.variantes, avertissementsPlat);
+    const changees = recues.filter((v) => versions.some((version) => version.pour === v.pour));
+    elements.push({
+      index: indexCourant,
+      id: vise,
+      nom: existant.nom,
+      statut: changees.length ? 'versions' : 'identique',
+      ingredients: Array.isArray(existant.ingredients) ? existant.ingredients.length : 0,
+      etapes: Array.isArray(existant.etapes) ? existant.etapes.length : 0,
+      avertissements: avertissementsPlat,
+      versions,
+      ...extra,
+    });
+    if (changees.length) ecritures.push({ id: vise, mode: 'versions', variantes: changees.map(propre) });
+    // Recette reçue identique : une demande de recette restée ouverte est satisfaite aussi.
+    const recu = recette?.ingredients?.length ? { ingredients: recette.ingredients, variantes: recues } : { variantes: recues };
+    clore(demandesSatisfaites(vise, recu, ouvertes, { plat: fiche, profils: connus }));
+  };
+
+  for (const [index, donnees] of valides.entries()) {
+    indexCourant = index;
     const avertissementsPlat = [];
+    const recue = Boolean(donnees.ingredients?.length);
+    const recues = Array.isArray(donnees.variantes) ? donnees.variantes : [];
+    const memeId = parId.get(donnees.id);
+    const memeNom = parNom.get(slug(donnees.nom));
+    const affiche = `«\u00A0${donnees.nom}\u00A0»`;
+
+    // ——— Versions seules (entrée sans ingrédients, porteuse de versions) ———
+    // Plat visé : la cible, sinon le même identifiant, sinon le même nom ; jamais de plat nouveau ni de nom approché.
+    if (!recue && recues.length) {
+      const existant = viseCible ? parId.get(cible) : memeId ?? memeNom ?? null;
+      if (!existant) {
+        avertissements.push({
+          message: `Claude a répondu pour ${affiche}, qui n’est pas dans vos plats\u00A0: ignoré.`,
+          pourClaude: `id ${donnees.id} : plat inconnu, ignoré`,
+        });
+        continue;
+      }
+      if (statutDe(existant) === 'attente' || !(Array.isArray(existant.ingredients) && existant.ingredients.length)) {
+        avertissements.push({
+          message: `«\u00A0${existant.nom}\u00A0» n’a pas encore sa recette\u00A0: sa version est ignorée. Demandez la recette avec sa version.`,
+          pourClaude: `id ${existant.id} : plat sans recette, version ignorée`,
+        });
+        continue;
+      }
+      if (vises.has(existant.id)) {
+        erreurs.push({
+          message: `«\u00A0${vises.get(existant.id)}\u00A0» et «\u00A0${donnees.nom}\u00A0» visent le même plat.`,
+          pourClaude: `id ${existant.id} : deux recettes pour le même plat`,
+        });
+        continue;
+      }
+      vises.set(existant.id, donnees.nom);
+      if (Object.keys(donnees).some((cle) => cle !== 'id' && cle !== 'nom' && cle !== 'variantes')) {
+        avertissementsPlat.push(`Seule la version de «\u00A0${existant.nom}\u00A0» est reprise.`);
+      }
+      if (slug(donnees.nom) !== slug(existant.nom)) {
+        avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
+      }
+      // « À retirer » comparé aux ingrédients de la fiche.
+      const presents = new Set(existant.ingredients.filter(estObjet).map((i) => slug(i.produit)));
+      for (const variante of recues) {
+        for (const produit of variante.retirer ?? []) {
+          if (!presents.has(slug(produit))) {
+            avertissementsPlat.push(`Version pour ${prenom(variante.pour)}\u00A0: «\u00A0${produit}\u00A0» n’est pas dans la recette.`);
+          }
+        }
+      }
+      prendreVersions(existant, recues, avertissementsPlat);
+      continue;
+    }
+
+    // ——— Fiche complète, ou plat sans recette (⏳) ———
     // Plat visé : la cible, sinon le même identifiant s'il s'agit bien du même plat (même nom, ⏳, demande ouverte,
     // ou fiche modifiée à la main, qui a pu être renommée), sinon le même nom (doublons repérés par le nom, §8),
     // sinon un nouveau plat (identifiant libre si un autre plat utilise déjà le sien).
     let vise;
-    const memeId = parId.get(donnees.id);
-    const memeNom = parNom.get(slug(donnees.nom));
     if (viseCible) {
       // La recette d'un autre plat déjà présent, collée sur cette fiche, en ferait un doublon.
       if (memeNom && memeNom.id !== cible) {
@@ -539,34 +793,62 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       avertissementsPlat.push(`Un autre plat s’appelle déjà «\u00A0${memeNom.nom}\u00A0».`);
     }
     const ecriture = { ...donnees, id: vise };
-    if (existant) {
+    const rempli = existant && statutDe(existant) !== 'attente';
+
+    // Plat rempli : la recette actuelle reste, sauf fiche complète différente (et, si elle porte des versions,
+    // « Remplacer la recette » choisi).
+    let choixPlat = null;
+    if (rempli) {
+      if (!recue) {
+        // Ni ingrédients ni versions : la recette actuelle est gardée, rien n'est écrit.
+        if (Object.keys(donnees).some((cle) => cle !== 'id' && cle !== 'nom')) {
+          avertissementsPlat.push(`«\u00A0${existant.nom}\u00A0» a déjà sa recette\u00A0: elle est gardée.`);
+        }
+        prendreVersions(existant, [], avertissementsPlat);
+        continue;
+      }
+      const actuelle = recetteSansVersions(existant);
+      if (actuelle && egales(actuelle, recetteSansVersions(ecriture))) {
+        // Même recette (hors versions, nom et statut) : seules les versions reçues comptent ; le nom reste.
+        if (slug(donnees.nom) !== slug(existant.nom)) {
+          avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
+        }
+        prendreVersions(existant, recues, avertissementsPlat, {}, ecriture);
+        continue;
+      }
+      if (recues.length) {
+        const parDefaut = statutDe(existant) === 'validee' || modifieeALaMain(existant) ? 'version' : 'remplacer';
+        const retenu = choixRetenus[vise] === 'version' || choixRetenus[vise] === 'remplacer' ? choixRetenus[vise] : parDefaut;
+        choixPlat = { retenu, parDefaut };
+        if (retenu === 'version') {
+          prendreVersions(existant, recues, avertissementsPlat, { choix: choixPlat });
+          continue;
+        }
+      }
+    } else if (existant) {
+      // Plat ⏳ : recollé tel quel, rien n'est écrit (la demande de recette reste ouverte faute d'ingrédients).
       const actuelle = recetteValidee(existant);
       if (actuelle && egales(actuelle, recetteValidee(ecriture))) {
         elements.push({
-          id: vise,
-          nom: donnees.nom,
-          statut: 'identique',
-          ingredients: donnees.ingredients?.length ?? 0,
-          etapes: donnees.etapes?.length ?? 0,
-          avertissements: avertissementsPlat,
+          index, id: vise, nom: donnees.nom, statut: 'identique', ingredients: 0, etapes: 0, avertissements: avertissementsPlat, versions: [],
         });
-        // Aucune écriture du plat, mais une demande restée ouverte (lot de clôture perdu, ajout par nom croisé) est
-        // satisfaite : elle sera close.
-        for (const demande of demandesSatisfaites(vise, ecriture, ouvertes)) {
-          if (!demandesAClore.includes(demande)) demandesAClore.push(demande);
-        }
+        clore(demandesSatisfaites(vise, ecriture, ouvertes, { plat: { ...existant, ...ecriture }, profils: connus }));
         continue;
       }
     }
-    const recue = Boolean(ecriture.ingredients?.length);
+
+    // Versions reçues avec une fiche complète : fusionnées avec celles de la fiche (celles des autres profils restent).
+    if (existant && ecriture.variantes) ecriture.variantes = fusionnerVariantes(existant.variantes, ecriture.variantes);
     // Sans ingrédients reçus, un plat qui a déjà sa recette garde son statut (il ne repasse pas en ⏳).
-    if (!recue && existant && statutDe(existant) !== 'attente') delete ecriture.statutRecette;
     let statut = 'nouveau';
-    if (existant) statut = !recue ? 'inchange' : statutDe(existant) === 'attente' ? 'complete' : 'remplace';
+    if (existant) statut = !recue ? 'inchange' : rempli ? 'remplace' : 'complete';
     // Modifications faites à la main remplacées : l'aperçu le dit, l'écriture efface leur marque.
     const effacerModification = (statut === 'remplace' || statut === 'complete') && modifieeALaMain(existant);
     const secondes = existant?.modifieeLe?.seconds;
+    const fiche = { ...(existant ?? {}), ...ecriture };
+    const versions = jugerVersions(vise, fiche, recues, existant?.variantes, avertissementsPlat);
     elements.push({
+      index,
       id: vise,
       nom: donnees.nom,
       statut,
@@ -575,46 +857,29 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       ingredients: donnees.ingredients?.length ?? 0,
       etapes: donnees.etapes?.length ?? 0,
       avertissements: avertissementsPlat,
+      versions,
+      ...(choixPlat ? { choix: choixPlat } : {}),
     });
-    ecritures.push({ id: vise, donnees: ecriture, ...(effacerModification ? { effacerModification: true } : {}) });
-
-    for (const demande of demandesSatisfaites(vise, ecriture, ouvertes)) {
-      if (!demandesAClore.includes(demande)) demandesAClore.push(demande);
-    }
+    ecritures.push({ id: vise, donnees: propre(ecriture), ...(effacerModification ? { effacerModification: true } : {}) });
+    clore(demandesSatisfaites(vise, ecriture, ouvertes, { plat: fiche, profils: connus }));
   }
-  return { elements, ecritures, demandesAClore, erreurs, avertissements };
-}
-
-// ——— Textes échangés avec le Projet Claude ———
-
-/** Texte copié par « Demander à Claude » pour une recette à ajouter (CLAUDE.md §8). */
-export function texteDemandeRecette(plat) {
-  return [
-    `DEMANDE-RECETTE ${FORMAT}`,
-    `id: ${plat.id}`,
-    `nom: ${plat.nom}`,
-    '(Ajoute un lien, une photo ou la recette dictée.)',
-  ].join('\n');
+  return { elements, ecritures, demandesAClore, erreurs, avertissements, corrections };
 }
 
 /**
- * Texte copié par « Copier les corrections pour Claude ».
- * `probleme` : { erreur } (texte illisible) ou résultat de validerPaquet / preparerImport ({ plats?, erreurs }).
+ * Préparation sans les plats décochés dans l'aperçu (`decoches` : Set ou liste d'identifiants de plats) : leurs
+ * écritures, leurs demandes à clore et leurs corrections sont retirées ; leurs éléments restent, marqués
+ * `retenu: false` (les autres `retenu: true`). `preparation` reste intacte.
  */
-export function texteCorrectionPourClaude(probleme) {
-  const lignes = [`CORRECTION ${FORMAT}`];
-  if (probleme?.erreur) {
-    lignes.push(probleme.erreur === 'coupee'
-      ? '- La réponse précédente est coupée ou illisible : la fiche n’a pas pu être lue.'
-      : '- Aucune fiche lisible dans la réponse précédente.');
-  } else {
-    for (const erreur of probleme?.erreurs ?? []) lignes.push(`- ${erreur.pourClaude}`);
-    for (const plat of probleme?.plats ?? []) {
-      if (!plat.erreurs.length) continue;
-      if (plat.id) lignes.push(`id: ${plat.id}`);
-      for (const erreur of plat.erreurs) lignes.push(`- ${erreur.pourClaude}`);
-    }
-  }
-  lignes.push('(Rends la fiche complète corrigée, en un seul bloc.)');
-  return lignes.join('\n');
+export function filtrerPreparation(preparation, decoches) {
+  const retires = new Set(decoches instanceof Set ? decoches : Array.isArray(decoches) ? decoches : []);
+  const garde = (id) => !retires.has(id);
+  const platDeDemande = (demande) => String(demande).split('__')[0];
+  return {
+    ...preparation,
+    elements: (preparation?.elements ?? []).map((element) => ({ ...element, retenu: garde(element.id) })),
+    ecritures: (preparation?.ecritures ?? []).filter((ecriture) => garde(ecriture.id)),
+    demandesAClore: (preparation?.demandesAClore ?? []).filter((demande) => garde(platDeDemande(demande))),
+    corrections: (preparation?.corrections ?? []).filter((correction) => garde(correction.id)),
+  };
 }

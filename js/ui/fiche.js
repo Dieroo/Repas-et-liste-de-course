@@ -7,7 +7,7 @@ import { lireBrouillon } from './brouillon.js';
 import { sectionNotes } from './notes.js';
 import { etatsCompat, estVous, nomDe } from './compat.js';
 import { profilsContraints, marqueursDouteux } from '../coeur/compatibilite.js';
-import { texteDemandeRecette } from '../coeur/paquet.js';
+import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
@@ -82,7 +82,7 @@ function detailVersion(variante) {
  * Section « Version pour <Prénom> » d'un profil qui a des règles (« Votre version » pour soi, vue « Repas et
  * courses ») : la version qui convient ; sinon ce qui manque, avec ❌ pour le gestionnaire seulement.
  */
-function sectionVersion({ profil, resultat, cas }, plat, { moi, role }) {
+function sectionVersion({ profil, resultat, cas }, plat, { moi, role }, actions = null) {
   const nom = nomDe(profil);
   const vous = estVous(profil, { moi, role });
   const gestionnaire = role === 'gestionnaire';
@@ -112,7 +112,8 @@ function sectionVersion({ profil, resultat, cas }, plat, { moi, role }) {
   }
   return el('section', { class: 'fiche-section section-version' },
     el('h2', {}, cas === 'version' ? el('span', { 'aria-hidden': 'true' }, '🌿\u00A0') : null, titre),
-    ...contenu);
+    ...contenu,
+    actions);
 }
 
 // Ce que le nom d'un ingrédient laisse penser, pour la ligne « à vérifier » (gestionnaire).
@@ -155,11 +156,11 @@ export function creer(ctx) {
     el('div', { class: 'choix-photo' }, boutonAppareil, boutonGalerie),
     boutonRetrait);
 
-  // Recette (gestionnaire) : « Demander à Claude » copie la demande, « Coller la recette » ouvre l'ajout pour ce plat.
-  // Gardés d'un rendu à l'autre, comme les boutons de la photo.
+  // Claude (gestionnaire) : un seul « Demander à Claude », dont le texte dépend du plat (demandeDuPlat), et « Coller la
+  // réponse », qui ouvre l'ajout pour ce plat. Gardés d'un rendu à l'autre, comme les boutons de la photo.
   let demandeCopiee = false;
   const boutonDemander = el('button', { class: 'bouton bouton-plein', type: 'button', onclick: demanderAClaude }, '📋 Demander à Claude');
-  const lienColler = el('a', { class: 'bouton bouton-plein', href: `#/import/${encodeURIComponent(id)}` }, 'Coller la recette');
+  const lienColler = el('a', { class: 'bouton bouton-plein', href: `#/import/${encodeURIComponent(id)}` }, 'Coller la réponse');
   const messageCopie = el('p', { class: 'aide', role: 'status' });
   const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, boutonDemander, lienColler);
 
@@ -179,18 +180,32 @@ export function creer(ctx) {
   const platCourant = () => courant.plats.find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
 
+  /**
+   * Texte copié par « Demander à Claude » : plat ⏳ → la recette, avec les versions des profils qui ont des règles ;
+   * plat dont la version manque ou est à revoir pour un profil (le premier dans l'ordre des profils) → sa version
+   * seule ; sinon → une nouvelle recette, comme en T1b (avec les versions des profils qui ont des règles).
+   */
+  function demandeDuPlat(plat) {
+    if (statutDe(plat) !== 'attente') {
+      const manque = etatsCompat(plat, courant).find((etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir');
+      if (manque) return texteDemandeVariantes([plat], manque.profil);
+    }
+    return texteDemandeRecette(plat, { profils: courant.profils ?? [] });
+  }
+
   async function demanderAClaude() {
     const plat = platCourant();
     if (!plat) return;
-    const reussi = await copier(texteDemandeRecette(plat));
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    const reussi = await copier(demandeDuPlat(plat));
     demandeCopiee = demandeCopiee || reussi;
     messageCopie.textContent = reussi
-      ? 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la recette\u00A0».'
+      ? 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».'
       : 'La copie n’a pas marché. Réessayez.';
     majActionsRecette();
   }
 
-  /** Avant la copie, l'action principale est « Demander à Claude » ; ensuite, « Coller la recette ». */
+  /** Avant la copie, l'action principale est « Demander à Claude » ; ensuite, « Coller la réponse ». */
   function majActionsRecette() {
     boutonDemander.className = `bouton bouton-plein ${demandeCopiee ? 'bouton-secondaire' : 'bouton-principal'}`;
     lienColler.className = `bouton bouton-plein ${demandeCopiee ? 'bouton-principal' : 'bouton-secondaire'}`;
@@ -276,6 +291,10 @@ export function creer(ctx) {
     const etats = etatsCompat(plat, courant);
     const versionsMontrees = new Set(etats.filter((e) => e.cas !== 'aCreer').map((e) => e.profil.id));
     const contraints = profilsContraints(courant.profils);
+    // Première version à créer ou à revoir : le bouton unique « Demander à Claude » la demande (demandeDuPlat).
+    const versionManquante = gestionnaire && statut !== 'attente'
+      ? etats.find((etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir') ?? null
+      : null;
     const ingredients = plat.ingredients ?? [];
     const etapes = plat.etapes ?? [];
     const cuissons = plat.cuisson ?? [];
@@ -317,7 +336,9 @@ export function creer(ctx) {
 
       brouillon ? carteReprise : lienModifier,
 
-      ...etats.map((etat) => sectionVersion(etat, plat, { moi: courant.moi, role: courant.role })),
+      // Version qui manque (gestionnaire) : « Demander à Claude » se place sous la première, et demande sa version.
+      ...etats.map((etat) => sectionVersion(etat, plat, { moi: courant.moi, role: courant.role },
+        etat === versionManquante ? actionsRecette : null)),
 
       gestionnaire && contraints.length && statut !== 'attente' ? carteDouteux(plat) : null,
 
@@ -368,7 +389,7 @@ export function creer(ctx) {
         ))
         : null,
 
-      gestionnaire && statut !== 'attente'
+      gestionnaire && statut !== 'attente' && !versionManquante
         ? section('Nouvelle version', el('p', { class: 'texte-doux' },
           'Pour une recette entièrement refaite, demandez une nouvelle version à votre projet Claude. Elle remplacera vos modifications.'),
         actionsRecette)

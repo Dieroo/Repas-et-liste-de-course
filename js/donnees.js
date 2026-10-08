@@ -13,6 +13,7 @@ import { db } from './firebase.js';
 import { gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
 import { demandeDeRecette } from './coeur/plats.js';
 import { appliquerConditions } from './coeur/sauvegarde.js';
+import { fusionnerVariantes } from './coeur/paquet.js';
 import { cheminNote, noteValide } from './coeur/notes.js';
 
 let arreterSuiviReglages = null;
@@ -172,28 +173,62 @@ function cloreDemandes(demandesAClore) {
 }
 
 /**
- * Enregistre des recettes (CLAUDE.md §8). Seuls les champs présents sont écrits (`mergeFields`) : les autres
- * (notes, photo, champs absents de la recette) restent intacts. Une recette qui remplace des modifications faites
- * à la main (`effacerModification`) efface aussi leur marque (`modifieeLe`, `modifieePar`).
- * Les demandes satisfaites sont closes dans un second lot.
- * → promesse de l'envoi des recettes (rejetée aussi si le lot n'a pas pu être construit).
+ * Enregistre des recettes et des versions (CLAUDE.md §8, T2b), préparées par coeur/paquet.js › preparerImport.
+ * - Fiches complètes `{ id, donnees, effacerModification? }` : un lot, comme en T1b. Seuls les champs présents sont
+ *   écrits (`mergeFields`) : les autres (notes, photo, champs absents de la recette) restent intacts. Une recette qui
+ *   remplace des modifications faites à la main (`effacerModification`) efface aussi leur marque (`modifieeLe`,
+ *   `modifieePar`). Hors ligne : part plus tard.
+ * - Versions `{ id, mode: 'versions', variantes }` : une transaction par plat, qui relit ses versions, y fusionne
+ *   celles reçues par `pour` (coeur/paquet.js › fusionnerVariantes : celles des autres profils restent) et n'écrit que
+ *   `variantes`, `majPar`, `majLe` (jamais le nom, le statut, la recette ni la marque « modifiée à la main »). Plat
+ *   disparu entre-temps : rien n'est écrit, son identifiant est rendu dans `manquants`. Hors ligne, une transaction
+ *   échoue au lieu d'être mise en file : l'app refuse ces envois avant d'appeler (actions.importer).
+ * Les demandes satisfaites sont closes dans un lot à part : celles des fiches complètes tout de suite, celles des
+ * versions après leurs transactions, sauf pour un plat disparu.
+ * → { envoi, versions } : `envoi`, promesse de l'envoi du lot des fiches (rejetée aussi si le lot n'a pas pu être
+ *   construit) ; `versions`, promesse de { manquants: [id] } (rejetée à la première transaction qui échoue ; les
+ *   précédentes restent faites, et une relance ne fait que fusionner à nouveau les mêmes versions).
  */
 export function importer({ ecritures, demandesAClore }, auteur) {
+  const completes = ecritures.filter((ecriture) => ecriture.mode !== 'versions');
+  const versions = ecritures.filter((ecriture) => ecriture.mode === 'versions');
+  const idsVersions = new Set(versions.map(({ id }) => id));
+  const deVersion = (demande) => idsVersions.has(String(demande).split('__')[0]);
   let envoi;
   try {
     const lot = writeBatch(db);
-    for (const { id, donnees, effacerModification } of ecritures) {
+    for (const { id, donnees, effacerModification } of completes) {
       const document = { ...donnees, id, ...trace(auteur) };
       if (effacerModification) Object.assign(document, { modifieeLe: deleteField(), modifieePar: deleteField() });
       lot.set(doc(db, 'plats', id), document, { mergeFields: Object.keys(document) });
     }
     // Recettes toutes identiques : seules les demandes restées ouvertes sont closes.
-    envoi = ecritures.length ? lot.commit() : Promise.resolve();
+    envoi = completes.length ? lot.commit() : Promise.resolve();
   } catch (erreur) {
-    return Promise.reject(erreur);
+    envoi = Promise.reject(erreur);
   }
-  cloreDemandes(demandesAClore);
-  return envoi;
+  cloreDemandes((demandesAClore ?? []).filter((demande) => !deVersion(demande)));
+  const envoiVersions = (async () => {
+    const manquants = [];
+    for (const { id, variantes } of versions) {
+      const ecrite = await runTransaction(db, async (transaction) => {
+        const reference = doc(db, 'plats', id);
+        const actuel = await transaction.get(reference);
+        if (!actuel.exists()) return false;
+        const lues = actuel.data().variantes;
+        transaction.update(reference, {
+          variantes: fusionnerVariantes(Array.isArray(lues) ? lues : [], variantes),
+          ...trace(auteur),
+        });
+        return true;
+      });
+      if (!ecrite) manquants.push(id);
+    }
+    const absents = new Set(manquants);
+    cloreDemandes((demandesAClore ?? []).filter((demande) => deVersion(demande) && !absents.has(String(demande).split('__')[0])));
+    return { manquants };
+  })();
+  return { envoi, versions: envoiVersions };
 }
 
 /**

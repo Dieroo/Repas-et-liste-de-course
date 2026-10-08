@@ -107,7 +107,8 @@ js/
                           brouillon.js (modification en cours gardée sur le téléphone), notes.js (section Notes de la fiche),
                           relier.js (« Qui êtes-vous ? »), fichier.js (choisir, lire, télécharger un fichier),
                           restaurer.js (écran « Restaurer une sauvegarde »), regime.js (« Ce que <Prénom> mange »),
-                          compat.js (lignes 🌿 / ❌ d'un plat pour chaque profil qui a des règles)
+                          compat.js (lignes 🌿 / ❌ d'un plat pour chaque profil qui a des règles),
+                          envoyes.js (plats déjà envoyés à Claude, gardés sur le téléphone quelques jours)
   coeur/                  logique pure : ni DOM ni Firebase
     roles.js              rôle de la personne connectée, écrans permis
     slug.js               identifiants et recherche sans accents
@@ -124,7 +125,10 @@ js/
     paquet.js             format d'import : extraction, validation, plat visé, textes pour Claude
     edition.js            « Modifier » : libellés, natures, catalogue des produits connus, saisie d'un ingrédient, écritures
     notes.js              notes 0–5 (lecture, libellés, chemin d'écriture), file de Découvrir, résumé des notes
+    claude.js             textes copiés pour Claude : DEMANDE-RECETTE (avec `versions:`), DEMANDE-VARIANTES, CORRECTION
+    import-local.js       effet local d'un import (fiches à jour avant la réponse du serveur), annonces des versions
     sauvegarde.js         fichier de sauvegarde (création, lecture, validation), restauration additive, revue à l'envoi
+docs/projet-claude.md     instructions du Projet Claude (format, versions), copiées depuis Réglages ; précachée
 tests/                    node:test, fixtures génériques
 .gitignore                repas-courses-*.json : une sauvegarde (adresses des profils) n'est jamais publiée
 firestore.rules           adresses en espaces réservés (<EMAIL_1>, <EMAIL_2>)
@@ -332,14 +336,25 @@ nom: <nom du plat>
 (Ajoute un lien, une photo ou la recette dictée.)
 ```
 
+DEMANDE-RECETTE ajoute, si des profils ont des règles, un bloc `versions:` (une ligne `- pour: <id> — <ce qu'il mange>`) : Claude rend la fiche complète avec leurs variantes.
+
 ```
-DEMANDE-VARIANTE paquet@1
-id: <id du plat>
-nom: <nom du plat>
+DEMANDE-VARIANTES paquet@1
 pour: <id du profil>
-besoin: sans_viande | avec_proteine
-(Rends la fiche complète avec la nouvelle variante.)
+besoin: sans_viande | adapter      (si tous les plats ont le même besoin)
+règles: <ce que mange le profil>
+(Pour chaque plat, rends seulement { "id", "nom", "variantes" } …)
+plats:
+- id: <id>
+  nom: <nom>
+  portions: <n>
+  ingrédients: <qte unité produit> ; … (✗ = ingrédient fautif)
+  version actuelle: …                (si elle est à revoir)
 ```
+
+- Demande groupée par lots de `LOT_VERSIONS` (10) plats, depuis le bandeau « Versions pour <Prénom> » de Plats (gestionnaire, filtre « ❌ Versions à créer ») ; un second toucher recopie le même lot ; les plats déjà envoyés sont gardés quelques jours sur le téléphone (`ui/envoyes.js`) pour proposer le lot suivant.
+- Une réponse « versions seules » (`id`, `nom`, `variantes`, sans ingrédients) n'écrit que les versions : transaction par plat, fusion par `pour` (la version reçue remplace celle du même profil, les autres restent) ; un statut recopié par habitude ne bloque pas le lot. Une fiche complète différente de la recette actuelle et porteuse de versions laisse choisir « version seule » ou « remplacer ». Une demande de variante n'est close que si la version reçue convient au profil.
+- Deux versions pour le même profil : erreur à l'ajout de recettes, première gardée dans une sauvegarde. La correction d'une réponse « versions seules » redemande les seules versions, avec celles des autres plats du lot (rien n'est enregistré tant qu'une erreur reste).
 
 ## 9. Algorithmes (`js/coeur/`, couverts par des tests)
 
@@ -394,13 +409,13 @@ besoin: sans_viande | avec_proteine
 
 1. **Semaine** (accueil) : ce soir pour chacun, carte « prochaine action » (dont « À congeler aujourd'hui », §9), grille jours × profils (chaque plat avec le pictogramme de son mode de cuisson principal, §4), apéro du week-end, « Proposer » (les deux membres), « Imprimer » (menu de la semaine et apéro, puis liste de courses par rayon, sur une page pensée pour l'impression ; `window.print()` → « Enregistrer au format PDF » de Chrome, à envoyer), badges ⏳ et Demandes (gestionnaire).
 2. **Courses** : bascule Drive / Magasin, grandes cases à cocher, ajout rapide, origine visible (plat, apéro, habituel).
-3. **Plats** : recherche, filtres (type, statut, « 🌿 Pour <Prénom> », « ❌ Versions à créer » pour le gestionnaire), ligne 🌿 / ❌ par profil qui a des règles, ligne de notes par profil (« Prénom ❤️ », « Prénom ★4 »), invitation « Aucun plat noté » tant que la personne n'a rien noté, pictogramme du mode de cuisson principal, ajout par nom (→ ⏳ et demande de recette).
+3. **Plats** : recherche, filtres (type, statut, « 🌿 Pour <Prénom> », « ❌ Versions à créer » pour le gestionnaire), ligne 🌿 / ❌ par profil qui a des règles, ligne de notes par profil (« Prénom ❤️ », « Prénom ★4 »), invitation « Aucun plat noté » tant que la personne n'a rien noté, pictogramme du mode de cuisson principal, ajout par nom (→ ⏳ et demande de recette), bandeau « Versions pour <Prénom> » (gestionnaire : copie d'un lot de 10 pour Claude, §8).
 4. **Découvrir** : §4.
 5. **Fiche** : photo (prise ou choisie, les deux membres), recette, badges (dont le mode de cuisson principal et sa durée), section « Notes » (soi et l'enfant : « Jamais » à part, 5 étoiles, « Effacer » ; l'autre adulte en lecture seule ; « Pas encore noté · compte comme Pourquoi pas »), variantes par profil, cuisson, conservation ; « Modifier » ; « Demander à Claude » et « Coller la recette » (gestionnaire).
    - Fiche en lecture, un seul bouton « ✏️ Modifier la recette » (les deux membres ; « Écrire la recette moi-même » sur un plat ⏳) → écran `#/modifier/<id>` : nom, type, portions (« Ces quantités sont pour N portions »), ingrédients (ajouter, retirer, quantité, unité, nature), étapes (ajouter, déplacer, retirer), cuisson principale (« Cuit surtout au » + durée), jours au frigo, congélation, boîte à emporter, « Recette vérifiée ». Restent à Claude : variantes, temps de travail, source, récurrence, étapes de cuisson secondaires.
    - Une seule barre « Enregistrer » (onglets masqués). Seuls les champs touchés sont écrits ; un bandeau prévient si l'autre téléphone a changé l'un d'eux entre-temps. La modification en cours est gardée sur le téléphone (`localStorage`, par compte et par plat) jusqu'à l'enregistrement, l'annulation ou la déconnexion : la fiche propose alors « Reprendre ».
    - Ajout d'un ingrédient : suggestions dès les premières lettres, tirées de tous les ingrédients déjà connus, unité, rayon et nature préremplis ; pour un produit jamais vu, une question « Viande / Poisson / Légume / Autre » (viande « en morceaux », légume « fondu dans le plat » par défaut, modifiables dans « Plus de précisions »).
-6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, sauvegarde : « Télécharger une sauvegarde », « Restaurer une sauvegarde »).
+6. **Batch du dimanche**, **Congélateur**, **Demandes** (gestionnaire), **Réglages** (gestionnaire : profils et règles, appareils, rayons, habituels, apéro, drive, notifications, ajout de recettes, carte « Projet Claude » (copier les instructions du projet), sauvegarde : « Télécharger une sauvegarde », « Restaurer une sauvegarde »).
 
 ## 11. Tranches
 
@@ -446,8 +461,10 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
     - [x] T1d-1 notes 0–5, « Qui êtes-vous ? », Découvrir, notes sur la fiche et dans la liste — publié et essayé sur le téléphone du gestionnaire et sur l'ordinateur le 2026-10-06 (critère « Fini quand » de T1 vérifié : note posée sur le téléphone visible en direct sur l'ordinateur) ; vibration allongée à 40 ms (15 ms ne se sentait pas)
     - [x] T1d-2 sauvegarde et restauration par fichier, ajout de recettes par fichier — publié le 2026-10-07 ; essai court fait sur le téléphone du gestionnaire (sauvegarde téléchargée, restauration du même fichier « Tout est déjà à jour ») ; grand essai de restauration (plat supprimé, recette cochée) reporté à la demande du propriétaire
 - [ ] T2 Compatibilité & variantes — en cinq livraisons (plan détaillé hors du dépôt, données du foyer dans Firestore seulement) :
-  - [ ] T2a « Ce que <Prénom> mange » (régime d'un profil, lignes 🌿 / ❌ dans la liste, la fiche et Découvrir, filtres, repères dans « Modifier », règles dans la sauvegarde) — pull request ouverte le 2026-10-07, essai sur téléphone à faire
-  - [ ] T2b versions écrites par Claude, dix plats à la fois (demande groupée, import des seules versions, `docs/projet-claude.md`)
+  - [x] T2a « Ce que <Prénom> mange » (régime d'un profil, lignes 🌿 / ❌ dans la liste, la fiche et Découvrir, filtres, repères dans « Modifier », règles dans la sauvegarde) — publié et essayé sur le téléphone du gestionnaire le 2026-10-07
+  - [ ] T2b versions écrites par Claude, dix plats à la fois (demande groupée, import des seules versions, `docs/projet-claude.md`, carte « Projet Claude » dans Réglages) — pull request ouverte le 2026-10-07, essai sur téléphone à faire
+  - [ ] T2b+ « Demander à Claude 15 idées de plats » (avec leurs versions)
+  - [ ] Corbeille : supprimer un plat (les deux membres), « Remettre », « Vider la corbeille » (gestionnaire), suggestion quand tous les profils ont dit « Jamais »
   - [ ] T2c précautions de l'enfant selon son âge (date de naissance, barème générique français, ❌ / ! avec la cause, carte 🧸🎂 qui propose d'assouplir, règles désactivables)
   - [ ] T2d relecture des recettes existantes par Claude (repères de précaution)
   - [ ] T2e demandes et notification (« Demander ma version », écran Demandes, ntfy)
@@ -479,3 +496,4 @@ Décisions :
 - 2026-10-07 — T1d-2 : restauration additive (rien n'est retiré ni écrasé sans case cochée), en ligne seulement, par transactions revérifiées à l'envoi ; une sauvegarde faite sur une copie non confirmée par le serveur est donnée mais ne compte pas comme dernière sauvegarde.
 - 2026-10-07 — T1 clos. Le grand essai de restauration de T1d-2 est reporté (décision du propriétaire) : la reprise d'une recette cochée n'a été essayée que sur le faux Firebase ; garder des fichiers de sauvegarde réduit ce risque.
 - 2026-10-07 — T2 recentré sur le besoin réel : un adulte du foyer ne mange pas de viande (versions de ses plats écrites par Claude, plusieurs à la fois) ; l'enfant a des précautions selon son âge (barème générique français dans l'app, date de naissance et choix des parents dans Firestore, chaque règle désactivable, levée seulement proposée, jamais automatique). Tout ce qui concerne l'enfant porte un nounours 🧸. Escargots et grenouilles comptent comme viande, toute gélatine animale est exclue, le beurre reste permis. Dans la vue « Repas et courses », jamais de croix rouge. En aperçu « Repas et courses », le gestionnaire crée les demandes et reçoit la notification comme l'autre membre (T2e). L'app reste conçue pour un seul foyer ; une version commerciale sera réévaluée après quelques mois d'usage réel.
+- 2026-10-07 — T2b : Claude propose les versions des profils qui ont des règles avec chaque recette demandée, et par lots de dix pour les plats existants. Ajouts du propriétaire : bouton « 15 idées de plats » juste après T2b ; corbeille (les deux membres suppriment, jamais automatique) avant T2c ; l'utilisatrice des courses demande elle-même sa version (T2e).

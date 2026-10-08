@@ -5,8 +5,9 @@ import { el, annoncer } from './dom.js';
 import { copier, lirePressePapiers, lectureBloquee } from './presse-papiers.js';
 import { choisirFichier, lireTexte } from './fichier.js';
 import {
-  extrairePaquet, validerPaquet, preparerImport, texteCorrectionPourClaude, estSauvegarde,
+  extrairePaquet, validerPaquet, preparerImport, filtrerPreparation, estSauvegarde,
 } from '../coeur/paquet.js';
+import { texteCorrectionPourClaude } from '../coeur/claude.js';
 import { FICHIER_MAX } from '../coeur/sauvegarde.js';
 
 const MESSAGES_EXTRACTION = {
@@ -49,10 +50,22 @@ const LIBELLES_STATUT = {
   complete: 'Complète la recette ⏳',
   remplace: 'Remplace la recette actuelle',
   inchange: 'Recette inchangée',
+  versions: 'Recette gardée',
   identique: 'Déjà dans l’app',
 };
 
+// Fiche complète reçue, différente de la recette actuelle, avec des versions : ce que l'on en prend.
+const CHOIX = [
+  { valeur: 'version', libelle: 'Ne prendre que sa version', aide: 'La recette actuelle est gardée.' },
+  { valeur: 'remplacer', libelle: 'Remplacer la recette', aide: 'La recette de Claude prend sa place.' },
+];
+
+const MESSAGE_HORS_LIGNE_VERSIONS = 'Il faut être connecté pour ajouter des versions.';
+
 const MESSAGE_COPIE = 'Copié. Collez-le dans votre projet Claude, puis collez ici sa nouvelle réponse.';
+// Aperçu prêt avec des versions à corriger : un nouveau collage remplacerait l'aperçu, et les autres versions du lot,
+// jamais enregistrées, seraient perdues.
+const MESSAGE_COPIE_ENREGISTRER = 'Copié. Touchez d’abord «\u00A0Enregistrer\u00A0»\u00A0: les autres versions seront gardées. Collez ensuite le texte dans votre projet Claude, et sa réponse dans «\u00A0Ajouter des recettes\u00A0».';
 
 const pluriel = (n, singulier, plurielTexte) => `${n}\u00A0${n > 1 ? plurielTexte : singulier}`;
 
@@ -72,9 +85,30 @@ function avertissementModification(modifieeA) {
   return modifieeA ? 'Remplace des modifications faites à la main.' : null;
 }
 
-/** Bouton d'enregistrement : recettes à écrire, ou seulement des demandes restées ouvertes à clore. */
-function libelleEnregistrer(aEcrire, aClore) {
-  if (aEcrire) return aEcrire > 1 ? `Enregistrer les ${aEcrire} recettes` : 'Enregistrer la recette';
+/**
+ * Ce qu'un enregistrement écrit : `recettes` (fiches complètes) et `versions` (versions seules, une par profil et par
+ * plat). `ecritures` : celles de la préparation (déjà filtrée des plats décochés).
+ */
+export function compterEcritures(ecritures) {
+  let recettes = 0;
+  let versions = 0;
+  for (const ecriture of ecritures ?? []) {
+    if (ecriture?.mode === 'versions') versions += Array.isArray(ecriture.variantes) ? ecriture.variantes.length : 0;
+    else recettes += 1;
+  }
+  return { recettes, versions };
+}
+
+/**
+ * Bouton d'enregistrement : « Enregistrer 9 versions », « Enregistrer les 3 recettes », « Enregistrer 2 recettes et
+ * 5 versions », ou seulement des demandes restées ouvertes à clore.
+ */
+export function libelleEnregistrer({ recettes = 0, versions = 0 }, aClore = 0) {
+  if (recettes && versions) {
+    return `Enregistrer ${pluriel(recettes, 'recette', 'recettes')} et ${pluriel(versions, 'version', 'versions')}`;
+  }
+  if (versions) return versions > 1 ? `Enregistrer ${versions}\u00A0versions` : 'Enregistrer la version';
+  if (recettes) return recettes > 1 ? `Enregistrer les ${recettes}\u00A0recettes` : 'Enregistrer la recette';
   return aClore > 1 ? 'Marquer les recettes comme ajoutées' : 'Marquer la recette comme ajoutée';
 }
 
@@ -88,7 +122,10 @@ export function creer(ctx) {
   let lectureEnCours = false; // fichier en cours de lecture : un second fichier choisi entre-temps est ignoré
   let minuteurSaisie = null;
   let signature = ''; // évite de reconstruire (et de réannoncer) un aperçu identique
-  let preparation = null; // écritures prêtes, si l'aperçu est valide
+  let preparation = null; // écritures prêtes (plats décochés retirés), si l'aperçu est valide
+  let decoches = new Set(); // plats décochés dans l'aperçu : rien ne s'écrit pour eux
+  let choix = {}; // { platId: 'version' | 'remplacer' } choisi dans l'aperçu
+  let messageEnvoi = ''; // refus d'enregistrer (hors ligne, versions)
   let copieFaite = false;
   let enregistre = false;
   let focaliserResultat = false;
@@ -199,6 +236,7 @@ export function creer(ctx) {
     texte = lu.texte ?? '';
     colle = true;
     zoneTexte.value = '';
+    oublierChoix();
     copieFaite = false;
     enregistre = false;
     signature = '';
@@ -206,8 +244,16 @@ export function creer(ctx) {
     dessiner();
   }
 
+  /** Nouveau texte : cases et choix de l'aperçu précédent oubliés. */
+  function oublierChoix() {
+    decoches = new Set();
+    choix = {};
+    messageEnvoi = '';
+  }
+
   function effacer() {
     clearTimeout(minuteurSaisie);
+    oublierChoix();
     texte = '';
     colle = false;
     source = 'collage';
@@ -224,6 +270,7 @@ export function creer(ctx) {
     erreurFichier = null;
     // Zone vidée à la main : rien à montrer. Presse-papiers vide : on le dit.
     colle = !manuel || Boolean(texte.trim());
+    oublierChoix();
     copieFaite = false;
     enregistre = false;
     signature = '';
@@ -236,10 +283,10 @@ export function creer(ctx) {
     majEntete();
     noteHorsLigne.hidden = navigator.onLine;
     const etat = calculer();
-    const nouvelleSignature = JSON.stringify([etat, copieFaite]);
+    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, messageEnvoi, navigator.onLine]);
     if (nouvelleSignature === signature) return;
     signature = nouvelleSignature;
-    preparation = etat.type === 'pret' ? etat.preparation : null;
+    preparation = etat.type === 'pret' ? filtrerPreparation(etat.preparation, decoches) : null;
 
     // Un texte collé, lisible ou non, disparaît de l'écran : il contient des mots techniques (§4).
     const traite = etat.type !== 'rien' && !(etat.type === 'illisible' && etat.code === 'vide');
@@ -275,13 +322,19 @@ export function creer(ctx) {
     const validation = validerPaquet(extrait.paquets, { profils: courant.profilsCharges ? courant.profils : null });
     if (!validation.valide) return { type: 'erreurs', validation };
     // Sans les plats et les demandes, un plat déjà présent passerait pour nouveau : on attend leur chargement.
-    if (!courant.platsCharges || !courant.demandesChargees) return { type: 'chargement' };
+    // Sans les profils, une version ne peut pas être jugée.
+    if (!courant.platsCharges || !courant.demandesChargees || !courant.profilsCharges) return { type: 'chargement' };
     const prepares = preparerImport(validation.plats.map((plat) => plat.donnees), {
       plats: courant.plats,
       demandes: courant.demandes,
       cible,
+      profils: courant.profils,
+      choix,
     });
-    if (prepares.erreurs.length) return { type: 'erreurs', validation: { ...validation, plats: [], erreurs: prepares.erreurs } };
+    // Plats gardés sans leurs erreurs (ils n'en ont pas) : la correction pour Claude sait si le lot était de versions.
+    if (prepares.erreurs.length) {
+      return { type: 'erreurs', validation: { ...validation, plats: validation.plats.map((plat) => ({ ...plat, erreurs: [] })), erreurs: prepares.erreurs } };
+    }
     return { type: 'pret', validation, preparation: prepares };
   }
 
@@ -289,9 +342,9 @@ export function creer(ctx) {
     return el('h2', { tabindex: '-1', 'data-titre-resultat': '' }, texteTitre);
   }
 
-  function boutonCopierCorrections(probleme) {
+  function boutonCopierCorrections(probleme, { secondaire = false, message = MESSAGE_COPIE } = {}) {
     return el('button', {
-      class: 'bouton bouton-principal bouton-plein',
+      class: `bouton ${secondaire ? 'bouton-secondaire' : 'bouton-principal'} bouton-plein`,
       type: 'button',
       'data-action': 'copier-corrections',
       onclick: async () => {
@@ -299,7 +352,7 @@ export function creer(ctx) {
         if (reussi) {
           copieFaite = true;
           dessiner();
-          annoncer(MESSAGE_COPIE);
+          annoncer(message);
         } else {
           annoncer('La copie n’a pas marché. Réessayez.');
         }
@@ -307,7 +360,7 @@ export function creer(ctx) {
     }, '📋 Copier les corrections pour Claude');
   }
 
-  const messageCopie = () => el('p', { class: 'aide' }, MESSAGE_COPIE);
+  const messageCopie = (message = MESSAGE_COPIE) => el('p', { class: 'aide' }, message);
 
   function rendu(etat) {
     switch (etat.type) {
@@ -359,14 +412,89 @@ export function creer(ctx) {
     }
   }
 
+  /** Case « l'enregistrer » d'un plat de l'aperçu (lot de plusieurs écritures). */
+  function caseDuPlat(element) {
+    const idCase = `garder-${element.id}`;
+    return el('label', { class: 'case-apercu', for: idCase },
+      el('input', {
+        type: 'checkbox',
+        id: idCase,
+        'data-action': idCase,
+        checked: !decoches.has(element.id),
+        onchange: (evenement) => {
+          if (evenement.target.checked) decoches.delete(element.id);
+          else decoches.add(element.id);
+          messageEnvoi = '';
+          dessiner();
+        },
+      }),
+      el('span', { class: 'visuellement-masque' }, `Enregistrer «\u00A0${element.nom}\u00A0»`));
+  }
+
+  /** « Ne prendre que sa version » / « Remplacer la recette » pour une fiche complète différente de l'actuelle. */
+  function choixDuPlat(element) {
+    const nom = `choix-${element.id}`;
+    return el('fieldset', { class: 'groupe-choix choix-cartes choix-import' },
+      el('legend', { class: 'etiquette-champ' }, 'Claude a aussi changé la recette'),
+      CHOIX.map(({ valeur, libelle, aide }) => el('label', { class: 'choix-carte' },
+        el('input', {
+          type: 'radio',
+          name: nom,
+          value: valeur,
+          'data-action': `${nom}-${valeur}`,
+          checked: element.choix.retenu === valeur,
+          onchange: () => {
+            choix = { ...choix, [element.id]: valeur };
+            messageEnvoi = '';
+            dessiner();
+          },
+        }),
+        el('span', { class: 'choix-carte-texte' },
+          el('span', { class: 'choix-carte-libelle' }, libelle),
+          el('span', { class: 'choix-carte-aide' }, aide)),
+        el('span', { class: 'choix-carte-coche', 'aria-hidden': 'true' }, '✓'))));
+  }
+
+  /**
+   * Plat validé d'où vient un élément de l'aperçu : par sa position dans le collage (`index`, posé par
+   * preparerImport) ; à défaut, même rang s'il n'en manque aucun, puis même identifiant, puis même nom.
+   */
+  function validationDe(validation, elements, element, i) {
+    if (Number.isInteger(element.index) && validation.plats[element.index]) return validation.plats[element.index];
+    if (validation.plats.length === elements.length) return validation.plats[i];
+    return validation.plats.find((plat) => plat.donnees?.id === element.id)
+      ?? validation.plats.find((plat) => plat.donnees?.nom === element.nom) ?? null;
+  }
+
+  /** Ligne de détail d'un plat de l'aperçu. */
+  function detailDuPlat(element) {
+    if (element.statut === 'identique') return 'Identique à la fiche actuelle.';
+    if (element.statut === 'versions' || element.statut === 'inchange') return 'La recette actuelle est gardée.';
+    if (!element.ingredients) return 'Sans recette pour l’instant (⏳)';
+    return [pluriel(element.ingredients, 'ingrédient', 'ingrédients'), element.etapes ? pluriel(element.etapes, 'étape', 'étapes') : null]
+      .filter(Boolean).join(' · ');
+  }
+
   function renduPret({ validation, preparation: prepares }) {
     const n = prepares.elements.length;
-    const aEcrire = prepares.elements.filter((element) => element.statut !== 'identique').length;
-    const aClore = aEcrire ? 0 : prepares.demandesAClore.length;
+    const ecrivables = prepares.elements.filter((element) => element.statut !== 'identique');
+    const filtree = preparation ?? prepares;
+    const comptes = compterEcritures(filtree.ecritures);
+    const aEcrire = comptes.recettes + comptes.versions;
+    const aClore = aEcrire ? 0 : filtree.demandesAClore.length;
+    // Cases seulement pour un lot : décocher le seul plat collé reviendrait à ne rien enregistrer.
+    const avecCases = ecrivables.length > 1;
+    const versionsSeules = ecrivables.length > 0 && ecrivables.every((element) => element.statut === 'versions');
+    const avecVersions = filtree.ecritures.some((ecriture) => ecriture.mode === 'versions');
+    const horsLigne = !navigator.onLine && avecVersions;
     const avertissementsGeneraux = [...validation.avertissements, ...prepares.avertissements].map((a) => a.message);
     let titre;
-    if (!aEcrire) titre = n > 1 ? 'Ces recettes sont déjà dans l’app, à l’identique.' : 'Cette recette est déjà dans l’app, à l’identique.';
-    else titre = n > 1 ? `${n} recettes prêtes` : '1 recette prête';
+    if (!ecrivables.length) titre = n > 1 ? 'Ces recettes sont déjà dans l’app, à l’identique.' : 'Cette recette est déjà dans l’app, à l’identique.';
+    else if (versionsSeules) {
+      const versions = ecrivables.reduce((total, element) => total + (element.versions?.length ?? 0), 0);
+      titre = versions > 1 ? `${versions}\u00A0versions prêtes` : '1\u00A0version prête';
+    } else titre = n > 1 ? `${n}\u00A0recettes prêtes` : '1 recette prête';
+    const corrections = filtree.corrections ?? [];
     return el('section', { class: 'carte resultat-pret' },
       titreResultat(titre),
       avertissementsGeneraux.length
@@ -374,43 +502,71 @@ export function creer(ctx) {
         : null,
       el('ul', { class: 'liste-apercu' }, prepares.elements.map((element, i) => {
         const identique = element.statut === 'identique';
+        const garde = !decoches.has(element.id);
         const avertissements = [
-          identique ? null : avertissementModification(element.modifieeA),
-          ...(validation.plats[i]?.avertissements ?? []).map((a) => a.message),
+          identique || element.statut === 'versions' ? null : avertissementModification(element.modifieeA),
+          ...(validationDe(validation, prepares.elements, element, i)?.avertissements ?? []).map((a) => a.message),
           ...element.avertissements,
         ].filter(Boolean);
-        return el('li', { class: 'apercu-plat' },
-          el('p', { class: 'apercu-nom' }, element.nom),
-          el('p', { class: 'badges' }, el('span', { class: `badge badge-${element.statut}` }, LIBELLES_STATUT[element.statut])),
-          element.ancienNom ? el('p', { class: 'texte-doux' }, `Renommé\u00A0: «\u00A0${element.ancienNom}\u00A0» → «\u00A0${element.nom}\u00A0»`) : null,
-          el('p', { class: 'texte-doux' }, identique ? 'Identique à la fiche actuelle.' : element.ingredients
-            ? [pluriel(element.ingredients, 'ingrédient', 'ingrédients'), element.etapes ? pluriel(element.etapes, 'étape', 'étapes') : null].filter(Boolean).join(' · ')
-            : element.statut === 'inchange' ? 'La recette actuelle est gardée.' : 'Sans recette pour l’instant (⏳)'),
-          avertissements.length
-            ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
-            : null,
+        return el('li', { class: `apercu-plat${avecCases && !identique ? ' avec-case' : ''}${garde ? '' : ' decoche'}` },
+          avecCases && !identique ? caseDuPlat(element) : null,
+          el('div', { class: 'apercu-corps' },
+            el('p', { class: 'apercu-nom' }, element.nom),
+            el('p', { class: 'badges' }, el('span', { class: `badge badge-${element.statut}` }, LIBELLES_STATUT[element.statut] ?? '')),
+            element.ancienNom ? el('p', { class: 'texte-doux' }, `Renommé\u00A0: «\u00A0${element.ancienNom}\u00A0» → «\u00A0${element.nom}\u00A0»`) : null,
+            (element.versions ?? []).length
+              ? el('ul', { class: 'apercu-versions' }, element.versions.map((version) => el('li', {
+                class: version.convient ? 'compat-version' : 'compat-discret',
+              }, version.libelle)))
+              : null,
+            el('p', { class: 'texte-doux' }, detailDuPlat(element)),
+            element.choix ? choixDuPlat(element) : null,
+            avertissements.length
+              ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
+              : null,
+            garde ? null : el('p', { class: 'texte-doux' }, 'Ne sera pas enregistré.'),
+          ),
         );
       })),
-      // Toutes identiques : rien à enregistrer, sauf une demande de recette restée ouverte, à clore.
-      aEcrire || aClore
+      // Versions importées qui ne conviennent pas encore : la demande reste ouverte, Claude peut les corriger.
+      // Rien encore d'enregistré : la consigne dit d'enregistrer avant de coller la réponse corrigée.
+      corrections.length ? boutonCopierCorrections({ corrections }, { secondaire: true, message: aEcrire ? MESSAGE_COPIE_ENREGISTRER : MESSAGE_COPIE }) : null,
+      corrections.length && copieFaite ? messageCopie(aEcrire ? MESSAGE_COPIE_ENREGISTRER : MESSAGE_COPIE) : null,
+      messageEnvoi ? el('p', { class: 'message-erreur', role: 'alert' }, messageEnvoi) : null,
+      // Toutes identiques : rien à enregistrer, sauf une demande de recette restée ouverte, à clore. Tout décoché :
+      // le bouton reste, inactif.
+      ecrivables.length || aClore
         ? el('button', {
           class: 'bouton bouton-principal bouton-plein',
           type: 'button',
           'data-action': 'enregistrer',
+          disabled: (!aEcrire && !aClore) || horsLigne,
           onclick: enregistrer,
-        }, libelleEnregistrer(aEcrire, aClore))
+        }, aEcrire || aClore ? libelleEnregistrer(comptes, aClore) : 'Rien de coché')
         : null,
-      aEcrire || aClore ? noteHorsLigne : null,
+      horsLigne ? el('p', { class: 'aide' }, 'Hors ligne\u00A0: il faut être connecté pour ajouter des versions.') : null,
+      !horsLigne && comptes.recettes ? noteHorsLigne : null,
     );
   }
 
   function enregistrer() {
     if (!preparation || enregistre || (!preparation.ecritures.length && !preparation.demandesAClore.length)) return;
-    enregistre = true;
     const { ecritures } = preparation;
-    courant.actions.importer(preparation);
-    annoncer(!ecritures.length ? 'Recette marquée comme ajoutée.'
-      : ecritures.length > 1 ? `${ecritures.length} recettes enregistrées.` : 'Recette enregistrée.');
+    const comptes = compterEcritures(ecritures);
+    // Versions : une transaction par plat, impossible hors ligne. Rien ne part, l'aperçu reste.
+    if (comptes.versions && !navigator.onLine) {
+      messageEnvoi = MESSAGE_HORS_LIGNE_VERSIONS;
+      dessiner();
+      annoncer(MESSAGE_HORS_LIGNE_VERSIONS);
+      return;
+    }
+    enregistre = true;
+    // L'annonce des versions (combien, combien restent) suit leur envoi (actions.importer) ; un échec est annoncé là.
+    Promise.resolve(courant.actions.importer(preparation)).catch((erreur) => {
+      if (erreur?.code === 'hors_ligne') annoncer(MESSAGE_HORS_LIGNE_VERSIONS);
+    });
+    if (!ecritures.length) annoncer('Recette marquée comme ajoutée.');
+    else if (comptes.recettes) annoncer(comptes.recettes > 1 ? `${comptes.recettes} recettes enregistrées.` : 'Recette enregistrée.');
     // Retour à l'écran d'où l'on vient (fiche ciblée, liste) : un pas en arrière, sans doublon dans l'historique.
     // Sinon, cet écran est remplacé : le geste retour ne ramène pas à un aperçu déjà enregistré.
     const origine = cible ? `#/plat/${encodeURIComponent(cible)}` : '#/plats';

@@ -85,10 +85,11 @@ test('preparerImport : plat ⏳ modifié à la main (nom seulement) puis complé
 });
 
 test('preparerImport : recette inchangée (sans ingrédients) sur une fiche modifiée → rien n’est effacé', () => {
+  // T2b : une entrée sans ingrédients ne touche jamais un plat rempli (statut identique, rien d'écrit).
   const r = preparerImport(valides({ id: 'gratin-test', nom: 'Gratin test' }), { plats: [MODIFIEE], demandes: [] });
-  assert.equal(r.elements[0].statut, 'inchange');
+  assert.equal(r.elements[0].statut, 'identique');
   assert.equal('modifieeA' in r.elements[0], false);
-  assert.equal('effacerModification' in r.ecritures[0], false);
+  assert.deepEqual(r.ecritures, []);
 });
 
 test('preparerImport : seule modifieeLe présente compte aussi comme une modification à la main', () => {

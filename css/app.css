@@ -2592,3 +2592,85 @@ select.champ {
   min-height: 48px;
   font-weight: 600;
 }
+
+/* ——— T2b : versions écrites par Claude ——— */
+
+/* Plats › « ❌ Versions à créer » : un bandeau « Versions pour <Prénom> » par profil qui a des règles. */
+.zone-lots {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.lot-versions-bloc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lot-versions { gap: 12px; }
+
+.lot-versions .carte-texte p { margin: 0; }
+
+.lot-jamais {
+  margin: 0;
+  padding: 0 4px;
+  font-size: 0.9375rem;
+}
+
+/* Réglages : carte « Projet Claude ». */
+.carte-projet-claude { gap: 10px; }
+
+.carte-projet-claude p { margin: 0; }
+
+.carte-projet-claude .lien-fiche { align-self: flex-start; }
+
+/* Ajouter des recettes : case « enregistrer » de chaque plat d'un lot, toute la hauteur touchable (48 px). */
+.apercu-plat.avec-case {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.apercu-corps {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.case-apercu {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 48px;
+  min-height: 48px;
+  margin-top: -11px;
+  padding-top: 11px;
+  cursor: pointer;
+}
+
+.case-apercu input {
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+
+.apercu-plat.decoche .apercu-nom,
+.apercu-plat.decoche .badges,
+.apercu-plat.decoche .apercu-versions { opacity: 0.6; }
+
+.apercu-versions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-weight: 600;
+}
+
+.choix-import { margin-top: 8px; }
+
+.badge-versions { background: var(--olive-doux); }

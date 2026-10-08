@@ -2,8 +2,13 @@
 import { el, etatVide, pastille } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { modeDeCuisson } from './pictos.js';
-import { LIBELLES_TYPE, STATUTS, NOM_MAX, filtresPour, filtreRetenu, filtrerPlats, visuelDuPlat, statutDe, typeDe } from '../coeur/plats.js';
-import { profilsContraints } from '../coeur/compatibilite.js';
+import { copier } from './presse-papiers.js';
+import {
+  LIBELLES_TYPE, STATUTS, NOM_MAX, TYPES_A_ADAPTER, filtresPour, filtreRetenu, filtrerPlats, visuelDuPlat, statutDe, typeDe,
+  aSaRecette,
+} from '../coeur/plats.js';
+import { profilsContraints, platsSansVersion } from '../coeur/compatibilite.js';
+import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { ligneCompat, garderPour, nomDe } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 
@@ -75,6 +80,121 @@ function etatVideCompat(choisi, moi) {
     el('p', {}, moi && moi.id === choisi.profil.id ? 'Aucun plat pour vous ici.' : `Aucun plat pour ${nomDe(choisi.profil)} ici.`));
 }
 
+/**
+ * Plats écartés des versions à créer parce que ce profil les a notés « Jamais » (même tri que
+ * compatibilite.js › platsSansVersion, note mise à part).
+ */
+function nombreNotesJamais(plats, profil, evaluer) {
+  if (typeof evaluer !== 'function' || typeof profil?.id !== 'string') return 0;
+  return (plats ?? []).filter((plat) => TYPES_A_ADAPTER.includes(typeDe(plat))
+    && aSaRecette(plat)
+    && plat.notes && typeof plat.notes === 'object' && Object.hasOwn(plat.notes, profil.id) && plat.notes[profil.id] === 0
+    && (() => {
+      const resultat = evaluer(plat, profil);
+      return Boolean(resultat?.aCreer || resultat?.aRevoir);
+    })()).length;
+}
+
+/** Libellé du bouton de copie d'un lot : « les 10 premières », « les 3 versions », « sa version ». */
+function libelleLot(nombre) {
+  if (nombre > LOT_VERSIONS) return `Demander à Claude les ${LOT_VERSIONS} premières`;
+  if (nombre > 1) return `Demander à Claude les ${nombre}\u00A0versions`;
+  return 'Demander à Claude sa version';
+}
+
+/**
+ * Bandeau « Versions pour <Prénom> » (gestionnaire, filtre « ❌ Versions à créer ») : copie du lot des plats qui
+ * attendent sa version (les mieux notés du foyer d'abord, ceux déjà envoyés à la fin), puis « Coller la réponse de
+ * Claude ». Nœuds gardés d'un rendu à l'autre (le focus reste sur le bouton touché) ; `maj(ctx, profil)` les remet à
+ * jour. → { noeud, maj }
+ */
+function creerBandeauVersions(lireCtx) {
+  let profil = null;
+  let copie = false; // vrai après une copie réussie : « Coller la réponse » devient l'action principale
+  // Dernier lot copié : recopié à l'identique tant que les plats en attente sont les mêmes (un second toucher, après
+  // un collage raté dans Claude, ne doit pas copier un autre lot).
+  let dernierLot = null; // { attente: signature des plats en attente, ids: [platId] }
+  const titre = el('h2', {});
+  const nombre = el('p', {});
+  const boutonDemander = el('button', { class: 'bouton bouton-plein', type: 'button', 'data-action': 'demander', onclick: demander });
+  const lienColler = el('a', { class: 'bouton bouton-plein', href: '#/import' }, 'Coller la réponse de Claude');
+  const message = el('p', { class: 'aide', role: 'status' });
+  const jamais = el('p', { class: 'texte-doux lot-jamais' });
+  const noeud = el('div', { class: 'lot-versions-bloc' },
+    el('section', { class: 'carte lot-versions' },
+      el('div', { class: 'carte-ligne' },
+        pastille('🌿', 'olive'),
+        el('div', { class: 'carte-texte' }, titre, nombre,
+          el('p', { class: 'texte-doux' }, 'Les plats les mieux notés du foyer d’abord.'))),
+      message,
+      el('div', { class: 'actions-recette' }, boutonDemander, lienColler)),
+    jamais);
+
+  /** Plats qui attendent la version de ce profil, dans l'ordre où les demander. */
+  function enAttente(ctx) {
+    return platsSansVersion(ctx.plats, profil, {
+      demandes: ctx.demandes ?? [],
+      envoyes: ctx.actions?.lireEnvoyes?.() ?? [],
+      profils: ctx.profils,
+      evaluer: ctx.compat,
+    });
+  }
+
+  async function demander() {
+    const ctx = lireCtx();
+    if (!profil) return;
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    const attente = enAttente(ctx);
+    const signature = attente.map(({ plat }) => plat.id).sort().join('\n');
+    const parId = new Map(attente.map((element) => [element.plat.id, element]));
+    const lot = dernierLot?.attente === signature
+      ? dernierLot.ids.map((id) => parId.get(id)).filter(Boolean)
+      : attente.slice(0, LOT_VERSIONS);
+    if (!lot.length) return;
+    const reussi = await copier(texteDemandeVariantes(lot, profil));
+    if (reussi) {
+      copie = true;
+      dernierLot = { attente: signature, ids: lot.map(({ plat }) => plat.id) };
+      ctx.actions?.noterEnvoyes?.(dernierLot.ids);
+      message.textContent = 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse de Claude\u00A0».';
+    } else {
+      message.textContent = 'La copie n’a pas marché. Réessayez.';
+    }
+    majBoutons();
+  }
+
+  function majBoutons() {
+    boutonDemander.className = `bouton bouton-plein ${copie ? 'bouton-secondaire' : 'bouton-principal'}`;
+    lienColler.className = `bouton bouton-plein ${copie ? 'bouton-principal' : 'bouton-secondaire'}`;
+    message.hidden = !message.textContent;
+  }
+
+  function maj(ctx, nouveau) {
+    if (profil?.id !== nouveau.id) {
+      copie = false;
+      dernierLot = null;
+      message.textContent = '';
+    }
+    profil = nouveau;
+    const nom = nomDe(profil);
+    const attente = enAttente(ctx).length;
+    const ecartes = nombreNotesJamais(ctx.plats, profil, ctx.compat);
+    titre.textContent = `Versions pour ${nom}`;
+    nombre.textContent = attente > 1
+      ? `${attente}\u00A0plats attendent une version pour ${nom}.`
+      : `1\u00A0plat attend une version pour ${nom}.`;
+    boutonDemander.replaceChildren(el('span', { 'aria-hidden': 'true' }, '📋'), libelleLot(attente));
+    jamais.textContent = ecartes > 1
+      ? `${ecartes}\u00A0plats notés «\u00A0Jamais\u00A0» par ${nom} sont laissés de côté.`
+      : `1\u00A0plat noté «\u00A0Jamais\u00A0» par ${nom} est laissé de côté.`;
+    jamais.hidden = !ecartes;
+    noeud.hidden = !attente;
+    majBoutons();
+  }
+
+  return { noeud, maj };
+}
+
 function ouvrirAjout(ctx) {
   ouvrirFeuille('Ajouter un plat', (fermer) => {
     const erreur = el('p', { class: 'message-erreur', role: 'alert', hidden: true });
@@ -130,6 +250,9 @@ export function creer(ctx) {
   let courant = ctx;
   const compteur = el('p', { class: 'sous-titre', role: 'status' });
   const zoneMessage = el('div');
+  // Bandeaux « Versions pour <Prénom> » du filtre « ❌ Versions à créer » : un par profil qui a des règles.
+  const zoneLots = el('div', { class: 'zone-lots' });
+  const bandeaux = new Map(); // profilId → bandeau gardé d'un rendu à l'autre
   const liste = el('ul', { class: 'liste-plats' });
   // Invitation (§4) : seulement tant que la personne connectée n'a noté aucun plat.
   const invitation = el('section', { class: 'carte carte-invitation', hidden: true },
@@ -206,6 +329,20 @@ export function creer(ctx) {
     champRecherche.focus();
   }
 
+  /** Bandeaux des lots, seulement sous le filtre « ❌ Versions à créer » (réservé au gestionnaire). */
+  function remplirLots(choisi) {
+    const profils = courant.platsCharges && courant.role === 'gestionnaire' && Array.isArray(choisi.profils) ? choisi.profils : [];
+    for (const id of [...bandeaux.keys()]) if (!profils.some((p) => p.id === id)) bandeaux.delete(id);
+    for (const profil of profils) {
+      if (!bandeaux.has(profil.id)) bandeaux.set(profil.id, creerBandeauVersions(() => courant));
+      bandeaux.get(profil.id).maj(courant, profil);
+    }
+    const noeuds = profils.map((p) => bandeaux.get(p.id).noeud);
+    // Mêmes nœuds dans le même ordre : rien n'est déplacé (le focus reste).
+    if (noeuds.length !== zoneLots.children.length || noeuds.some((n, i) => zoneLots.children[i] !== n)) zoneLots.replaceChildren(...noeuds);
+    zoneLots.hidden = !noeuds.some((n) => !n.hidden);
+  }
+
   function remplir() {
     // Pas d'ajout avant le chargement : sans la liste, un doublon ne serait pas repéré.
     boutonAjouter.disabled = !courant.platsCharges;
@@ -213,6 +350,7 @@ export function creer(ctx) {
     const moi = courant.moi;
     invitation.hidden = !(courant.platsCharges && moi && nombreANoter(courant.plats, moi.id, { garder: garderPour(courant, moi.id) }) > 0
       && !courant.plats.some((plat) => estNote(plat, moi.id)));
+    remplirLots(filtreRetenu(filtres, filtre));
     if (!courant.platsCharges) {
       compteur.textContent = '';
       zoneMessage.replaceChildren(el('p', { class: 'texte-doux', role: 'status' }, 'Chargement des plats…'));
@@ -266,6 +404,7 @@ export function creer(ctx) {
         ? el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/import' }, '📋 Ajouter des recettes')
         : null,
       groupeFiltres,
+      zoneLots,
       invitation,
       zoneMessage,
       liste,
