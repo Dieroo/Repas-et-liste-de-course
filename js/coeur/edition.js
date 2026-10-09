@@ -1,10 +1,10 @@
-// Écran « Modifier » une recette : libellés, nature d'un ingrédient, catalogue des produits connus, saisie d'un
-// ingrédient, comparaison et préparation de l'enregistrement. Logique pure : ni DOM ni Firebase.
+// Écran « Modifier » une recette : libellés, nature d'un ingrédient, cases « Repères » (T2c-2), catalogue des produits
+// connus, saisie d'un ingrédient, comparaison et préparation de l'enregistrement. Logique pure : ni DOM ni Firebase.
 import { slug } from './slug.js';
 import { APPAREILS, NOM_MAX, statutDe, typeDe } from './plats.js';
 import { FORMAT, validerPaquet } from './paquet.js';
-import { VIANDES, VOCABULAIRES } from './vocabulaire.js';
-import { repereAttendu } from './compatibilite.js';
+import { VIANDES, VOCABULAIRES, marqueursEffectifs } from './vocabulaire.js';
+import { reperesAttendus } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
 
 // ——— Libellés (ordre d'affichage = ordre des clés) ———
@@ -125,35 +125,145 @@ export function appliquerNature(ingredient, nature) {
   return copie;
 }
 
-// ——— Repères d'un produit jamais vu (T2a) ———
-
-// Repères posés en plus de la nature, montrés en une ligne lisible dans « Plus de précisions », avec « Retirer ».
-export const REPERES = {
-  bouillon_viande: 'Bouillon de viande',
-  gelatine_animale: 'Gélatine animale',
-  gelatine_porc: 'Gélatine animale',
-  graisse_animale: 'Graisse animale',
-};
-const MARQUEURS_REPERE = Object.keys(REPERES);
+// ——— Repères (T2c-2) ———
 
 /**
- * Nature présélectionnée pour un produit jamais vu, d'après son nom : « Viande » pour un mot de viande (lardons,
- * poulet, escargots…) ; « Autre » avec un repère pour un bouillon, un fond ou un fumet de viande ou de volaille
- * (`bouillon_viande`), une gélatine (`gelatine_animale`) ou une graisse animale (`graisse_animale`). Toujours
- * modifiable. → { nature, repere? } ou null (rien à présélectionner, ou produit déjà connu du catalogue).
+ * Cases « Repères » de « Modifier » › un ingrédient › « Plus de précisions ». Cocher ajoute `pose` ; décocher retire
+ * tout `retire` (« Café, thé, cola » enlève aussi l'ancien `cafe`, « Gélatine animale » aussi `gelatine_porc`).
+ * `natures` : natures d'ingrédient (NATURES) sous lesquelles la case est proposée, si une règle la surveille. Libellés
+ * de 26 caractères au plus. Remplace les repères de T2a (« Bouillon de viande », « Gélatine animale », « Graisse
+ * animale » deviennent des cases).
  */
-export function natureProposee(produit, catalogue = []) {
-  if (produitConnu(catalogue, produit)) return null;
-  const attendu = repereAttendu(produit);
-  if (!attendu) return null;
-  if (attendu === 'viande') return { nature: 'viande' };
-  return { nature: 'autre', repere: attendu };
+export const CASES_REPERES = [
+  { id: 'cru_viande', libelle: 'Crue ou rosée', pose: ['cru'], retire: ['cru'], natures: ['viande'] },
+  { id: 'cru_poisson', libelle: 'Cru', pose: ['cru'], retire: ['cru'], natures: ['poisson'] },
+  { id: 'poisson_predateur', libelle: 'Espadon, requin, marlin', pose: ['poisson_predateur'], retire: ['poisson_predateur'], natures: ['poisson'] },
+  { id: 'lait_cru', libelle: 'Au lait cru', pose: ['lait_cru'], retire: ['lait_cru'], natures: ['autre'] },
+  { id: 'fruit_coque', libelle: 'Fruits à coque entiers', pose: ['fruit_coque'], retire: ['fruit_coque'], natures: ['autre'] },
+  { id: 'cafeine', libelle: 'Café, thé, cola', pose: ['cafeine'], retire: ['cafe', 'cafeine'], natures: ['autre'] },
+  { id: 'alcool_cru', libelle: 'Alcool non cuit', pose: ['alcool_cru'], retire: ['alcool_cru'], natures: ['autre'] },
+  { id: 'oeuf_cru', libelle: 'Œuf cru ou peu cuit', pose: ['oeuf_cru'], retire: ['oeuf_cru'], natures: ['autre'] },
+  { id: 'miel', libelle: 'Miel', pose: ['miel'], retire: ['miel'], natures: ['autre'] },
+  { id: 'soja', libelle: 'Soja', pose: ['soja'], retire: ['soja'], natures: ['autre'] },
+  { id: 'bouillon_viande', libelle: 'Bouillon de viande', pose: ['bouillon_viande'], retire: ['bouillon_viande'], natures: ['autre'] },
+  { id: 'gelatine', libelle: 'Gélatine animale', pose: ['gelatine_animale'], retire: ['gelatine_animale', 'gelatine_porc'], natures: ['autre'] },
+  { id: 'graisse_animale', libelle: 'Graisse animale', pose: ['graisse_animale'], retire: ['graisse_animale'], natures: ['autre', 'viande'] },
+];
+
+/** Marqueurs que les cases peuvent retirer (union des `retire`, dans l'ordre des cases) : repères relus par Claude en T2d. */
+export const MARQUEURS_PRECAUTION = [...new Set(CASES_REPERES.flatMap((c) => c.retire))];
+
+const CASES_PAR_ID = new Map(CASES_REPERES.map((c) => [c.id, c]));
+
+/** `surveilles` lisible : un Set (Set ou liste reçus), ou null quand il est absent (alors tout compte). */
+function ensembleSurveille(surveilles) {
+  if (surveilles instanceof Set) return surveilles;
+  if (Array.isArray(surveilles)) return new Set(surveilles);
+  return null;
 }
 
-/** Repères que porte un ingrédient, dans l'ordre de REPERES. */
-export function reperesDe(ingredient) {
-  const marqueurs = Array.isArray(ingredient?.marqueurs) ? ingredient.marqueurs : [];
-  return MARQUEURS_REPERE.filter((m) => marqueurs.includes(m));
+/** Vrai si une règle active surveille l'un des marqueurs de la case (`pose` ou `retire`) ; `suivis` null : toujours. */
+const caseSuivie = (definition, suivis) => !suivis || [...definition.pose, ...definition.retire].some((m) => suivis.has(m));
+
+/** Vrai si la case est cochée : l'un de ses `retire` est porté (marqueurs effectifs : `cafe` vaut `cafeine`). */
+const caseCochee = (definition, effectifs) => definition.retire.some((m) => effectifs.has(m));
+
+// Deux cases qui retirent les mêmes marqueurs (« Crue ou rosée » d'une viande, « Cru » d'un poisson) : une seule montrée.
+const signatureRetrait = (definition) => [...definition.retire].sort().join('|');
+
+/** Marqueurs (textes) d'une liste, sans doublon, dans leur ordre. */
+const marqueursDe = (liste) => [...new Set((Array.isArray(liste) ? liste : []).filter((m) => typeof m === 'string' && m !== ''))];
+
+/**
+ * Cases « Repères » à montrer pour cet ingrédient, dans l'ordre de CASES_REPERES. Une case est montrée :
+ * - si sa nature est celle de l'ingrédient (`nature`, sinon natureDe) et qu'une règle active surveille l'un de ses
+ *   marqueurs (`surveilles` : Set ou liste, regles.js › marqueursSurveilles ; absent, tous) ;
+ * - ou si elle est déjà cochée, quelle que soit la nature (un `cru` resté après un passage de « Poisson » à « Autre »
+ *   reste visible et décochable) ; parmi les cases qui retirent les mêmes marqueurs, une seule : celle de la nature,
+ *   sinon la première.
+ * `coche` : l'un de ses `retire` est présent dans les marqueurs effectifs (`cafe` coche « Café, thé, cola »,
+ * `gelatine_porc` coche « Gélatine animale »). → [{ id, libelle, coche }] ([] : rien à afficher)
+ */
+export function casesPour(ingredient, { surveilles = null, nature = null } = {}) {
+  const suivis = ensembleSurveille(surveilles);
+  const marqueurs = marqueursDe(ingredient?.marqueurs);
+  const effectifs = marqueursEffectifs({ marqueurs });
+  const sienne = Object.hasOwn(NATURES, nature ?? '') ? nature : natureDe({ marqueurs });
+  const montrees = new Set();
+  const signatures = new Set();
+  const montrer = (definition) => {
+    montrees.add(definition.id);
+    signatures.add(signatureRetrait(definition));
+  };
+  for (const definition of CASES_REPERES) {
+    if (definition.natures.includes(sienne) && (caseSuivie(definition, suivis) || caseCochee(definition, effectifs))) {
+      montrer(definition);
+    }
+  }
+  for (const definition of CASES_REPERES) {
+    if (montrees.has(definition.id) || signatures.has(signatureRetrait(definition))) continue;
+    if (caseCochee(definition, effectifs)) montrer(definition);
+  }
+  return CASES_REPERES.filter((d) => montrees.has(d.id))
+    .map((d) => ({ id: d.id, libelle: d.libelle, coche: caseCochee(d, effectifs) }));
+}
+
+/**
+ * Marqueurs après un toucher sur une case : cocher ajoute `pose` (rien si la case est déjà cochée : un `cafe` reste
+ * `cafe`) ; décocher retire tout `retire`. Les autres marqueurs restent, dans leur ordre, sans doublon. Case inconnue :
+ * marqueurs inchangés. → nouvelle liste
+ */
+export function appliquerCase(marqueurs, caseId, coche) {
+  const liste = marqueursDe(marqueurs);
+  const definition = typeof caseId === 'string' ? CASES_PAR_ID.get(caseId) : undefined;
+  if (!definition) return liste;
+  if (!coche) return liste.filter((m) => !definition.retire.includes(m));
+  if (caseCochee(definition, marqueursEffectifs({ marqueurs: liste }))) return liste;
+  return [...liste, ...definition.pose.filter((m) => !liste.includes(m))];
+}
+
+/**
+ * Repères proposés cochés d'après le nom (compatibilite.js › reperesAttendus), seulement ceux d'une case qu'une règle
+ * active surveille (`surveilles` ; absent, tous). `connu` : produit déjà connu du catalogue, qui garde ses propriétés
+ * (lait cru, fruits à coque…) : seuls les repères de préparation (MARQUEURS_PREPARATION) sont proposés (« jambon cru »
+ * → cru). Jamais `viande` (une nature, pas une case). → [marqueurs]
+ */
+export function reperesProposes(produit, { surveilles = null, connu = false } = {}) {
+  const suivis = ensembleSurveille(surveilles);
+  return reperesAttendus(produit).filter((marqueur) => {
+    if (connu && !MARQUEURS_PREPARATION.includes(marqueur)) return false;
+    return CASES_REPERES.some((d) => d.pose.includes(marqueur) && caseSuivie(d, suivis));
+  });
+}
+
+/** Nature que laissent attendre les repères d'un nom : viande, puis poisson, puis autre ; null si rien n'est sûr (cru). */
+function natureAnnoncee(attendus) {
+  const natures = attendus.map((marqueur) => {
+    if (marqueur === 'viande') return 'viande';
+    const premieres = new Set(CASES_REPERES.filter((d) => d.pose.includes(marqueur)).map((d) => d.natures[0]));
+    return premieres.size === 1 ? [...premieres][0] : null;
+  });
+  return ['viande', 'poisson', 'autre'].find((n) => natures.includes(n)) ?? null;
+}
+
+/**
+ * Ce que le nom d'un produit laisse attendre, toujours modifiable :
+ * - produit jamais vu : `nature` présélectionnée (« Viande » pour lardons, poulet, escargots, jambon cru… ; « Poisson »
+ *   pour l'espadon ; « Autre » pour un bouillon, un fond ou un fumet de viande, une gélatine, une graisse animale, des
+ *   noix, du café, du miel, du tofu ; null si le nom ne dit pas ce que c'est, « tartare de saumon ») et `reperes`
+ *   proposés cochés (reperesProposes, filtrés par `surveilles`) ;
+ * - produit connu du catalogue : sa nature vient du catalogue (`nature: null`) ; seuls ses repères de préparation sont
+ *   proposés (« jambon cru » → cru).
+ * → { nature, reperes } ou null (rien à proposer).
+ */
+export function natureProposee(produit, catalogue = [], { surveilles = null } = {}) {
+  if (produitConnu(catalogue, produit)) {
+    const reperes = reperesProposes(produit, { surveilles, connu: true });
+    return reperes.length ? { nature: null, reperes } : null;
+  }
+  const nature = natureAnnoncee(reperesAttendus(produit));
+  const reperes = reperesProposes(produit, { surveilles });
+  return nature || reperes.length ? { nature, reperes } : null;
 }
 
 // ——— Base qui s'enrichit : catalogue des produits connus ———
@@ -271,14 +381,64 @@ function quantite(valeur) {
 }
 
 /**
+ * Point de départ des marqueurs d'un ingrédient saisi, avant tout toucher sur une case « Repères » : ceux de
+ * l'ingrédient modifié (même produit), sinon ceux du produit connu (sans ses repères de préparation), sinon aucun ;
+ * la nature choisie appliquée ; puis les repères que le nom annonce (reperesProposes, filtrés par `surveilles`) : tous
+ * pour un produit jamais vu, ceux de préparation pour un produit connu, aucun pour l'ingrédient modifié (il montre ce
+ * qu'il porte). `source` : base retenue, null pour un produit jamais vu sans nature choisie.
+ * → { source, marqueurs, proposes }
+ */
+function depart(produit, { catalogue, liste, index, choisie, surveilles }) {
+  const cle = slug(produit);
+  const modifie = Number.isInteger(index) && estObjet(liste[index]) && slug(liste[index].produit) === cle
+    ? liste[index] : null;
+  const connu = modifie ? null : produitConnu(catalogue, produit);
+  // Produit connu (pas l'ingrédient modifié) : ses repères de préparation ne suivent jamais.
+  const base = modifie ?? (connu ? { ...connu, marqueurs: (Array.isArray(connu.marqueurs) ? connu.marqueurs : [])
+    .filter((m) => !MARQUEURS_PREPARATION.includes(m)) } : null);
+  let source = null;
+  if (choisie) source = appliquerNature(base ?? { marqueurs: [] }, choisie);
+  else if (base) source = copier(base);
+  const marqueurs = marqueursDe(source?.marqueurs).filter((m) => VOCABULAIRES.marqueurs.includes(m));
+  const proposes = modifie ? [] : reperesProposes(produit, { surveilles, connu: Boolean(connu) });
+  const effectifs = marqueursEffectifs({ marqueurs });
+  for (const marqueur of proposes) if (!effectifs.has(marqueur) && !marqueurs.includes(marqueur)) marqueurs.push(marqueur);
+  return { source, marqueurs, proposes };
+}
+
+/**
+ * Marqueurs que « Modifier » montre pour un ingrédient avant tout toucher sur une case (les mêmes qu'ingredientSaisi
+ * part, voir `depart`) : de quoi dessiner les cases (casesPour) sans écart avec ce qui sera enregistré.
+ * `champs` : { produit, nature? } ; options comme ingredientSaisi. → { marqueurs, proposes } ou null (nom vide).
+ */
+export function marqueursDeDepart(champs, { catalogue = [], ingredients = [], index = null, surveilles = null } = {}) {
+  const produit = reduire(champs?.produit).toLocaleLowerCase('fr-FR');
+  if (!slug(produit)) return null;
+  const choisie = Object.hasOwn(NATURES, champs?.nature ?? '') ? champs.nature : null;
+  const { marqueurs, proposes } = depart(produit, {
+    catalogue, liste: Array.isArray(ingredients) ? ingredients : [], index, choisie, surveilles,
+  });
+  return { marqueurs, proposes };
+}
+
+/** Changements de cases lisibles : { caseId } d'une case connue et `coche` booléen ; les autres sont ignorés. */
+function changementsDe(reperes) {
+  return (Array.isArray(reperes) ? reperes : [])
+    .filter((c) => estObjet(c) && typeof c.caseId === 'string' && CASES_PAR_ID.has(c.caseId) && typeof c.coche === 'boolean');
+}
+
+/**
  * Ingrédient complet à partir des champs de la feuille.
  * `champs` : { produit, qte, unite, rayon, nature, forme, role, reperes? } tels que saisis. `reperes` (facultatif) :
- * marqueurs de REPERES gardés sur l'ingrédient (« Retirer » en enlève un) ; absent, ceux de la base retenue, et pour
- * un produit jamais vu, le repère de natureProposee. `ingredients` : ceux de la
- * recette en cours ; `index` : position de l'ingrédient modifié (null pour un ajout).
+ * changements des cases « Repères », [{ caseId, coche }] dans l'ordre des touchers ; seules les cases changées y
+ * figurent et sont appliquées (appliquerCase) : une case non touchée laisse ses marqueurs tels quels (un `cafe` reste
+ * `cafe`, un `gelatine_porc` reste `gelatine_porc`). Avant eux, les repères proposés d'après le nom sont posés (voir
+ * `depart` : produit jamais vu, ou repères de préparation d'un produit connu, filtrés par `surveilles`).
+ * `ingredients` : ceux de la recette en cours ; `index` : position de l'ingrédient modifié (null pour un ajout) ;
+ * `surveilles` : marqueurs que surveille une règle active (regles.js › marqueursSurveilles ; absent, tous).
  * → { ingredient } ou { erreurs: { produit?, qte?, unite?, nature? } }
  */
-export function ingredientSaisi(champs, { catalogue = [], ingredients = [], index = null } = {}) {
+export function ingredientSaisi(champs, { catalogue = [], ingredients = [], index = null, surveilles = null } = {}) {
   const erreurs = {};
   const produit = reduire(champs?.produit).toLocaleLowerCase('fr-FR');
   const cle = slug(produit);
@@ -298,30 +458,18 @@ export function ingredientSaisi(champs, { catalogue = [], ingredients = [], inde
 
   // Marqueurs, forme et rôle : la nature choisie, sinon l'ingrédient modifié (même produit), sinon le catalogue.
   const choisie = Object.hasOwn(NATURES, champs?.nature ?? '') ? champs.nature : null;
-  let source = null;
-  let jamaisVu = false;
+  let debut = null;
   if (!erreurs.produit) {
-    const modifie = Number.isInteger(index) && estObjet(liste[index]) && slug(liste[index].produit) === cle
-      ? liste[index] : null;
-    const connu = produitConnu(catalogue, produit);
-    jamaisVu = !modifie && !connu;
-    // Produit connu (pas l'ingrédient modifié) : ses repères de préparation ne suivent jamais.
-    const base = modifie ?? (connu ? { ...connu, marqueurs: (Array.isArray(connu.marqueurs) ? connu.marqueurs : [])
-      .filter((m) => !MARQUEURS_PREPARATION.includes(m)) } : null);
-    if (choisie) source = appliquerNature(base ?? { marqueurs: [] }, choisie);
-    else if (base) source = copier(base);
-    else erreurs.nature = 'Choisissez\u00A0: viande, poisson, légume ou autre.';
+    debut = depart(produit, { catalogue, liste, index, choisie, surveilles });
+    if (!debut.source) erreurs.nature = 'Choisissez\u00A0: viande, poisson, légume ou autre.';
   }
   if (Object.keys(erreurs).length) return { erreurs };
 
-  let marqueurs = [...new Set((Array.isArray(source.marqueurs) ? source.marqueurs : [])
-    .filter((m) => VOCABULAIRES.marqueurs.includes(m)))];
-  // Repères : ceux choisis, sinon ceux de la base, sinon (produit jamais vu) celui que le nom annonce.
-  const propose = jamaisVu ? natureProposee(produit)?.repere : null;
-  let reperes = null;
-  if (Array.isArray(champs?.reperes)) reperes = champs.reperes.filter((m) => MARQUEURS_REPERE.includes(m));
-  else if (propose) reperes = [...reperesDe(source), propose];
-  if (reperes) marqueurs = [...marqueurs.filter((m) => !MARQUEURS_REPERE.includes(m)), ...new Set(reperes)];
+  const { source } = debut;
+  // Repères : ceux du départ (proposés compris), puis les seules cases touchées, dans l'ordre des touchers.
+  let marqueurs = debut.marqueurs;
+  for (const { caseId, coche } of changementsDe(champs?.reperes)) marqueurs = appliquerCase(marqueurs, caseId, coche);
+  marqueurs = marqueurs.filter((m) => VOCABULAIRES.marqueurs.includes(m));
   const nature = natureDe({ marqueurs });
   // Rayon : celui choisi, sinon celui de la base retenue, sinon celui de la nature.
   let rayon = NATURES[choisie ?? nature].rayon;

@@ -9,9 +9,9 @@ import { sectionNotes } from './notes.js';
 import {
   etatsCompat, estVous, nomDe, rangerStyles, profilsAgeDe, precautionsDe, texteSeverite, symboleGravite,
 } from './compat.js';
-import { profilsContraints, marqueursDouteux } from '../coeur/compatibilite.js';
+import { marqueursDouteux } from '../coeur/compatibilite.js';
 import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
-import { stylesAttendus } from '../coeur/regles.js';
+import { stylesAttendus, marqueursSurveilles } from '../coeur/regles.js';
 import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 import { estDansCorbeille, platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
@@ -259,16 +259,35 @@ const SOUPCONS = {
   bouillon_viande: 'de la viande',
   gelatine_animale: 'de la gélatine animale',
   graisse_animale: 'de la graisse animale',
+  fruit_coque: 'des fruits à coque entiers',
+  cafeine: 'du café ou du thé',
+  miel: 'du miel',
+  poisson_predateur: 'de l’espadon, du requin ou du marlin',
+  soja: 'du soja',
 };
 
-/** « « bouillon de volaille » contient peut-être de la viande : vérifiez-le dans Modifier. » (gestionnaire) */
-function carteDouteux(plat) {
-  const douteux = marqueursDouteux(plat);
-  if (!douteux.length) return null;
+/**
+ * « « noix » contient peut-être des fruits à coque entiers : vérifiez-le dans Modifier. » ; pour `cru`, « « jambon
+ * cru » est peut-être cru : vérifiez-le dans Modifier. »
+ */
+function texteSoupcon(produit, attendu) {
+  const soupcon = attendu === 'cru'
+    ? 'est peut-être cru'
+    : `contient peut-être ${SOUPCONS[attendu] ?? 'un ingrédient à vérifier'}`;
+  return `«\u00A0${produit}\u00A0» ${soupcon}\u00A0: vérifiez-le dans Modifier.`;
+}
+
+/**
+ * Bandeau « à vérifier » (gestionnaire) : ingrédients dont le nom annonce un repère qu'une règle active surveille et
+ * qu'ils ne portent pas (coeur/compatibilite.js › marqueursDouteux, filtré par `surveilles`). Une ligne par soupçon,
+ * sans doublon. Null sans soupçon.
+ */
+function carteDouteux(plat, surveilles) {
+  const textes = [...new Set(marqueursDouteux(plat, { surveilles })
+    .map(({ produit, attendu }) => texteSoupcon(produit, attendu)))];
+  if (!textes.length) return null;
   return el('section', { class: 'bandeau bandeau-alerte bandeau-colonne compat-douteux' },
-    douteux.map(({ produit, attendu }) => el('p', {},
-      el('span', { 'aria-hidden': 'true' }, '⚠️\u00A0'),
-      `«\u00A0${produit}\u00A0» contient peut-être ${SOUPCONS[attendu] ?? 'un ingrédient à vérifier'}\u00A0: vérifiez-le dans Modifier.`)),
+    textes.map((texte) => el('p', {}, el('span', { 'aria-hidden': 'true' }, '⚠️\u00A0'), texte)),
     el('a', { class: 'lien-fiche', href: `#/modifier/${encodeURIComponent(plat.id)}` }, 'Modifier ›'));
 }
 
@@ -507,7 +526,6 @@ export function creer(ctx) {
     // de la corbeille : toutes ses versions dans la simple liste « Versions », sans rien à demander.
     const etats = jete ? [] : etatsCompat(plat, courant);
     const versionsMontrees = new Set(etats.filter((e) => e.cas !== 'aCreer').map((e) => e.profil.id));
-    const contraints = profilsContraints(courant.profils);
     // Première version qui manque : le bouton unique « Demander à Claude » la demande (demandeDuPlat).
     const versionManquante = gestionnaire && statut !== 'attente' ? versionAttendue(etats) : null;
     const ingredients = plat.ingredients ?? [];
@@ -568,7 +586,8 @@ export function creer(ctx) {
       // d'information (le lien mène à l'écran de l'enfant, rien ne change sur le plat).
       ...profilsAgeDe(courant).map((profil) => sectionAge(profil, precautionsDe(plat, profil, courant), { role: courant.role })),
 
-      gestionnaire && contraints.length && statut !== 'attente' ? carteDouteux(plat) : null,
+      // Ingrédient dont le nom annonce un repère qu'une règle surveille (« jambon cru » sans le repère cru) : gestionnaire.
+      gestionnaire && statut !== 'attente' ? carteDouteux(plat, courant.surveilles ?? marqueursSurveilles(courant.profils)) : null,
 
       statut === 'attente' && !jete
         ? el('section', { class: 'carte' },
