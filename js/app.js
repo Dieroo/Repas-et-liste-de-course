@@ -15,6 +15,7 @@ import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from
 import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
 import { evaluer, bilanCompatibilite } from './coeur/compatibilite.js';
+import { precautionsAge, profilsAvecAge, bilanPrecautions } from './coeur/age.js';
 import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions } from './coeur/import-local.js';
 import { VERSION_INSTRUCTIONS } from './coeur/claude.js';
 import {
@@ -289,6 +290,45 @@ function compat(plat, profil) {
   return parProfil.get(profil);
 }
 
+// Précautions selon l'âge d'un plat pour un profil (coeur/age.js › precautionsAge), jugées sur le plat tel qu'il lui
+// serait servi : la recette, ou la version que `compat` retient pour lui (régime d'un enfant, cas mixte). Gardées comme
+// `compat`, tant que plats et profils sont les mêmes objets : une date, une règle ou une recette changées recalculent
+// tout, partout.
+let memoPrecautions = { plats: null, profils: null, resultats: new WeakMap() };
+
+function precautions(plat, profil) {
+  if (!plat || typeof plat !== 'object' || !profil || typeof profil !== 'object') return precautionsAge(plat, profil);
+  if (memoPrecautions.plats !== etat.plats || memoPrecautions.profils !== etat.profils) {
+    memoPrecautions = { plats: etat.plats, profils: etat.profils, resultats: new WeakMap() };
+  }
+  let parProfil = memoPrecautions.resultats.get(plat);
+  if (!parProfil) {
+    parProfil = new WeakMap();
+    memoPrecautions.resultats.set(plat, parProfil);
+  }
+  if (!parProfil.has(profil)) {
+    parProfil.set(profil, precautionsAge(plat, profil, { variante: compat(plat, profil)?.variante ?? null }));
+  }
+  return parProfil.get(profil);
+}
+
+// Profils qui ont au moins une précaution d'âge active (coeur/age.js › profilsAvecAge), gardés tant que `etat.profils`
+// est le même tableau.
+let memoProfilsAvecAge = { profils: null, resultat: [] };
+
+function profilsAvecAgeCourants() {
+  if (memoProfilsAvecAge.profils !== etat.profils) {
+    memoProfilsAvecAge = { profils: etat.profils, resultat: profilsAvecAge(etat.profils) };
+  }
+  return memoProfilsAvecAge.resultat;
+}
+
+/** Date du téléphone, au fuseau du téléphone : 'AAAA-MM-JJ' (âge de l'enfant, coeur/age.js). */
+function dateDuJour(maintenant = new Date()) {
+  const deux = (n) => String(n).padStart(2, '0');
+  return `${maintenant.getFullYear()}-${deux(maintenant.getMonth() + 1)}-${deux(maintenant.getDate())}`;
+}
+
 // Plats actifs et corbeille (coeur/corbeille.js › separerCorbeille), gardés tant que `etat.plats` est le même tableau :
 // les écrans reçoivent les mêmes listes d'un rendu à l'autre (mémos par tableau, comme le catalogue des produits).
 let memoCorbeille = { plats: null, actifs: [], corbeille: [] };
@@ -327,6 +367,11 @@ function instructionsAJour() {
  * (ECRANS) ; `platsCorbeille` : la corbeille, du plus récent au plus ancien ; `tousLesPlats` : les deux (ajout de
  * recettes, ajout par nom, « déjà dans l'app » des idées de plats, fiche ouverte par un lien).
  * `instructionsAJour` : faux tant que les instructions du projet Claude de cette version n'ont pas été copiées ici.
+ * Précautions selon l'âge (T2c-1) : `aujourdhui`, date du téléphone 'AAAA-MM-JJ' (au fuseau du téléphone, recalculée
+ * à chaque rendu) ; `precautions(plat, profil)`, précautions d'âge du plat tel qu'il serait servi au profil (mémo, comme
+ * `compat`) ; `profilsAvecAge`, profils qui ont une précaution d'âge active (ordre des profils) ;
+ * `empreintePrecautions(profil)`, empreinte de ses `regles` et de sa `naissance`, à relever à l'ouverture de « 🧸 Ce que
+ * <Enfant> mange » et à passer à `actions.enregistrerPrecautions`.
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -350,6 +395,10 @@ function contexteCourant() {
     routePrecedente,
     instructionsAJour: instructionsAJour(),
     compat,
+    aujourdhui: dateDuJour(),
+    precautions,
+    profilsAvecAge: profilsAvecAgeCourants(),
+    empreintePrecautions: donnees.empreintePrecautions,
     actions,
   };
 }
@@ -459,6 +508,71 @@ const actions = {
       return;
     }
     etat.profils = etat.profils.map((profil) => (profil.id === profilId ? { ...profil, regles } : profil));
+  },
+  /**
+   * « 🧸 Ce que <Enfant> mange » (gestionnaire) : règles du profil (liste entière : régime, précautions d'âge, règles
+   * gardées) et date de naissance (`'AAAA-MM-JJ'`, ou null pour l'effacer), par une transaction qui relit le profil
+   * (donnees.js › enregistrerPrecautions). `empreinteOuverture` : `ctx.empreintePrecautions(profil)` relevée à
+   * l'ouverture de l'écran (ou à « Voir les nouveaux »).
+   * En ligne seulement : hors ligne, rien n'est écrit ni mis en file, le brouillon reste sur l'écran. Réussi : appliqué
+   * tout de suite sur ce téléphone, puis annonce « C’est noté. 3 plats repérés comme pas encore pour <Enfant>. » (ou
+   * « C’est noté. »). Un échec imprévu (réseau coupé en route, profil retiré entre-temps) est aussi annoncé.
+   * → promesse de { code, message } (jamais rejetée) : ok (message null), hors_ligne, conflit (réglages changés sur
+   *   l'autre appareil depuis l'ouverture), absent (profil retiré), refuse (pas gestionnaire), echec ; `message` : texte
+   *   à montrer sur l'écran, ou null (ok, refuse, ou personne connectée changée entre-temps).
+   */
+  async enregistrerPrecautions(profilId, { regles, naissance = null, empreinteOuverture } = {}) {
+    const role = roleEffectif(roleDe(etat.utilisateur?.email, etat.donnees.reglages), etat.apercu);
+    if (role !== 'gestionnaire') return { code: 'refuse', message: null };
+    const horsLigne = { code: 'hors_ligne', message: 'Il faut être connecté pour enregistrer ses précautions.' };
+    if (!navigator.onLine) return horsLigne;
+    const nom = nomDuProfil(etat.profils.find((profil) => profil.id === profilId));
+    const echec = `Ce que ${nom} mange n’a pas pu être enregistré. Réessayez.`;
+    const uid = etat.utilisateur.uid;
+    let resultat;
+    try {
+      resultat = await donnees.enregistrerPrecautions(profilId, { regles, naissance, empreinteOuverture });
+    } catch {
+      if (etat.utilisateur?.uid !== uid) return { code: 'echec', message: null };
+      annoncer(echec);
+      return { code: 'echec', message: echec };
+    }
+    const code = resultat?.code;
+    if (etat.utilisateur?.uid !== uid) return { code: code ?? 'echec', message: null };
+    switch (code) {
+      case 'ok':
+        break;
+      case 'hors_ligne':
+        return horsLigne;
+      case 'conflit':
+        return { code, message: 'Ces réglages ont changé sur l’autre appareil.' };
+      case 'absent':
+        annoncer('Ce profil n’existe plus.');
+        return { code, message: 'Ce profil n’existe plus.' };
+      default:
+        annoncer(echec);
+        return { code: 'echec', message: echec };
+    }
+    // Appliqué tout de suite ; la copie de Firestore suit. Pas de rendu ici : l'écran se ferme de lui-même.
+    const date = naissance === '' ? null : naissance;
+    etat.profils = etat.profils.map((profil) => {
+      if (profil.id !== profilId) return profil;
+      const maj = { ...profil, regles };
+      if (date) maj.naissance = date;
+      else delete maj.naissance;
+      return maj;
+    });
+    const profil = etat.profils.find((p) => p.id === profilId);
+    let reperes = 0;
+    if (profil && etat.platsCharges) {
+      // Plats actifs seulement : un plat de la corbeille n'est jamais servi.
+      const { exclus } = bilanPrecautions(platsSepares().actifs, profil, { precautions }) ?? {};
+      reperes = Array.isArray(exclus) ? exclus.length : Number(exclus) || 0;
+    }
+    if (reperes > 1) annoncer(`C’est noté. ${reperes}\u00A0plats repérés comme pas encore pour ${nom}.`);
+    else if (reperes === 1) annoncer(`C’est noté. 1\u00A0plat repéré comme pas encore pour ${nom}.`);
+    else annoncer('C’est noté.');
+    return { code: 'ok', message: null };
   },
   /**
    * Recettes et versions préparées par coeur/paquet.js › preparerImport (CLAUDE.md §8, T2b). Affichées tout de suite
@@ -826,6 +940,11 @@ async function changerAdresse(uid, profilId, email, ecrire) {
 function platsVises(platIds, garder) {
   const voulus = new Set((Array.isArray(platIds) ? platIds : [platIds]).filter((id) => typeof id === 'string' && id));
   return etat.plats.filter((plat) => voulus.has(plat.id) && garder(plat));
+}
+
+/** Prénom d'un profil pour les messages (espaces resserrés), ou « ce profil ». */
+function nomDuProfil(profil) {
+  return String(profil?.nom ?? '').replace(/\s+/g, ' ').trim() || 'ce profil';
 }
 
 /** Demandes satisfaites : closes tout de suite sur ce téléphone (l'envoi suit). */

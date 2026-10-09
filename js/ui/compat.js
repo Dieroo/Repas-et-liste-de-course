@@ -6,11 +6,16 @@
 // ses versions nommées par leur style (« 🌿 Versions pour <Prénom> : mer et végétale ») ; une version d'avant les
 // styles porte son style déduit (compatibilite.js › styleDe, déjà dans `evaluer(…).versions`). Une version qui manque
 // encore (plat « à compléter ») n'est annoncée qu'au gestionnaire : « · végétale à demander ».
+// Précautions selon l'âge (T2c, coeur/age.js) : une ligne 🧸 par profil qui a une précaution d'âge active, sous la
+// ligne 🌿 / ❌ (« 🧸 ❌ Pas avant 18 ans : alcool », « 🧸 ! Déconseillé avant 15 ans : viande crue ») ; dans la vue
+// « Repas et courses », ni ❌ ni ! : la gravité passe par « Pas avant » et « Déconseillé ». Ces règles ne passent
+// jamais par `evaluer` : un enfant qui n'a que des précautions d'âge n'a ni ligne 🌿 / ❌ ni version.
 import { el } from './dom.js';
 import { profilsContraints } from '../coeur/compatibilite.js';
 import { stylesAttendus } from '../coeur/regles.js';
 import { aCompleterSelon } from '../coeur/plats.js';
 import { LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
+import { lignePrecautions as resumePrecautions, precautionsAge, profilsAvecAge, texteBorne } from '../coeur/age.js';
 
 /** Prénom affiché d'un profil. */
 export function nomDe(profil) {
@@ -138,15 +143,112 @@ export function ligneCompat(plat, ctx, { moi = ctx?.moi ?? null, role = ctx?.rol
 }
 
 /**
- * Filtre de Découvrir (et du nombre de plats à noter) pour un profil : écarte les plats qui attendent encore sa
- * version (à créer ou à revoir). Un plat à compléter reste : une de ses versions convient déjà. Null pour un profil
- * sans règle : la file reste celle de T1d.
+ * Filtre des versions pour un profil qui a des règles (régime) : écarte les plats qui attendent encore sa version (à
+ * créer ou à revoir). Un plat à compléter reste : une de ses versions convient déjà. Null pour un profil sans règle de
+ * régime (un enfant qui n'a que des précautions d'âge compris).
  */
-export function garderPour(ctx, profilId) {
+export function garderVersions(ctx, profilId) {
   const profil = profilsContraints(ctx?.profils).find((p) => p.id === profilId);
   if (!profil || typeof ctx?.compat !== 'function') return null;
   return (plat) => {
     const resultat = ctx.compat(plat, profil);
     return !(resultat?.aCreer || resultat?.aRevoir);
   };
+}
+
+/** Profils qui ont au moins une précaution d'âge active, dans l'ordre d'affichage (`ctx.profilsAvecAge`, sinon calculés). */
+export function profilsAgeDe(ctx) {
+  if (Array.isArray(ctx?.profilsAvecAge)) return ctx.profilsAvecAge;
+  return profilsAvecAge(ctx?.profils ?? []);
+}
+
+/**
+ * Précautions d'âge d'un plat pour un profil, sur le plat tel qu'il lui serait servi (`ctx.precautions`, mémorisé par
+ * l'app ; sinon calculées ici, avec la version que `ctx.compat` retient pour lui). → [précaution] (coeur/age.js)
+ */
+export function precautionsDe(plat, profil, ctx) {
+  if (!plat || !profil) return [];
+  if (typeof ctx?.precautions === 'function') return ctx.precautions(plat, profil) ?? [];
+  const variante = typeof ctx?.compat === 'function' ? ctx.compat(plat, profil)?.variante ?? null : null;
+  return precautionsAge(plat, profil, { variante });
+}
+
+/**
+ * Filtre de l'âge pour un profil qui a des précautions d'âge actives : écarte les plats repérés comme pas encore pour
+ * lui (au moins une précaution « Pas avant… »). Un plat « Déconseillé… » reste, avec sa ligne. Null sinon.
+ */
+export function garderAge(ctx, profilId) {
+  const profil = profilsAgeDe(ctx).find((p) => p.id === profilId);
+  if (!profil) return null;
+  return (plat) => !precautionsDe(plat, profil, ctx).some((precaution) => precaution?.severite === 'exclu');
+}
+
+/**
+ * Filtre de Découvrir (file, nombre de plats à noter) et de l'invitation de Plats pour un profil : les versions
+ * (garderVersions) et l'âge (garderAge) à la fois. Null si aucun ne s'applique : la file reste celle de T1d.
+ */
+export function garderPour(ctx, profilId) {
+  const versions = garderVersions(ctx, profilId);
+  const age = garderAge(ctx, profilId);
+  if (!versions || !age) return versions ?? age;
+  return (plat) => versions(plat) && age(plat);
+}
+
+/** « Pas avant 5 ans » ou « Déconseillé avant 15 ans » (sans borne lisible : « À éviter », « Déconseillé »). */
+export function texteSeverite(severite, jusquAMois) {
+  const borne = Number.isFinite(jusquAMois) && jusquAMois > 0 ? texteBorne(jusquAMois) : '';
+  if (severite === 'exclu') return borne ? `Pas avant ${borne}` : 'À éviter';
+  return borne ? `Déconseillé avant ${borne}` : 'Déconseillé';
+}
+
+/** « 🧸 » masqué aux lecteurs d'écran (le texte suffit). */
+const nounours = () => el('span', { 'aria-hidden': 'true' }, '🧸\u00A0');
+
+/**
+ * Symbole de gravité, gestionnaire seulement : « ❌ » (pas avant) ou « ! » dans une pastille (déconseillé), masqués aux
+ * lecteurs d'écran. Null dans la vue « Repas et courses ».
+ */
+export function symboleGravite(severite, role) {
+  if (role !== 'gestionnaire') return null;
+  if (severite === 'exclu') return el('span', { 'aria-hidden': 'true' }, '❌\u00A0');
+  return [el('span', { class: 'compat-attention', 'aria-hidden': 'true' }, '!'), ' '];
+}
+
+/**
+ * Ligne 🧸 d'un profil : « 🧸 ❌ Pas avant 18 ans : alcool + 1 autre » (gestionnaire), « 🧸 Pas avant 18 ans :
+ * alcool + 1 autre » (vue « Repas et courses »). Un texte masqué « Pour <Enfant> : » ouvre la ligne ; avec deux
+ * enfants ou plus, le prénom s'affiche aussi (« 🧸 <Prénom> · … »). Null sans précaution.
+ */
+function morceauAge(profil, precautions, { role, plusieurs }) {
+  const resume = resumePrecautions(precautions);
+  if (!resume) return null;
+  const nom = nomDe(profil);
+  const gestionnaire = role === 'gestionnaire';
+  const courts = (resume.courts ?? []).filter(Boolean).join(', ');
+  const autres = resume.autres > 1 ? ` + ${resume.autres}\u00A0autres` : resume.autres === 1 ? ' + 1\u00A0autre' : '';
+  let classe = 'compat-enfant';
+  if (gestionnaire) classe = resume.severite === 'exclu' ? 'compat-exclu' : 'compat-age-attention';
+  return el('span', { class: `compat-morceau compat-age ${classe}` },
+    el('span', { class: 'visuellement-masque' }, `Pour ${nom}\u00A0: `),
+    nounours(),
+    plusieurs ? el('span', { 'aria-hidden': 'true' }, `${nom}\u00A0· `) : null,
+    symboleGravite(resume.severite, role),
+    `${texteSeverite(resume.severite, resume.jusquAMois)}\u00A0: ${courts}${autres}`);
+}
+
+/**
+ * Lignes 🧸 d'un plat (liste des plats, carte de Découvrir, quel que soit le profil noté), sous la ligne 🌿 / ❌ : une
+ * par profil qui a une précaution d'âge active et que le plat déclenche (sur le plat tel qu'il lui serait servi).
+ * `role` : rôle effectif (sans ❌ ni ! hors gestionnaire).
+ * → Node ou null (rien à dire)
+ */
+export function lignePrecautions(plat, ctx, { role = ctx?.role ?? null } = {}) {
+  if (!plat) return null;
+  const avecAge = profilsAgeDe(ctx);
+  if (!avecAge.length) return null;
+  const plusieurs = avecAge.length > 1;
+  const morceaux = avecAge
+    .map((profil) => morceauAge(profil, precautionsDe(plat, profil, ctx), { role, plusieurs }))
+    .filter(Boolean);
+  return morceaux.length ? el('span', { class: 'compat-lignes-age' }, morceaux) : null;
 }

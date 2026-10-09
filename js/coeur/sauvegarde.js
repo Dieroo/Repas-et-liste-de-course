@@ -9,6 +9,7 @@ import { preparerProfil, trierProfils } from './profils.js';
 import { cheminNote, noteValide } from './notes.js';
 import { egalProfonde } from './edition.js';
 import { stylesAttendus, validerRegles } from './regles.js';
+import { estRegleAge, naissanceLisible } from './age.js';
 import { styleDe } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
 import { STYLES } from './vocabulaire.js';
@@ -29,8 +30,9 @@ const JOUR_MS = 86_400_000;
 const DEFAUTS_PLAT = { type: 'plat', recurrence: 'aucune', statutRecette: 'attente' };
 // Champs ajoutés à la recette dans le fichier.
 const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille'];
-// Champs d'un profil repris à la restauration (ceux qu'écrit coeur/profils.js › preparerProfil, et ses règles, T2a).
-const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion', 'regles'];
+// Champs d'un profil repris à la restauration (ceux qu'écrit coeur/profils.js › preparerProfil, ses règles, T2a, et
+// la date de naissance d'un enfant, T2c).
+const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion', 'regles', 'naissance'];
 // Champs d'un profil jamais exportés (liste fermée ; vide en T1d).
 const EXCLUSIONS_PROFIL = [];
 // Clés de premier niveau comprises par la restauration.
@@ -320,6 +322,12 @@ function validerProfils(bruts, erreurs, avertissements) {
     } else if (brut.regles != null) {
       avertissements.push(`${guillemets(nom)}\u00A0: ses règles sont abîmées dans ce fichier, elles ont été ignorées.`);
     }
+    // Date de naissance (T2c) : gardée si c'est une date réelle « AAAA-MM-JJ », sans la comparer à aujourd'hui.
+    let naissance;
+    if (brut.naissance != null) {
+      if (naissanceLisible(brut.naissance)) naissance = brut.naissance;
+      else avertissements.push('Une date de naissance illisible a été ignorée.');
+    }
     profils.push({
       id,
       nom,
@@ -327,6 +335,7 @@ function validerProfils(bruts, erreurs, avertissements) {
       ...(brut.ordre != null ? { ordre: brut.ordre } : {}),
       coefPortion,
       ...(regles !== undefined ? { regles } : {}),
+      ...(naissance !== undefined ? { naissance } : {}),
     });
   }
   return profils;
@@ -469,6 +478,11 @@ function enLots(ecritures, taille) {
  * versions de la fiche. L'écran coche d'avance celles dont `cocheeParDefaut` est vrai (fiche ⏳ dans l'app) et les
  * passe ici. Recettes comparées sans leurs versions. Une demande de version n'est close que si la version convient.
  * `resume.versionsRemises` : [{ pour, nom, nombre }] (versions remises sur des plats présents, par profil).
+ * Date de naissance (T2c) : un profil présent sans date la reçoit par une écriture séparée (condition
+ * `naissanceAbsente`, pour qu'elle ne soit pas annulée avec ses règles) ; `resume.naissancesRemises` : [nom].
+ * `resume.precautionsARemettre` : [nom] des profils présents dont la date revient, ou dont le fichier porte des
+ * précautions d'âge absentes de l'app sans que leurs règles reviennent : l'écran invite à ouvrir « 🧸 Ce que <Enfant>
+ * mange » (aucune précaution n'est écrite par la restauration sur un profil qui a déjà des règles).
  * → { resume, recettesDifferentes: [{ id, nom, modifieeLe? (Date), appEnAttente, cocheeParDefaut }],
  *     lots: [[{ collection, id, mode: 'fusion' | 'update', donnees, effacer?, condition, clore? }]], demandesAClore,
  *     avertissements, rien }
@@ -508,6 +522,8 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     nonRemis: [],
     reglesRemises: [],
     versionsRemises: [],
+    naissancesRemises: [],
+    precautionsARemettre: [],
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -524,13 +540,31 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
   for (const profil of profilsFichier) {
     if (idsProfilsApp.has(profil.id)) {
       const present = profilsApp.find((p) => p.id === profil.id);
-      if (Array.isArray(profil.regles) && !Array.isArray(present.regles)) {
+      const nomPresent = reduire(present.nom) || profil.nom;
+      const reglesReviennent = Array.isArray(profil.regles) && !Array.isArray(present.regles);
+      if (reglesReviennent) {
         ecrituresProfils.push({
           collection: 'profils', id: profil.id, mode: 'update', donnees: { regles: profil.regles },
           condition: { reglesAbsentes: true },
         });
-        resume.reglesRemises.push(reduire(present.nom) || profil.nom);
+        resume.reglesRemises.push(nomPresent);
       }
+      // Date de naissance : écriture à part, jamais annulée avec les règles (le profil peut avoir déjà les siennes).
+      const naissanceRevient = typeof profil.naissance === 'string' && present.naissance == null;
+      if (naissanceRevient) {
+        ecrituresProfils.push({
+          collection: 'profils', id: profil.id, mode: 'update', donnees: { naissance: profil.naissance },
+          condition: { naissanceAbsente: true },
+        });
+        resume.naissancesRemises.push(nomPresent);
+      }
+      // Précautions d'âge du fichier absentes de l'app, quand ses règles ne reviennent pas : l'écran de l'enfant les
+      // remettra (« plus prudent tout de suite »), jamais la restauration.
+      const codesApp = new Set((Array.isArray(present.regles) ? present.regles : [])
+        .filter(estRegleAge).map((regle) => regle.age?.code));
+      const precautionsAbsentes = !reglesReviennent && (Array.isArray(profil.regles) ? profil.regles : [])
+        .some((regle) => estRegleAge(regle) && !codesApp.has(regle.age?.code));
+      if (naissanceRevient || precautionsAbsentes) resume.precautionsARemettre.push(nomPresent);
       continue;
     }
     const donnees = { ...profil };
@@ -778,6 +812,7 @@ function empreinteRecette(plat) {
  * - `derniereFois` : seulement si elle reste plus récente ;
  * - recette cochée : seulement si la fiche est encore celle de l'aperçu ;
  * - règles d'un profil (`reglesAbsentes`) : seulement s'il n'en a toujours aucune (une liste, même vide, reste) ;
+ * - date de naissance (`naissanceAbsente`) : seulement s'il n'en a toujours aucune ;
  * - versions : seulement celles dont le profil n'a toujours aucune version sur la fiche (`variantesAbsentes` : [pour]),
  *   ou aucune de ce style (`stylesAbsents` : [{ pour, style }], compatibilite.js › styleDe), ajoutées à la fin des
  *   versions lues (celles de la fiche gagnent).
@@ -790,6 +825,7 @@ export function appliquerConditions(ecriture, actuel) {
   if (ecriture.mode !== 'update') return ecriture;
   if (!existe) return null; // plat supprimé entre-temps : jamais recréé à moitié
   if (condition.reglesAbsentes && Array.isArray(actuel.regles)) return null;
+  if (condition.naissanceAbsente && actuel.naissance != null) return null;
   const donnees = { ...ecriture.donnees };
   let effacer = [...(ecriture.effacer ?? [])];
   let clore = ecriture.clore ?? [];

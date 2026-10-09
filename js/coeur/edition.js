@@ -61,6 +61,14 @@ export const FRIGO_JOURS_MAX = 14;
 export const DUREE_MAX = 1440; // minutes
 export const QTE_MAX = 100000;
 
+/**
+ * Repères de préparation (T2c) : ils disent comment la recette sert le produit, pas ce qu'est le produit. Jamais
+ * hérités du catalogue : un filet de bœuf vu dans un carpaccio (`cru`) n'arrive pas cru dans un ragoût. L'ingrédient
+ * modifié (même produit) garde les siens. `lait_cru`, `fruit_coque`, `miel`, `soja`, `poisson_predateur` et `cafeine`
+ * sont des propriétés du produit : ils restent hérités.
+ */
+export const MARQUEURS_PREPARATION = ['cru', 'oeuf_cru', 'alcool_cru'];
+
 const POISSONS = ['poisson', 'fruits_de_mer'];
 const MARQUEURS_DE_NATURE = [...VIANDES, ...POISSONS, 'legume'];
 const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
@@ -169,6 +177,7 @@ const memoire = new WeakMap();
 /**
  * Produits déjà connus, tirés des ingrédients de tous les plats (variantes comprises) : unité et rayon les plus
  * fréquents, marqueurs, forme et rôle de l'occurrence la plus fréquente, quantité habituelle dans l'unité retenue.
+ * Les repères de préparation (MARQUEURS_PREPARATION) ne sont jamais retenus.
  * → [{ produit, unite, rayon, marqueurs, forme?, role?, qte?, nature }] trié par nom. Même tableau `plats` → même
  * résultat (identité), sans recalcul.
  */
@@ -182,7 +191,7 @@ export function catalogueProduits(plats) {
     const cle = slug(produit);
     if (!cle) return;
     const marqueurs = [...new Set((Array.isArray(brut.marqueurs) ? brut.marqueurs : [])
-      .filter((m) => VOCABULAIRES.marqueurs.includes(m)))];
+      .filter((m) => VOCABULAIRES.marqueurs.includes(m) && !MARQUEURS_PREPARATION.includes(m)))];
     const occurrence = { produit, marqueurs };
     if (VOCABULAIRES.unite.includes(brut.unite)) occurrence.unite = brut.unite;
     if (VOCABULAIRES.rayon.includes(brut.rayon)) occurrence.rayon = brut.rayon;
@@ -296,8 +305,11 @@ export function ingredientSaisi(champs, { catalogue = [], ingredients = [], inde
       ? liste[index] : null;
     const connu = produitConnu(catalogue, produit);
     jamaisVu = !modifie && !connu;
-    if (choisie) source = appliquerNature(modifie ?? connu ?? { marqueurs: [] }, choisie);
-    else if (modifie ?? connu) source = copier(modifie ?? connu);
+    // Produit connu (pas l'ingrédient modifié) : ses repères de préparation ne suivent jamais.
+    const base = modifie ?? (connu ? { ...connu, marqueurs: (Array.isArray(connu.marqueurs) ? connu.marqueurs : [])
+      .filter((m) => !MARQUEURS_PREPARATION.includes(m)) } : null);
+    if (choisie) source = appliquerNature(base ?? { marqueurs: [] }, choisie);
+    else if (base) source = copier(base);
     else erreurs.nature = 'Choisissez\u00A0: viande, poisson, légume ou autre.';
   }
   if (Object.keys(erreurs).length) return { erreurs };

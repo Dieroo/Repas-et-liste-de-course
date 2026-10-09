@@ -2583,7 +2583,9 @@ select.champ {
 
 .bilan-carte p { margin: 0; }
 
-.bilan-regime { font-weight: 600; }
+/* Bilan du régime et, pour un enfant, bilan des plats repérés (« 🧸 Selon son âge »). */
+.bilan-regime,
+.bilan-age { font-weight: 600; }
 
 /* « Modifier » : repères d'un ingrédient (« Bouillon de viande »), chacun avec « Retirer ». */
 .bloc-reperes .etiquette-champ { margin-top: 12px; }
@@ -2871,4 +2873,209 @@ select.champ {
   align-self: flex-start;
   margin-top: 4px;
   padding: 0 20px;
+}
+
+/* ——— Précautions selon l'âge (T2c) ——— */
+
+/* Lignes 🧸 d'un plat (liste, Découvrir), sous la ligne 🌿 / ❌ : une par profil. Toujours un texte, jamais la couleur
+   seule (« Pas avant… », « Déconseillé… »). Contrastes : texte sur ocre doux 12,7:1 (clair) et 11,1:1 (sombre) ; texte
+   sur accent doux 12,2:1 et 11,5:1. */
+.compat-lignes-age {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.compat-age { overflow-wrap: anywhere; }
+
+/* Vue « Repas et courses » : pastille ocre, texte normal (jamais discret : c'est une précaution). */
+.compat-enfant {
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: var(--ocre-doux);
+  color: var(--texte);
+  font-weight: 600;
+}
+
+/* « ! » d'une précaution « Déconseillé… » (gestionnaire) : petite pastille ocre. */
+.compat-attention {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.4em;
+  height: 1.4em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--ocre-doux);
+  box-shadow: inset 0 0 0 1px var(--bordure-champ);
+  color: var(--texte);
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: 0.05em;
+}
+
+.compat-age-attention { color: var(--texte); }
+
+/* Fiche : section « 🧸 Pour <Enfant> », une ligne par précaution avec les produits en cause. */
+.liste-precautions-plat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compat-texte.compat-enfant {
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.liste-precautions-plat .compat-age-attention { padding: 4px 0; }
+
+/* Découvrir : ligne 🧸 du profil noté, sous « 🌿 Votre version ». */
+.decouverte-age {
+  grid-column: 1 / -1;
+  justify-self: center;
+  margin: 0;
+  text-align: center;
+}
+
+.decouverte-age .compat-lignes-age { align-items: center; }
+
+/* Réglages : « 🧸 2 précautions à ajouter › » sous la ligne du profil. */
+.lien-precautions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-top: 6px;
+  padding: 8px 16px;
+  border-radius: 14px;
+  background: var(--ocre-doux);
+  color: var(--texte);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* Écran « 🧸 Ce que <Enfant> mange » : section « Selon son âge ». */
+.age-texte {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.liste-precautions {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liste-precautions li + li { border-top: 1px solid var(--bordure); }
+
+/* Une précaution : toute la ligne se touche (48 px au moins), interrupteur à droite. */
+.ligne-precaution {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 56px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.precaution-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.precaution-libelle { font-weight: 600; }
+
+.precaution-etat { font-size: 0.9375rem; }
+
+.precaution-aide {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+.precaution-eteinte .precaution-etat { color: var(--texte-doux); }
+
+/* Interrupteur (case à cocher, rôle switch) : éteint, contour de champ ; allumé, fond olive et curseur clair.
+   Contrastes (éléments graphiques, 3:1 au moins) : contour de champ 3,5:1 sur la surface (clair) et 3,3:1 (sombre) ;
+   olive 5,7:1 et 6,6:1 ; curseur sur olive 5,7:1 et 6,6:1. */
+.interrupteur {
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 32px;
+  margin: 0;
+  border: 2px solid var(--bordure-champ);
+  border-radius: 999px;
+  background: var(--surface);
+  appearance: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.interrupteur::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bordure-champ);
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.interrupteur:checked {
+  border-color: var(--olive);
+  background: var(--olive);
+}
+
+.interrupteur:checked::before {
+  background: var(--surface);
+  transform: translateX(20px);
+}
+
+.interrupteur:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interrupteur,
+  .interrupteur::before { transition: none; }
+}
+
+/* Couleurs imposées par le système : la case native, plus lisible que le dessin. */
+@media (forced-colors: active) {
+  .interrupteur { appearance: auto; }
+  .interrupteur::before { display: none; }
+}
+
+/* « Il faut être connecté pour enregistrer ses précautions. » : au-dessus de « Enregistrer ». */
+.message-barre {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-doux);
+  color: var(--texte);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+body.sans-onglets:has(.message-barre:not([hidden])) main {
+  padding-bottom: calc(var(--hauteur-barre) + 84px + env(safe-area-inset-bottom));
+}
+
+body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
+  bottom: calc(var(--hauteur-barre) + 68px + env(safe-area-inset-bottom));
 }

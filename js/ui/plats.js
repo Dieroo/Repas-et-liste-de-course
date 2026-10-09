@@ -10,7 +10,7 @@ import {
 } from '../coeur/plats.js';
 import { profilsContraints, platsSansVersion } from '../coeur/compatibilite.js';
 import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
-import { ligneCompat, garderPour, nomDe, libellesStyles, rangerStyles } from './compat.js';
+import { ligneCompat, lignePrecautions, garderPour, nomDe, libellesStyles, rangerStyles } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 import { platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
 
@@ -63,6 +63,8 @@ function carteDuPlat(plat, ctx) {
         el('span', { class: 'carte-plat-detail' }, detail),
         ligneDeNotes(plat, ctx.profils),
         ligneCompat(plat, ctx),
+        // « 🧸 ❌ Pas avant 18 ans : alcool » : précautions selon l'âge, sous la ligne 🌿 / ❌ (les deux rôles).
+        lignePrecautions(plat, ctx),
       ),
       el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'),
     ),

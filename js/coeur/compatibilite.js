@@ -5,13 +5,15 @@
 // de son régime (regles.js › stylesAttendus) ; une version sans `style` reçoit un style déduit à la lecture (styleDe),
 // jamais écrit.
 import { slug } from './slug.js';
-import { IMPLICATIONS, SOUS_TYPES_VIANDE, STYLES } from './vocabulaire.js';
+import { STYLES, marqueursEffectifs } from './vocabulaire.js';
 import { TYPES_A_ADAPTER, aAdapterSelon, aCompleterSelon, compteDansLeBilan } from './plats.js';
 import { noteRetenue } from './notes.js';
 import { trierProfils } from './profils.js';
 import { stylesAttendus } from './regles.js';
 
 export { TYPES_A_ADAPTER };
+// Déplacé dans vocabulaire.js (T2c, pour coeur/age.js) ; toujours importable d'ici.
+export { marqueursEffectifs };
 
 const TYPES_EVALUES = ['exclureMarqueurs', 'exclureProduits'];
 const SEVERITES_EVALUEES = ['exclu', 'adaptable'];
@@ -26,18 +28,6 @@ const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !A
 const textes = (valeurs) => (Array.isArray(valeurs) ? valeurs.filter((v) => typeof v === 'string' && v !== '') : []);
 const reduire = (texte) => String(texte ?? '').replace(/\s+/g, ' ').trim();
 const comparer = new Intl.Collator('fr', { sensitivity: 'base' }).compare;
-
-// ——— Marqueurs ———
-
-/** Marqueurs d'un ingrédient, plus ceux qu'ils impliquent : `viande` pour un sous-type, `gelatine_animale` pour `gelatine_porc`… */
-export function marqueursEffectifs(ingredient) {
-  const marqueurs = new Set(textes(ingredient?.marqueurs));
-  for (const marqueur of [...marqueurs]) {
-    if (SOUS_TYPES_VIANDE.includes(marqueur)) marqueurs.add('viande');
-    if (Object.hasOwn(IMPLICATIONS, marqueur)) for (const implique of IMPLICATIONS[marqueur]) marqueurs.add(implique);
-  }
-  return marqueurs;
-}
 
 // ——— Règles ———
 

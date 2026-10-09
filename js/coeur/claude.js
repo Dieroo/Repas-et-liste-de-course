@@ -2,7 +2,8 @@
 // des règles), demande groupée de versions, demande d'idées de plats (T2b+), corrections. Logique pure : ni DOM ni
 // Firebase.
 // Chaque texte porte en deuxième ligne la version des instructions attendue (docs/projet-claude.md, section 0).
-// Les identifiants de profil et leurs règles ne vont qu'au presse-papiers ; jamais d'adresse, de prénom ni d'âge.
+// Les identifiants de profil (slug du prénom) et leurs règles ne vont qu'au presse-papiers, et seulement pour les
+// profils qui ont des règles d'exclusion (profilsContraints) ; jamais d'adresse, de date de naissance ni de règle d'âge.
 // N'importe jamais paquet.js (qui garde la lecture des réponses) : pas de cycle.
 import { decrireRegles, lireRegime, stylesAttendus } from './regles.js';
 import { evaluer, profilsContraints } from './compatibilite.js';
@@ -14,10 +15,10 @@ import { VOCABULAIRES, code, texte } from './vocabulaire.js';
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 3;
+export const VERSION_INSTRUCTIONS = 4;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '38949d3b1ad5';
+export const EMPREINTE_INSTRUCTIONS = '75eec0a050aa';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -75,8 +76,9 @@ function reglesEnCodes(profil) {
 
 /**
  * Ce que mange le profil, pour Claude : la phrase de l'écran du régime (régime reconnu, produits évités), puis, en
- * codes, toute autre règle d'exclusion active qu'elle ne dit pas (règle gardée telle quelle, profil restauré, règle
- * d'âge…) : evaluer les applique, Claude doit les connaître.
+ * codes, toute autre règle d'exclusion active qu'elle ne dit pas (règle gardée telle quelle, profil restauré) :
+ * evaluer les applique, Claude doit les connaître. Une règle d'âge (type precautionAge) n'en est jamais une : ni
+ * evaluer ni ce texte ne la lisent (reglesEnCodes ne retient que exclureMarqueurs et exclureProduits).
  */
 function reglesPourClaude(profil) {
   const phrase = ligne(decrireRegles(profil));

@@ -1,10 +1,14 @@
 // Règles d'un profil (CLAUDE.md §7) : régime choisi à l'écran « Ce que <Prénom> mange », validation des règles
 // venues d'un fichier, description pour Claude. Logique pure : ni DOM ni Firebase.
 // Le modèle du §7 reste entier : toute règle valide est gardée, même d'un type que T2 n'évalue pas.
+// Les précautions d'un jeune enfant (T2c) sont des règles de type `precautionAge` (coeur/age.js) : validées ici,
+// jamais lues par le régime (elles vont dans `autres`), jamais décrites à Claude (decrireRegles ne lit que le régime
+// et `exclureProduits`).
 import { slug } from './slug.js';
 import { VIANDES, VOCABULAIRES, code } from './vocabulaire.js';
 import { deNom } from './notes.js';
 import { typeDe } from './plats.js';
+import { AGE_MAX_MOIS, TYPE_AGE } from './age.js';
 
 export const REGIMES = {
   tout: { libelle: 'Mange de tout', emoji: '🍽️' },
@@ -25,8 +29,11 @@ export const REGLES_MAX = 30;
 export const PRODUITS_MAX = 50;
 
 const TYPES_CONNUS = ['exclureProduits', 'exclureMarqueurs', 'formeViande', 'legumePrincipal', 'proteineChaqueRepas',
-  'aEmporter', 'substitution'];
+  'aEmporter', 'substitution', TYPE_AGE];
 const SEVERITES = ['exclu', 'adaptable', 'preference'];
+// Sévérités d'une précaution d'âge : « Pas avant… » ou « Déconseillé avant… » (jamais une simple préférence).
+const SEVERITES_AGE = ['exclu', 'adaptable'];
+const CODE_AGE = /^[a-z0-9_]+$/;
 const MARQUEURS_VIANDE = ['bouillon_viande', 'gelatine_animale', 'graisse_animale', 'viande'];
 const MARQUEURS_POISSON = ['fruits_de_mer', 'poisson'];
 
@@ -151,6 +158,63 @@ function marqueursPropres(valeurs, { facultatif = false } = {}) {
   return propres;
 }
 
+/**
+ * Liste de marqueurs d'une précaution d'âge : { valeurs } (codes, sans doublon), { inconnu: true } (forme juste, mais
+ * un marqueur d'une version plus récente de l'app) ou null (abîmée : pas une liste de textes, vide alors qu'elle est
+ * obligatoire, trop longue). Absente ou null et facultative → { valeurs: [] }.
+ */
+function marqueursDeLAge(valeurs, { facultatif = false } = {}) {
+  if (valeurs == null && facultatif) return { valeurs: [] };
+  if (!Array.isArray(valeurs) || (!valeurs.length && !facultatif) || valeurs.length > PRODUITS_MAX) return null;
+  if (valeurs.some((valeur) => typeof valeur !== 'string' || !code(valeur))) return null;
+  const propres = [];
+  for (const valeur of valeurs) {
+    const marqueur = code(valeur);
+    if (!VOCABULAIRES.marqueurs.includes(marqueur)) return { inconnu: true };
+    if (!propres.includes(marqueur)) propres.push(marqueur);
+  }
+  return { valeurs: propres };
+}
+
+/**
+ * Précaution d'âge (`precautionAge`, coeur/age.js) lue dans un fichier, à partir de sa copie `regle` (type, id, actif
+ * et sévérité déjà vérifiés). `marqueurs` obligatoire ; `etMarqueurs`, `saufMarqueurs` et `consigne` facultatifs (clé
+ * retirée si vide) ; sévérité « exclu » ou « adaptable » ; `age` : { code `[a-z0-9_]+`, palier entier ≥ 0,
+ * jusquAMois entier de 1 à AGE_MAX_MOIS, garde booléen facultatif }. Structure fausse → {} (abîmée) ; marqueur
+ * inconnu de cette version → { inconnue } (gardée telle quelle) ; code absent du barème → gardé (version future).
+ */
+function validerPrecautionAge(brute, regle) {
+  if (!SEVERITES_AGE.includes(regle.severite)) return {};
+  const listes = {};
+  let inconnu = false;
+  for (const [cle, facultatif] of [['marqueurs', false], ['etMarqueurs', true], ['saufMarqueurs', true]]) {
+    const lue = marqueursDeLAge(brute[cle], { facultatif });
+    if (!lue) return {};
+    if (lue.inconnu) inconnu = true;
+    else listes[cle] = lue.valeurs;
+  }
+  const age = brute.age;
+  if (!estObjet(age)) return {};
+  if (typeof age.code !== 'string' || !CODE_AGE.test(age.code)) return {};
+  if (!Number.isInteger(age.palier) || age.palier < 0) return {};
+  if (!Number.isInteger(age.jusquAMois) || age.jusquAMois < 1 || age.jusquAMois > AGE_MAX_MOIS) return {};
+  if (age.garde != null && typeof age.garde !== 'boolean') return {};
+  if (brute.consigne != null && typeof brute.consigne !== 'string') return {};
+  if (inconnu) return { inconnue: copier(brute) };
+
+  regle.marqueurs = listes.marqueurs;
+  for (const cle of ['etMarqueurs', 'saufMarqueurs']) {
+    if (listes[cle].length) regle[cle] = listes[cle];
+    else delete regle[cle];
+  }
+  const consigne = reduire(brute.consigne);
+  if (consigne) regle.consigne = consigne;
+  else delete regle.consigne;
+  regle.age = copier(age);
+  if (age.garde == null) delete regle.age.garde;
+  return { regle };
+}
+
 /** Une règle du fichier : { regle } (propre), { inconnue: regle } (type pas encore compris, gardée) ou {} (abîmée). */
 function validerRegle(brute) {
   if (!estObjet(brute) || typeof brute.type !== 'string' || !brute.type.trim()) return {};
@@ -182,6 +246,8 @@ function validerRegle(brute) {
       if (!propres.some((p) => slug(p) === slug(nom))) propres.push(nom);
     }
     regle.produits = propres;
+  } else if (brute.type === TYPE_AGE) {
+    return validerPrecautionAge(brute, regle);
   }
   return { regle };
 }
@@ -219,6 +285,27 @@ export function validerRegles(brutes, { nom = '' } = {}) {
     avertissements.push(`Trop de règles${de}\u00A0: seules les ${REGLES_MAX} premières sont gardées.`);
   }
   return { regles, avertissements };
+}
+
+// ——— Marqueurs surveillés ———
+
+/**
+ * Marqueurs que surveille au moins une règle active d'un profil : `marqueurs` des règles `exclureMarqueurs` (régime…)
+ * et `precautionAge` (précautions de l'enfant), sans `saufMarqueurs` ni `etMarqueurs`. Sert aux cases « Repères » de
+ * « Modifier » (T2c-2) : seuls les repères qui changent quelque chose sont proposés. → Set
+ */
+export function marqueursSurveilles(profils) {
+  const surveilles = new Set();
+  for (const profil of Array.isArray(profils) ? profils : []) {
+    for (const regle of Array.isArray(profil?.regles) ? profil.regles : []) {
+      if (!estObjet(regle) || regle.actif === false) continue;
+      if (regle.type !== 'exclureMarqueurs' && regle.type !== TYPE_AGE) continue;
+      for (const marqueur of Array.isArray(regle.marqueurs) ? regle.marqueurs : []) {
+        if (typeof marqueur === 'string' && marqueur) surveilles.add(marqueur);
+      }
+    }
+  }
+  return surveilles;
 }
 
 // ——— Description pour Claude (sans prénom) ———

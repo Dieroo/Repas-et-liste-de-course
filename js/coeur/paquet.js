@@ -244,6 +244,7 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
       champQte: 'qte',
       signaler: (message, pourClaude) => erreurs.push({ message, pourClaude: `${claude} ${pourClaude}` }),
       inconnu,
+      prevenir,
     }));
     if (ingredients.every(Boolean)) donnees.ingredients = ingredients;
     if (statut === 'attente') {
@@ -417,6 +418,7 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
             champQte: 'qtePortion',
             signaler: (message, pourClaude) => erreurs.push({ message, pourClaude: `${claude} ${pourClaude}` }),
             inconnu,
+            prevenir,
           }));
           if (ajouts.every(Boolean)) variante.ajouter = ajouts;
           else ok = false;

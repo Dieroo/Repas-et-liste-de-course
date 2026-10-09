@@ -177,9 +177,9 @@ test('aucune donnée personnelle : ni adresse, ni autre identifiant de profil qu
   for (const [id] of doc.matchAll(/profil-[a-z0-9-]+/g)) assert.ok(PROFILS_PERMIS.includes(id), `profil « ${id} »`);
 });
 
-test('les aliments permis à un profil sans viande gardent leur repère (œufs, fromages, beurre)', () => {
+test('les aliments permis à un profil sans viande gardent leur repère (œufs, fromages, beurre, miel)', () => {
   assert.doesNotMatch(doc, /sans repère particulier/);
   const phrase = doc.split('\n').find((l) => l.startsWith('Ne relèvent pas de la viande'));
   assert.ok(phrase, 'phrase des aliments permis absente');
-  for (const repere of ['`oeuf`', '`laitier`', '`poisson`']) assert.ok(phrase.includes(repere), repere);
+  for (const repere of ['`oeuf`', '`laitier`', '`miel`', '`poisson`']) assert.ok(phrase.includes(repere), repere);
 });
