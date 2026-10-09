@@ -571,6 +571,7 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
   - [x] T2c-2 « Repères à la main » (cases « Repères » par ingrédient dans « Modifier », repères devinés d'après le nom, bandeau « à vérifier ») — publié et essayé sur le téléphone du gestionnaire le 2026-10-09
   - [ ] T2d-1 « Relire les recettes » (carte « 🧸 Relire les recettes » dans Réglages, DEMANDE-PRECAUTIONS par lots de 10, aperçu avec une case par repère, ajouts cochés et retraits décochés, transaction par plat qui n'écrit que les repères, marque « relue par Claude », repères gardés quand une recette est remplacée ou qu'une modification est enregistrée, phrase de l'écran de l'enfant, marque dans la sauvegarde ; instructions du projet Claude en version 5) — pull request ouverte le 2026-10-09, essai sur téléphone à faire
   - [ ] T2d-2 (facultative, décidée après usage) : fromages souvent au lait cru et alcools forts dans le bandeau « à vérifier », « Faire relire par Claude » depuis la fiche, « Tout est juste » sans Claude
+  - À la prochaine livraison (décision du propriétaire, 2026-10-09) : ajouter parmesan et grana padano aux pâtes pressées cuites de `docs/projet-claude.md` (jamais `lait_cru`, exception officielle) ; instructions en version 6. Pecorino non tranché.
   - [ ] T2c-3 « 🧸🎂 Il a grandi » (précautions dont l'âge est passé : « Assouplir », « Retirer » ou « Garder », carte 🧸🎂 sur Semaine ; rien ne s'assouplit sans un toucher)
   - [ ] T2e demandes et notification (« Demander ma version », écran Demandes, ntfy)
 - [ ] T3 Semaine, liste & apéro
