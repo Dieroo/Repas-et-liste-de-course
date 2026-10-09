@@ -131,8 +131,11 @@ export function sectionNotes(ctx, platId) {
       el('fieldset', { class: 'notes-choix' },
         el('legend', { class: 'visuellement-masque' }, `Note ${deNom(nom)}`),
         el('div', { class: 'notes-haut' },
+          // Soi : « Adulte A · vous » ; l'enfant, noté par ses parents : « 🧸 Pour <Enfant> » (T2c-1).
           el('p', { class: 'notes-nom', 'aria-hidden': 'true' },
-            nom, estMoi ? el('span', { class: 'notes-vous' }, ' · vous') : null),
+            estMoi
+              ? [nom, el('span', { class: 'notes-vous' }, ' · vous')]
+              : [el('span', {}, '🧸\u00A0'), `Pour ${nom}`]),
           el('label', { class: 'option-jamais' },
             options[0],
             el('span', { 'aria-hidden': 'true' }, '👎'),

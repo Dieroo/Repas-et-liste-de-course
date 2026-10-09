@@ -6,7 +6,9 @@ import { copier } from './presse-papiers.js';
 import { modeDeCuisson } from './pictos.js';
 import { lireBrouillon } from './brouillon.js';
 import { sectionNotes } from './notes.js';
-import { etatsCompat, estVous, nomDe, rangerStyles } from './compat.js';
+import {
+  etatsCompat, estVous, nomDe, rangerStyles, profilsAgeDe, precautionsDe, texteSeverite, symboleGravite,
+} from './compat.js';
 import { profilsContraints, marqueursDouteux } from '../coeur/compatibilite.js';
 import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
 import { stylesAttendus } from '../coeur/regles.js';
@@ -214,6 +216,41 @@ function sectionVersion({ profil, resultat, cas }, plat, { moi, role }, actions 
     el('h2', {}, emojiTitre ? el('span', { 'aria-hidden': 'true' }, '🌿\u00A0') : null, titre),
     ...contenu,
     actions);
+}
+
+/**
+ * Section « 🧸 Pour <Enfant> » d'un profil qui a des précautions d'âge actives : une ligne par précaution que le plat
+ * (tel qu'il lui serait servi) déclenche, avec les produits en cause et le conseil (« ! Déconseillé avant 15 ans :
+ * viande crue (rôti de bœuf). Cuire à cœur, sans rose (surtout la viande hachée). »). ❌ et ! pour le gestionnaire
+ * seul ; dans la vue « Repas et courses », la gravité passe par « Pas avant » et « Déconseillé ». Pour le gestionnaire,
+ * un lien « Ses précautions › » vers « 🧸 Ce que <Enfant> mange ». Null sans précaution.
+ */
+function sectionAge(profil, precautions, { role }) {
+  const liste = (Array.isArray(precautions) ? precautions : []).filter((p) => p && typeof p === 'object');
+  if (!liste.length) return null;
+  const nom = nomDe(profil);
+  const gestionnaire = role === 'gestionnaire';
+  const lignes = liste.map((precaution) => {
+    const produits = (precaution.produits ?? []).filter(Boolean);
+    const entre = produits.length ? ` (${produits.join(', ')})` : '';
+    const consigne = typeof precaution.consigne === 'string' && precaution.consigne.trim() ? ` ${precaution.consigne.trim()}` : '';
+    let classe = 'compat-texte compat-enfant';
+    if (gestionnaire) classe = precaution.severite === 'exclu' ? 'compat-texte compat-exclu' : 'compat-texte compat-age-attention';
+    return el('li', { class: classe },
+      symboleGravite(precaution.severite, role),
+      `${texteSeverite(precaution.severite, precaution.jusquAMois)}\u00A0: ${precaution.court ?? ''}${entre}.${consigne}`);
+  });
+  return el('section', { class: 'fiche-section section-age' },
+    el('h2', {}, el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), `Pour ${nom}`),
+    el('ul', { class: 'liste-precautions-plat' }, lignes),
+    gestionnaire
+      ? el('a', {
+        class: 'lien-fiche',
+        href: `#/regime/${encodeURIComponent(profil.id)}`,
+        // Repère stable : la section est reconstruite à chaque rendu, le lien remplaçant reprend le focus.
+        'data-repere': `precautions-${profil.id}`,
+      }, 'Ses précautions ›')
+      : null);
 }
 
 // Ce que le nom d'un ingrédient laisse penser, pour la ligne « à vérifier » (gestionnaire).
@@ -499,6 +536,8 @@ export function creer(ctx) {
     if (sansPreneur) carteSansPreneur.maj(courant.profils ?? []);
     // Lien « Modifier › » de l'ingrédient douteux : reconstruit à chaque rendu, son remplaçant reprend le focus.
     const focusDouteux = Boolean(document.activeElement?.closest?.('.compat-douteux'));
+    // Lien « Ses précautions › » d'une section « 🧸 Pour <Enfant> » : de même, retrouvé par son repère.
+    const repereFocus = contenu.contains(document.activeElement) ? document.activeElement.dataset?.repere ?? null : null;
     majActionsRecette();
     const brouillon = lireBrouillon(courant.utilisateur?.uid, id);
     lienModifier.replaceChildren(
@@ -524,6 +563,10 @@ export function creer(ctx) {
       // Version qui manque (gestionnaire) : « Demander à Claude » se place sous la première, et demande sa version.
       ...etats.map((etat) => sectionVersion(etat, plat, { moi: courant.moi, role: courant.role },
         etat === versionManquante ? actionsRecette : null)),
+
+      // « 🧸 Pour <Enfant> » : précautions selon l'âge, après les versions ; gardée sur un plat de la corbeille, à titre
+      // d'information (le lien mène à l'écran de l'enfant, rien ne change sur le plat).
+      ...profilsAgeDe(courant).map((profil) => sectionAge(profil, precautionsDe(plat, profil, courant), { role: courant.role })),
 
       gestionnaire && contraints.length && statut !== 'attente' ? carteDouteux(plat) : null,
 
@@ -592,6 +635,7 @@ export function creer(ctx) {
       const autre = focusGarde === boutonCorbeille ? carteSansPreneur.bouton : boutonCorbeille;
       if (autre.isConnected) autre.focus({ preventScroll: true });
     } else if (focusDouteux) contenu.querySelector('.compat-douteux a')?.focus({ preventScroll: true });
+    else if (repereFocus) contenu.querySelector(`[data-repere="${CSS.escape(repereFocus)}"]`)?.focus({ preventScroll: true });
   }
 
   function toutDessiner() {

@@ -58,6 +58,35 @@ export function lignesVersionsRemises(versionsRemises, profils = []) {
     });
 }
 
+/** Prénoms distincts d'une liste du résumé (textes non vides), dans l'ordre. */
+function prenoms(liste) {
+  const vus = [];
+  for (const nom of Array.isArray(liste) ? liste : []) {
+    const texte = typeof nom === 'string' ? nom.replace(/\s+/g, ' ').trim() : '';
+    if (texte && !vus.includes(texte)) vus.push(texte);
+  }
+  return vus;
+}
+
+/**
+ * Lignes de l'enfant (T2c-1), d'après le résumé (coeur/sauvegarde.js › preparerRestauration) :
+ * - `revient` : « 🧸 La date de naissance de <Enfant> revient. » pour chaque date remise (`resume.naissancesRemises`,
+ *   prénoms) ;
+ * - `aRemettre` : « Ouvrez « 🧸 Ce que <Enfant> mange » pour remettre ses précautions. » pour chaque profil dont la date
+ *   revient ou dont le fichier porte des précautions absentes de l'app (`resume.precautionsARemettre`, prénoms) : la
+ *   restauration ne touche jamais aux règles d'un profil qui en a déjà ; l'écran de l'enfant les recrée, pour son âge,
+ *   au toucher sur « Enregistrer ».
+ * → { revient: [texte], aRemettre: [texte] }
+ */
+export function lignesAge(resume) {
+  const dates = prenoms(resume?.naissancesRemises);
+  const aRemettre = prenoms([...dates, ...prenoms(resume?.precautionsARemettre)]);
+  return {
+    revient: dates.map((nom) => `🧸 La date de naissance de ${nom} revient.`),
+    aRemettre: aRemettre.map((nom) => `Ouvrez «\u00A0🧸 Ce que ${nom} mange\u00A0» pour remettre ses précautions.`),
+  };
+}
+
 /** Date, horodatage Firestore (`toDate()` ou `{ seconds }`) ou texte ISO → Date, ou null. */
 function versDate(valeur) {
   if (valeur == null) return null;
@@ -379,6 +408,8 @@ export function creer(ctx) {
         return [el('section', { class: 'carte resultat-pret' },
           titreResultat('Tout est déjà à jour'),
           el('p', {}, 'L’app contient déjà tout ce qui est dans ce fichier.'),
+          // Précautions de l'enfant absentes de l'app : la restauration ne les remet pas, son écran le fait.
+          lignesAge(preparation?.resume).aRemettre.map((ligne) => el('p', { class: 'aide' }, ligne)),
         )];
       default:
         return [renduApercu(enLigne)];
@@ -409,7 +440,10 @@ export function creer(ctx) {
       ...(resume.reglesRemises ?? []).map((nom) => `🍽️ Ce que ${nom} mange revient.`),
       // Versions du fichier pour un profil que la fiche n'a pas : ajoutées, jamais à la place d'une autre.
       ...lignesVersionsRemises(resume.versionsRemises, courant.profils),
+      // Date de naissance revenue sur un profil présent qui n'en avait pas (écriture à part, T2c-1).
+      ...lignesAge(resume).revient,
     ].filter(Boolean);
+    const aRemettre = lignesAge(resume).aRemettre;
 
     // Ce qui ne change pas
     const identiques = resume.identiques ?? 0;
@@ -452,6 +486,11 @@ export function creer(ctx) {
         ? el('div', { class: 'apercu-bloc' },
           el('h3', {}, 'Ce qui revient'),
           el('ul', { class: 'liste-revient' }, revient.map((ligne) => el('li', {}, ligne))))
+        : null,
+
+      // Précautions de l'enfant : jamais remises par la restauration (règles d'un profil présent), recréées par son écran.
+      aRemettre.length
+        ? el('div', { class: 'apercu-bloc' }, aRemettre.map((ligne) => el('p', { class: 'aide' }, ligne)))
         : null,
 
       recettesDifferentes.length

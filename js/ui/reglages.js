@@ -1,11 +1,17 @@
 // Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde.
+// Profil d'un enfant (T2c) : « 🧸 Ce que <Enfant> mange › » ouvre l'écran de ses précautions selon l'âge ; la ligne
+// du profil donne son âge (« · 🧸 4 ans ») et, si sa date demande des précautions que ses règles n'ont pas encore
+// (restauration, règle abîmée retirée, barème complété), « 🧸 N précautions à ajouter › ». Calcul seulement : rien
+// n'est écrit avant « Enregistrer » sur l'écran de l'enfant.
 import { el, enteteVue, etatVide, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
+import { avecEcranAge, aujourdhuiDe } from './regime.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
 import { dateDeSauvegarde, joursDepuis } from '../coeur/sauvegarde.js';
 import { REGIMES, lireRegime } from '../coeur/regles.js';
 import { VERSION_INSTRUCTIONS } from '../coeur/claude.js';
+import { ageEnMois, estRegleAge, reglesSelonAge, texteAge } from '../coeur/age.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -41,6 +47,30 @@ function mentionRegime(profil) {
   return `${REGIMES[regime].emoji} ${REGIMES[regime].libelle}`;
 }
 
+/** « 🧸 4 ans » : âge du profil, s'il a une date de naissance lisible ; null sinon. */
+function mentionAge(profil, aujourdhui) {
+  if (typeof profil?.naissance !== 'string' || !profil.naissance) return null;
+  const mois = ageEnMois(profil.naissance, aujourdhui);
+  // Insécables : « 🧸 3 ans » ne se coupe pas en fin de ligne.
+  return mois === null ? null : `🧸\u00A0${texteAge(mois).replace(/ /g, '\u00A0')}`;
+}
+
+/**
+ * Précautions que la date de naissance demande et que les règles enregistrées n'ont pas encore (à ajouter ou à
+ * renforcer, coeur/age.js › reglesSelonAge) : 0 sans date. Calcul pur, aucune écriture.
+ */
+function precautionsAAjouter(profil, aujourdhui) {
+  if (typeof profil?.naissance !== 'string' || !profil.naissance) return 0;
+  const { ajoutees = [], durcies = [] } = reglesSelonAge(profil.naissance, aujourdhui, profil.regles ?? []) ?? {};
+  return ajoutees.length + durcies.length;
+}
+
+/** Vrai si le profil a une date de naissance ou des précautions selon l'âge. */
+function avecPrecautions(profil) {
+  return (typeof profil?.naissance === 'string' && profil.naissance !== '')
+    || (Array.isArray(profil?.regles) && profil.regles.some(estRegleAge));
+}
+
 /** `lireCtx()` donne l'état à jour au moment d'enregistrer (les profils ont pu changer entre-temps). */
 function ouvrirFicheProfil(lireCtx, existant) {
   const nomAffiche = existant?.nom || 'ce profil';
@@ -62,15 +92,30 @@ function ouvrirFicheProfil(lireCtx, existant) {
       value: existant?.email ?? '',
       oninput: () => { erreurs.email.hidden = true; },
     });
+    // Passage de « Enfant » à « Adulte » d'un profil qui a une date ou des précautions selon l'âge : elles restent.
+    const aidePassage = el('p', { class: 'aide', hidden: true });
+    const zonePassage = el('div', { role: 'status' }, aidePassage);
+    const majPassage = () => {
+      const choisi = portions.map((l) => l.querySelector('input')).find((i) => i.checked);
+      const montrer = Boolean(existant) && avecPrecautions(existant) && Number(choisi?.value) === 1;
+      const texte = montrer
+        ? `Ses précautions selon l’âge restent en place. Pour les retirer\u00A0: «\u00A0🧸 Ce que ${nomAffiche} mange\u00A0».`
+        : '';
+      if (aidePassage.textContent !== texte) aidePassage.textContent = texte;
+      aidePassage.hidden = !texte;
+    };
     const portions = PORTIONS.map((p) => el('label', { class: 'choix' },
       el('input', {
         type: 'radio', name: 'portion', value: String(p.valeur),
         checked: (existant?.coefPortion ?? 1) === p.valeur,
+        onchange: majPassage,
       }),
       el('span', {}, p.libelle),
     ));
+    majPassage();
 
     // « Ce que <Prénom> mange » : écran à part (les changements de la feuille non enregistrés y sont abandonnés).
+    // Enfant (portion d'enfant, date de naissance ou précautions d'âge) : « 🧸 Ce que <Enfant> mange › ».
     const ligneRegime = existant
       ? el('button', {
         class: 'bouton bouton-secondaire bouton-plein ligne-regime',
@@ -79,7 +124,9 @@ function ouvrirFicheProfil(lireCtx, existant) {
           fermer();
           location.hash = `#/regime/${encodeURIComponent(existant.id)}`;
         },
-      }, `🍽️ Ce que ${nomAffiche} mange\u00A0: ${regimeDe(existant).libelle} ›`)
+      }, avecEcranAge(existant)
+        ? [el('span', { 'aria-hidden': 'true' }, '🧸'), `Ce que ${nomAffiche} mange ›`]
+        : `🍽️ Ce que ${nomAffiche} mange\u00A0: ${regimeDe(existant).libelle} ›`)
       : null;
 
     const boutonRetrait = existant
@@ -134,6 +181,7 @@ function ouvrirFicheProfil(lireCtx, existant) {
       el('div', { class: 'choix-ligne' }, portions),
     ),
     message('coefPortion'),
+    zonePassage,
     ligneRegime,
     el('div', { class: 'actions-feuille' },
       el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' }, 'Enregistrer'),
@@ -268,6 +316,20 @@ export function creer(ctx) {
 
   const lireCtx = () => courant;
 
+  /** « 🧸 2 précautions à ajouter › » sous la ligne d'un enfant dont les règles sont en retard sur sa date ; null sinon. */
+  function lienAAjouter(profil, aujourdhui) {
+    const nombre = precautionsAAjouter(profil, aujourdhui);
+    if (!nombre) return null;
+    return el('a', {
+      class: 'lien-precautions',
+      href: `#/regime/${encodeURIComponent(profil.id)}`,
+      'data-cle': `precautions-${profil.id}`,
+    },
+    el('span', { 'aria-hidden': 'true' }, '🧸'),
+    el('span', {}, nombre > 1 ? `${nombre}\u00A0précautions à ajouter ›` : '1\u00A0précaution à ajouter ›'),
+    el('span', { class: 'visuellement-masque' }, ` pour ${profil.nom}`));
+  }
+
   // ——— Sauvegarde ———
   const etatSauvegarde = el('p', { class: 'sauvegarde-etat' });
   // Aide gardée d'un rendu à l'autre, jusqu'à la sortie de l'écran. Pas de zone annoncée ici : un seul message
@@ -325,6 +387,7 @@ export function creer(ctx) {
       );
       return;
     }
+    const aujourdhui = aujourdhuiDe(courant);
     listeProfils.replaceChildren(
       el('div', { class: 'section-titre' }, el('h2', {}, 'Profils du foyer')),
       profils.length
@@ -334,11 +397,12 @@ export function creer(ctx) {
             el('span', { class: 'carte-plat-texte' },
               el('span', { class: 'carte-plat-nom' }, profil.nom),
               el('span', { class: 'carte-plat-detail' },
-                [libellePortion(profil.coefPortion), profil.email || 'sans adresse', mentionRegime(profil)]
+                [libellePortion(profil.coefPortion), profil.email || 'sans adresse', mentionRegime(profil), mentionAge(profil, aujourdhui)]
                   .filter(Boolean).join(' · ')),
             ),
             el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'),
-          ))))
+          ),
+          lienAAjouter(profil, aujourdhui))))
         : el('p', { class: 'texte-doux' }, 'Ajoutez les membres du foyer\u00A0: les deux adultes et l’enfant.'),
       el('button', {
         class: 'bouton bouton-secondaire bouton-plein',

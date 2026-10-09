@@ -12,9 +12,14 @@ export const VOCABULAIRES = {
     'epicerie_sucree', 'boulangerie', 'surgeles', 'boissons', 'hygiene', 'entretien', 'divers'],
   // T2a : `graisse_animale` (saindoux, graisse de canard ou d'oie, suif ; jamais le beurre ni la crème) et
   // `gelatine_animale` (toute gélatine animale, feuilles ou poudre ; l'agar-agar ne porte rien).
+  // T2c (précautions d'un jeune enfant, coeur/age.js) : `cru` (viande, charcuterie, poisson ou fruits de mer servis
+  // crus ou peu cuits), `lait_cru`, `fruit_coque` (entiers ou en morceaux), `cafeine` (thé, cola… ; `cafe` l'implique),
+  // `miel`, `poisson_predateur` (espadon, requin, marlin ; implique `poisson`), `soja` (jamais la sauce soja). Le
+  // vocabulaire ne fait que s'agrandir : une fiche ou une sauvegarde d'avant reste valide.
   marqueurs: ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie', 'poisson', 'fruits_de_mer',
     'bouillon_viande', 'gelatine_porc', 'oeuf', 'oeuf_cru', 'laitier', 'alcool_cru', 'cafe', 'legume', 'feculent',
-    'graisse_animale', 'gelatine_animale'],
+    'graisse_animale', 'gelatine_animale', 'cru', 'lait_cru', 'fruit_coque', 'cafeine', 'miel', 'poisson_predateur',
+    'soja'],
   appareil: ['plaque', 'four', 'cookeo', 'airfryer', 'monsieur_cuisine'],
   forme: ['hachee', 'fine', 'morceaux', 'effilochable'],
   role: ['principal', 'incorpore'],
@@ -30,10 +35,14 @@ export const SOUS_TYPES_VIANDE = ['boeuf', 'porc', 'volaille', 'agneau', 'charcu
 export const VIANDES = ['viande', ...SOUS_TYPES_VIANDE];
 
 /**
- * Marqueurs impliqués par un autre, appliqués à la lecture (compatibilite.js › marqueursEffectifs), jamais écrits
- * dans les fiches : une fiche marquée `gelatine_porc` reste juste sans être réécrite. `cafeine` sert à T2c.
+ * Marqueurs impliqués par un autre, appliqués à la lecture (marqueursEffectifs), jamais écrits dans les fiches : une
+ * fiche marquée `gelatine_porc` reste juste sans être réécrite. `cafe` vaut aussi `cafeine` (précautions de l'enfant,
+ * T2c) ; `poisson_predateur` vaut aussi `poisson`, même si le repère `poisson` a été oublié.
  */
-export const IMPLICATIONS = { gelatine_porc: ['gelatine_animale'], cafe: ['cafeine'] };
+export const IMPLICATIONS = { gelatine_porc: ['gelatine_animale'], cafe: ['cafeine'], poisson_predateur: ['poisson'] };
+
+// Ce qu'un repère `cru` doit accompagner pour avoir un effet (marqueurs effectifs).
+const CRUS_POSSIBLES = ['viande', 'poisson', 'fruits_de_mer'];
 
 const CHAMPS_INGREDIENT = ['produit', 'qte', 'qtePortion', 'unite', 'rayon', 'marqueurs', 'forme', 'role'];
 
@@ -60,8 +69,26 @@ export function texte(valeur) {
 
 export const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 
+const textes = (valeurs) => (Array.isArray(valeurs) ? valeurs.filter((v) => typeof v === 'string' && v !== '') : []);
+
 /** « `a`, `b`, `c` » : valeurs permises, recopiées pour Claude. */
 export const liste = (valeurs) => valeurs.map((v) => `\`${v}\``).join(', ');
+
+// ——— Marqueurs effectifs ———
+
+/**
+ * Marqueurs d'un ingrédient, plus ceux qu'ils impliquent : `viande` pour un sous-type, `gelatine_animale` pour
+ * `gelatine_porc`, `cafeine` pour `cafe`, `poisson` pour `poisson_predateur`. Déplacé ici depuis compatibilite.js
+ * (qui le réexporte) pour que coeur/age.js s'en serve sans importer compatibilite.js.
+ */
+export function marqueursEffectifs(ingredient) {
+  const marqueurs = new Set(textes(ingredient?.marqueurs));
+  for (const marqueur of [...marqueurs]) {
+    if (SOUS_TYPES_VIANDE.includes(marqueur)) marqueurs.add('viande');
+    if (Object.hasOwn(IMPLICATIONS, marqueur)) for (const implique of IMPLICATIONS[marqueur]) marqueurs.add(implique);
+  }
+  return marqueurs;
+}
 
 // ——— Validation d'un ingrédient ———
 
@@ -69,8 +96,11 @@ export const liste = (valeurs) => valeurs.map((v) => `\`${v}\``).join(', ');
  * Ingrédient d'une recette (`qte`) ou d'une variante (`qtePortion`). → l'ingrédient propre, ou null (erreurs
  * signalées par `signaler(message, pourClaude)` ; `inconnu()` appelé si un champ n'est pas reconnu).
  * `position` : { affiche, claude } (où se trouve l'ingrédient, pour les messages).
+ * `prevenir(message, pourClaude)` (facultatif) : avertissements, jamais bloquants (T2c) : `cru` sans viande, poisson
+ * ni fruits de mer (le repère est sans effet) ; `poisson_predateur` sans le repère `poisson`. Aucune erreur nouvelle :
+ * une fiche ou une sauvegarde valide le reste.
  */
-export function validerIngredient(brut, { position, champQte, signaler, inconnu }) {
+export function validerIngredient(brut, { position, champQte, signaler, inconnu, prevenir = null }) {
   const nomProduit = texte(brut?.produit).toLocaleLowerCase('fr-FR');
   const affiche = nomProduit ? `${position.affiche} (${nomProduit})` : position.affiche;
   const claude = nomProduit ? `${position.claude} « ${nomProduit} »` : position.claude;
@@ -128,6 +158,18 @@ export function validerIngredient(brut, { position, champQte, signaler, inconnu 
     }
   }
   ingredient.marqueurs = marqueurs;
+  if (typeof prevenir === 'function' && nomProduit) {
+    const avertir = (message, pourClaude) => prevenir(`${position.affiche}\u00A0: ${message}`, `${claude} : ${pourClaude}`);
+    const effectifs = marqueursEffectifs({ marqueurs });
+    if (marqueurs.includes('cru') && !CRUS_POSSIBLES.some((m) => effectifs.has(m))) {
+      avertir(`«\u00A0${nomProduit}\u00A0» est marqué cru sans être une viande ni un poisson\u00A0: le repère est sans effet.`,
+        '`cru` sans `viande`, `poisson` ni `fruits_de_mer` : repère sans effet');
+    }
+    if (marqueurs.includes('poisson_predateur') && !marqueurs.includes('poisson')) {
+      avertir(`«\u00A0${nomProduit}\u00A0» est un poisson\u00A0: ajoutez aussi le repère poisson.`,
+        '`poisson_predateur` sans `poisson` : ajoute aussi `poisson`');
+    }
+  }
 
   const forme = code(brut.forme);
   if (marqueurs.some((m) => VIANDES.includes(m))) {

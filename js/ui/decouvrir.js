@@ -5,7 +5,7 @@ import { el, etatVide, pastille, annoncer } from './dom.js';
 import { vignetteDuPlat } from './plats.js';
 import { modeDeCuisson } from './pictos.js';
 import { carteQuiEtesVous } from './relier.js';
-import { garderPour } from './compat.js';
+import { garderPour, garderVersions, garderAge, lignePrecautions } from './compat.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, visuelDuPlat } from '../coeur/plats.js';
 import {
   GESTES,
@@ -100,6 +100,11 @@ export function creer(ctx) {
   const compteur = el('p', { class: 'decouvrir-compteur', hidden: true }, compteurVisible, compteurMasque);
   const aide = el('p', { class: 'decouvrir-aide', hidden: true },
     'Sans réponse, un plat compte comme «\u00A0Pourquoi pas\u00A0».');
+  // « 🧸 3 plats repérés ne sont pas encore pour son âge : ils restent hors de sa file. » (profil noté qui a des
+  // précautions d'âge), tant que des cartes restent ; l'écran de fin le redit.
+  const texteAideAge = el('span', {});
+  const aideAge = el('p', { class: 'decouvrir-aide decouvrir-aide-age', hidden: true },
+    el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), texteAideAge);
   const zoneRelier = el('div', { class: 'zone-relier', hidden: true });
 
   const choixProfils = el('div', { class: 'choix-profils' });
@@ -116,8 +121,11 @@ export function creer(ctx) {
   const texteVersion = el('span', {});
   const version = el('p', { class: 'decouverte-version compat-version', hidden: true },
     el('span', { 'aria-hidden': 'true' }, '🌿\u00A0'), texteVersion);
+  // « 🧸 ! Déconseillé avant 15 ans : viande crue » : précautions selon l'âge du profil noté (les plats « Pas avant… »
+  // sont hors de sa file). Remplacée à chaque carte posée.
+  const zoneAge = el('p', { class: 'decouverte-age', hidden: true });
   const carte = el('article', { class: 'carte-decouverte', 'aria-labelledby': titre.id },
-    visuel, ruban, titre, detail, ingredients, version);
+    visuel, ruban, titre, detail, ingredients, version, zoneAge);
   // La scène coupe ce qui dépasse sur les côtés : la carte qui sort ne crée jamais de défilement horizontal.
   const scene = el('div', { class: 'scene-decouverte', hidden: true }, carte);
   const zoneEtat = el('div', { class: 'zone-etat', hidden: true });
@@ -155,6 +163,7 @@ export function creer(ctx) {
     el('header', { class: 'decouvrir-entete' }, titreEcran, compteur),
     zoneRelier,
     aide,
+    aideAge,
     groupeProfils,
     scene,
     zoneEtat,
@@ -340,7 +349,12 @@ export function creer(ctx) {
       : '';
     if (texteVersion.textContent !== texte) texteVersion.textContent = texte;
     version.hidden = !texte;
-    ruban.textContent = `Pour ${profil.nom}`;
+    // Une ligne par enfant que le plat concerne, quel que soit le profil noté (comme la liste des plats).
+    const ligneAge = lignePrecautions(plat, courant);
+    zoneAge.replaceChildren(...(ligneAge ? [ligneAge] : []));
+    zoneAge.hidden = !ligneAge;
+    // « 🧸 Pour Enfant » : on note à la place de l'enfant (le nounours est masqué aux lecteurs d'écran).
+    ruban.replaceChildren(el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), `Pour ${profil.nom}`);
     ruban.hidden = estMoi;
     // TalkBack : « J’adore, bouton, Gratin de pâtes au jambon, pour Enfant ».
     const decrit = estMoi ? titre.id : `${titre.id} ${ruban.id}`;
@@ -505,8 +519,8 @@ export function creer(ctx) {
     for (const radio of radios) {
       const reste = nombreANoter(courant.plats, radio.id, { garder: garderPour(courant, radio.id) });
       radio.input.checked = radio.id === profilChoisi;
-      // Plats qui attendent leur version : pas encore notés, ils arriveront plus tard.
-      const plusTard = !reste && enAttente(radio.id) > 0;
+      // Plats qui attendent leur version, ou pas encore pour son âge : pas encore notés, ils arriveront plus tard.
+      const plusTard = !reste && (enAttente(radio.id) > 0 || ecartesParAge(radio.id) > 0);
       radio.compte.textContent = reste ? `${reste}\u00A0à noter` : plusTard ? 'plus rien pour l’instant' : 'tout est noté';
       // TalkBack : « Adulte A, 12 plats à noter ».
       let combien = 'aucun plat';
@@ -516,10 +530,25 @@ export function creer(ctx) {
     }
   }
 
-  /** Plats pas encore notés par ce profil mais écartés de sa file : ils attendent sa version. */
+  /** Plats pas encore notés par ce profil et gardés par le filtre de l'âge (tous, sans filtre d'âge). */
+  function nombreSelonAge(profilId) {
+    const age = garderAge(courant, profilId);
+    return nombreANoter(courant.plats, profilId, age ? { garder: age } : {});
+  }
+
+  /**
+   * Plats pas encore notés par ce profil mais écartés de sa file parce qu'ils attendent sa version (garderVersions) ;
+   * un plat écarté aussi par l'âge compte avec l'âge : il n'arrivera pas avec sa version.
+   */
   function enAttente(profilId) {
-    const tous = nombreANoter(courant.plats, profilId);
-    return Math.max(0, tous - nombreANoter(courant.plats, profilId, { garder: garderPour(courant, profilId) }));
+    if (!garderVersions(courant, profilId)) return 0;
+    return Math.max(0, nombreSelonAge(profilId) - nombreANoter(courant.plats, profilId, { garder: garderPour(courant, profilId) }));
+  }
+
+  /** Plats pas encore notés par ce profil mais écartés de sa file : repérés comme pas encore pour son âge (garderAge). */
+  function ecartesParAge(profilId) {
+    if (!garderAge(courant, profilId)) return 0;
+    return Math.max(0, nombreANoter(courant.plats, profilId) - nombreSelonAge(profilId));
   }
 
   /** « 2 plats attendent votre version : ils arriveront ici dès qu'elle existera. » ; '' s'il n'y en a pas. */
@@ -529,6 +558,24 @@ export function creer(ctx) {
     return attente > 1
       ? `${attente}\u00A0plats attendent ${version}\u00A0: ils arriveront ici dès qu’elle existera.`
       : `1\u00A0plat attend ${version}\u00A0: il arrivera ici dès qu’elle existera.`;
+  }
+
+  /**
+   * « 3 plats repérés ne sont pas encore pour son âge : ils restent hors de sa file. » (sans le 🧸, posé à part et
+   * masqué aux lecteurs d'écran) ; '' s'il n'y en a pas. Aucune promesse de version : ils viendront avec l'âge.
+   */
+  function phraseAge(ecartes, { estMoi }) {
+    if (!ecartes) return '';
+    const age = estMoi ? 'votre âge' : 'son âge';
+    const file = estMoi ? 'votre file' : 'sa file';
+    return ecartes > 1
+      ? `${ecartes}\u00A0plats repérés ne sont pas encore pour ${age}\u00A0: ils restent hors de ${file}.`
+      : `1\u00A0plat repéré n’est pas encore pour ${age}\u00A0: il reste hors de ${file}.`;
+  }
+
+  /** Paragraphe de l'écran de fin : la phrase d'âge, précédée d'un 🧸 masqué aux lecteurs d'écran. */
+  function paragrapheAge(texte, classe = '') {
+    return texte ? el('p', { class: classe || null }, el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), texte) : null;
   }
 
   function majCompteur(reste) {
@@ -585,6 +632,8 @@ export function creer(ctx) {
     const { profil, estMoi } = choisi;
     const gestes = visite.filter((trace) => trace.profilId === profil.id);
     const attente = phraseAttente(enAttente(profil.id), choisi);
+    const age = phraseAge(ecartesParAge(profil.id), choisi);
+    const plusTard = Boolean(attente || age);
     const autres = notables
       .filter((notable) => notable.profil.id !== profil.id)
       .map((notable) => ({ ...notable, reste: nombreANoter(courant.plats, notable.profil.id, { garder: garderPour(courant, notable.profil.id) }) }))
@@ -618,26 +667,30 @@ export function creer(ctx) {
 
     if (!gestes.length) {
       return {
-        cle: `tous|${profil.id}|${profil.nom}|${estMoi}|${attente}|${cleAutres}`,
+        cle: `tous|${profil.id}|${profil.nom}|${estMoi}|${attente}|${age}|${cleAutres}`,
         maj,
-        construire: () => focalisable(etatVide(attente
+        construire: () => focalisable(etatVide(plusTard
           ? {
             emoji: '👍',
             teinte: 'olive',
             titre: estMoi ? 'Plus rien à noter pour l’instant' : `Plus rien à noter pour ${profil.nom} pour l’instant`,
-            texte: `${attente} Vos notes se changent sur chaque fiche.`,
+            texte: attente || null,
           }
           : {
             emoji: '👍',
             teinte: 'olive',
             titre: estMoi ? 'Tous les plats sont notés' : `Tous les plats sont notés pour ${profil.nom}`,
             texte: 'Les nouveaux plats apparaîtront ici dès leur ajout. Vos notes se changent sur chaque fiche.',
-          }, ...boutonsAutres(), voirPlats())),
+          },
+          // Phrase d'âge à part : ces plats ne viendront pas avec une version, mais avec l'âge.
+          plusTard ? paragrapheAge(age) : null,
+          plusTard ? el('p', {}, 'Vos notes se changent sur chaque fiche.') : null,
+          ...boutonsAutres(), voirPlats())),
       };
     }
 
     return {
-      cle: `fin|${profil.id}|${profil.nom}|${estMoi}|${gestes.map((g) => `${g.platId}:${g.apres}:${g.nom}`).join(',')}|${attente}|${cleAutres}`,
+      cle: `fin|${profil.id}|${profil.nom}|${estMoi}|${gestes.map((g) => `${g.platId}:${g.apres}:${g.nom}`).join(',')}|${attente}|${age}|${cleAutres}`,
       maj,
       construire: () => {
         const { adore, pourquoiPas, jamais } = bilan(gestes.map((trace) => ({ note: trace.apres })));
@@ -652,6 +705,7 @@ export function creer(ctx) {
             el('span', { 'aria-hidden': 'true' }, `${debut}${parts.map(([nombre, emoji]) => `${nombre}\u00A0${emoji}`).join(', ')}.`),
             el('span', { class: 'visuellement-masque' }, `${debut}${parts.map(([nombre, , mot]) => `${nombre} ${mot}`).join(', ')}.`)),
           attente ? el('p', { class: 'texte-doux' }, attente) : null,
+          paragrapheAge(age, 'texte-doux'),
           el('section', { class: 'visite' },
             el('h3', {}, 'Pendant cette visite'),
             el('ul', { class: 'liste-visite' }, gestes.map((trace) => el('li', {},
@@ -760,6 +814,9 @@ export function creer(ctx) {
 
     majCompteur(choisi ? nombreANoter(courant.plats, choisi.profil.id, { garder: garderPour(courant, choisi.profil.id) }) : 0);
     aide.hidden = !carteVisible;
+    const texteAge = carteVisible && choisi ? phraseAge(ecartesParAge(choisi.profil.id), choisi) : '';
+    if (texteAideAge.textContent !== texteAge) texteAideAge.textContent = texteAge;
+    aideAge.hidden = !texteAge;
 
     // « Qui êtes-vous ? » en tête d'écran tant que la personne n'est pas reconnue et ne note pas pour l'enfant.
     if (montrerRelier) {

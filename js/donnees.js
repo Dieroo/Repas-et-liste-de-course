@@ -337,6 +337,96 @@ export function enregistrerRegles(profilId, regles) {
   return lot.commit();
 }
 
+// ——— Précautions selon l'âge (T2c-1) ———
+
+/** Texte stable d'une valeur : clés des tables triées (l'ordre lu sur le serveur peut différer de la copie locale). */
+function texteStable(valeur) {
+  if (Array.isArray(valeur)) return `[${valeur.map((element) => (element === undefined ? 'null' : texteStable(element))).join(',')}]`;
+  if (valeur && typeof valeur === 'object') {
+    const cles = Object.keys(valeur).filter((cle) => valeur[cle] !== undefined).sort();
+    return `{${cles.map((cle) => `${JSON.stringify(cle)}:${texteStable(valeur[cle])}`).join(',')}}`;
+  }
+  return JSON.stringify(valeur === undefined ? null : valeur);
+}
+
+/**
+ * Empreinte de ce que « 🧸 Ce que <Enfant> mange » enregistre : `regles` (absent et `[]` restent distincts) et
+ * `naissance` (absente = null). Indépendante de l'ordre des clés. Un profil absent → empreinte de { null, null }.
+ */
+export function empreintePrecautions(profil) {
+  return texteStable({ regles: profil?.regles ?? null, naissance: profil?.naissance ?? null });
+}
+
+/**
+ * Empreinte attendue, telle que l'écran l'a relevée à l'ouverture : le texte rendu par empreintePrecautions, les
+ * valeurs elles-mêmes ({ regles, naissance }), ou leur JSON. → texte comparable à empreintePrecautions(profil).
+ */
+function empreinteAttendue(empreinteOuverture) {
+  if (empreinteOuverture && typeof empreinteOuverture === 'object') return empreintePrecautions(empreinteOuverture);
+  const texte = String(empreinteOuverture ?? '');
+  try {
+    const lu = JSON.parse(texte);
+    if (lu && typeof lu === 'object' && !Array.isArray(lu)) return empreintePrecautions(lu);
+  } catch {
+    // Texte qui n'est pas du JSON : comparé tel quel.
+  }
+  return texte;
+}
+
+/** Vrai si une valeur `undefined` se cache dans `valeur`, à n'importe quelle profondeur. */
+function contientIndefini(valeur) {
+  if (valeur === undefined) return true;
+  if (Array.isArray(valeur)) return valeur.some(contientIndefini);
+  if (valeur && typeof valeur === 'object') return Object.values(valeur).some(contientIndefini);
+  return false;
+}
+
+const FORMAT_NAISSANCE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * « 🧸 Ce que <Enfant> mange » (gestionnaire) : règles (liste entière, préparée par coeur/age.js et coeur/regles.js :
+ * régime, précautions d'âge, règles gardées telles quelles) et date de naissance (`'AAAA-MM-JJ'`, ou null pour
+ * l'effacer) d'un profil. Transaction sur `profils/<id>`, qui relit le profil :
+ * - absent → rien n'est écrit (jamais de profil recréé à moitié), { code: 'absent' } ;
+ * - `regles` ou `naissance` changés depuis l'ouverture de l'écran (`empreinteOuverture` : empreintePrecautions du
+ *   profil d'alors) → rien n'est écrit, { code: 'conflit' } ;
+ * - sinon `update` de `regles` et, si la date a changé, de `naissance` (texte) ou `deleteField()` (date effacée).
+ * En ligne seulement : hors ligne, { code: 'hors_ligne' } avant tout envoi (une transaction ne part jamais plus tard,
+ * donc un appareil hors ligne ne peut pas écraser un durcissement fait sur l'autre).
+ * Lève une erreur avant tout envoi si les règles ne sont pas une liste, cachent une valeur `undefined`, ou si la date
+ * n'est pas au format `AAAA-MM-JJ`.
+ * → promesse de { code: 'ok' | 'absent' | 'conflit' | 'hors_ligne' } ; rejetée si la transaction échoue (réseau…).
+ */
+export async function enregistrerPrecautions(profilId, { regles, naissance = null, empreinteOuverture } = {}) {
+  if (typeof profilId !== 'string' || !profilId.trim() || profilId.includes('/')) {
+    throw new Error('Identifiant de profil refusé.');
+  }
+  if (!Array.isArray(regles) || contientIndefini(regles)) {
+    throw new Error('Règles refusées : une liste sans valeur indéfinie est attendue.');
+  }
+  const date = naissance === '' || naissance === undefined ? null : naissance;
+  if (date !== null && (typeof date !== 'string' || !FORMAT_NAISSANCE.test(date))) {
+    throw new Error('Date de naissance refusée : AAAA-MM-JJ, ou null pour l’effacer.');
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return { code: 'hors_ligne' };
+  const attendue = empreinteAttendue(empreinteOuverture);
+  const reference = doc(db, 'profils', profilId);
+  return runTransaction(db, async (transaction) => {
+    const lu = await transaction.get(reference);
+    if (!lu.exists()) return { code: 'absent' };
+    const actuel = lu.data();
+    if (empreintePrecautions(actuel) !== attendue) return { code: 'conflit' };
+    const maj = { regles };
+    if (date !== null) {
+      if (actuel.naissance !== date) maj.naissance = date;
+    } else if (actuel.naissance !== undefined) {
+      maj.naissance = deleteField();
+    }
+    transaction.update(reference, maj);
+    return { code: 'ok' };
+  });
+}
+
 export function retirerProfil(profilId) {
   const lot = writeBatch(db);
   lot.delete(doc(db, 'profils', profilId));
@@ -376,6 +466,41 @@ function versFirestore(valeur) {
 }
 
 const COLLECTIONS_RESTAUREES = new Set(['plats', 'profils']);
+
+/**
+ * Écritures `update` d'un même document réunies en une seule, à la place de la première (champs, `effacer` et `clore`
+ * mis bout à bout) : un profil présent peut recevoir ses règles et sa date de naissance par deux écritures aux
+ * conditions distinctes (T2c), qui partent ainsi en une seule mise à jour. Les autres écritures restent telles quelles.
+ */
+function reunirMisesAJour(ecritures) {
+  const reunies = [];
+  const parDocument = new Map();
+  for (const ecriture of ecritures) {
+    if (ecriture.mode !== 'update') {
+      reunies.push(ecriture);
+      continue;
+    }
+    const cle = `${ecriture.collection}/${ecriture.id}`;
+    const premiere = parDocument.get(cle);
+    if (!premiere) {
+      const copie = { ...ecriture, donnees: { ...(ecriture.donnees ?? {}) } };
+      parDocument.set(cle, copie);
+      reunies.push(copie);
+      continue;
+    }
+    // Dans l'ordre des écritures : la dernière à poser ou à effacer un champ l'emporte.
+    const ecrits = Object.keys(ecriture.donnees ?? {});
+    const effaces = ecriture.effacer ?? [];
+    for (const champ of effaces) delete premiere.donnees[champ];
+    Object.assign(premiere.donnees, ecriture.donnees ?? {});
+    const effacer = [...(premiere.effacer ?? []).filter((champ) => !ecrits.includes(champ)), ...effaces];
+    if (effacer.length) premiere.effacer = [...new Set(effacer)];
+    else delete premiere.effacer;
+    const clore = [...(premiere.clore ?? []), ...(ecriture.clore ?? [])];
+    if (clore.length) premiere.clore = [...new Set(clore)];
+  }
+  return reunies;
+}
 // Écritures par transaction : sous les 500 d'une transaction Firestore, demandes closes comprises.
 const ECRITURES_PAR_TRANSACTION = 200;
 
@@ -407,7 +532,7 @@ export async function restaurer({ lots }, auteur) {
         const instantane = await transaction.get(doc(db, ecriture.collection, ecriture.id));
         actuels.push(instantane.exists() ? instantane.data() : null);
       }
-      const aFaire = tranche.map((ecriture, i) => appliquerConditions(ecriture, actuels[i])).filter(Boolean);
+      const aFaire = reunirMisesAJour(tranche.map((ecriture, i) => appliquerConditions(ecriture, actuels[i])).filter(Boolean));
       const idsDemandes = [...new Set(aFaire.flatMap((ecriture) => ecriture.clore ?? []))];
       const demandes = [];
       for (const id of idsDemandes) {

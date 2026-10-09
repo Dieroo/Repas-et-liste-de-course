@@ -68,15 +68,17 @@ function contientUndefined(valeur) {
 
 // ——— vocabulaire.js ———
 
-test('vocabulaire : mêmes valeurs qu’avant le déplacement, plus graisse_animale et gelatine_animale', () => {
+test('vocabulaire : mêmes valeurs qu’avant le déplacement, plus graisse_animale et gelatine_animale (et ceux de T2c)', () => {
   const avant = ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie', 'poisson', 'fruits_de_mer',
     'bouillon_viande', 'gelatine_porc', 'oeuf', 'oeuf_cru', 'laitier', 'alcool_cru', 'cafe', 'legume', 'feculent'];
-  assert.deepEqual(vocabulaire.VOCABULAIRES.marqueurs, [...avant, 'graisse_animale', 'gelatine_animale']);
+  // T2c : le vocabulaire ne fait que s'agrandir (précautions d'un jeune enfant).
+  const t2c = ['cru', 'lait_cru', 'fruit_coque', 'cafeine', 'miel', 'poisson_predateur', 'soja'];
+  assert.deepEqual(vocabulaire.VOCABULAIRES.marqueurs, [...avant, 'graisse_animale', 'gelatine_animale', ...t2c]);
   assert.deepEqual(vocabulaire.VOCABULAIRES.unite, ['g', 'kg', 'ml', 'cl', 'l', 'pc', 'cs', 'cc', 'pincee', 'botte', 'sachet', 'boite', 'tranche']);
   assert.deepEqual(vocabulaire.VOCABULAIRES.forme, ['hachee', 'fine', 'morceaux', 'effilochable']);
   assert.deepEqual(vocabulaire.SOUS_TYPES_VIANDE, ['boeuf', 'porc', 'volaille', 'agneau', 'charcuterie']);
   assert.deepEqual(vocabulaire.VIANDES, ['viande', 'boeuf', 'porc', 'volaille', 'agneau', 'charcuterie']);
-  assert.deepEqual(vocabulaire.IMPLICATIONS, { gelatine_porc: ['gelatine_animale'], cafe: ['cafeine'] });
+  assert.deepEqual(vocabulaire.IMPLICATIONS, { gelatine_porc: ['gelatine_animale'], cafe: ['cafeine'], poisson_predateur: ['poisson'] });
   // Toujours importables depuis paquet.js.
   assert.equal(paquet.VOCABULAIRES, vocabulaire.VOCABULAIRES);
   assert.equal(paquet.code, vocabulaire.code);
