@@ -10,6 +10,7 @@ import { cheminNote, noteValide } from './notes.js';
 import { egalProfonde } from './edition.js';
 import { stylesAttendus, validerRegles } from './regles.js';
 import { styleDe } from './compatibilite.js';
+import { estDansCorbeille } from './corbeille.js';
 import { STYLES } from './vocabulaire.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
@@ -27,7 +28,7 @@ const JOUR_MS = 86_400_000;
 // Défauts d'un plat ajouté par son nom (⏳), écrits dans le fichier comme le prévoit le §8.
 const DEFAUTS_PLAT = { type: 'plat', recurrence: 'aucune', statutRecette: 'attente' };
 // Champs ajoutés à la recette dans le fichier.
-const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar'];
+const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille'];
 // Champs d'un profil repris à la restauration (ceux qu'écrit coeur/profils.js › preparerProfil, et ses règles, T2a).
 const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion', 'regles'];
 // Champs d'un profil jamais exportés (liste fermée ; vide en T1d).
@@ -144,9 +145,11 @@ function notesValides(notes) {
 /**
  * Plat tel qu'il est écrit dans le fichier : champs du §8 dans leur ordre, défauts d'un ⏳, notes et suivi. Les
  * versions partent telles qu'elles sont sur la fiche, `style` et `frigoJours` compris (une version d'avant les styles
- * reste sans style : il se déduit à la lecture).
+ * reste sans style : il se déduit à la lecture). Un plat de la corbeille garde sa marque, `corbeille { le (ISO), par }` ;
+ * date encore illisible (horodatage du serveur en attente : mis à la corbeille hors ligne, juste avant), `quand` (la
+ * date de la sauvegarde) la remplace, pour que la marque ne se perde pas.
  */
-function platPourSauvegarde(plat) {
+function platPourSauvegarde(plat, quand) {
   const sortie = {};
   for (const champ of CHAMPS_PLAT) {
     const valeur = champ === 'id' ? plat.id : serialisable(plat[champ]);
@@ -160,6 +163,11 @@ function platPourSauvegarde(plat) {
   const modifieeLe = versDate(plat.modifieeLe);
   if (modifieeLe) sortie.modifieeLe = modifieeLe.toISOString();
   if (typeof plat.modifieePar === 'string' && plat.modifieePar) sortie.modifieePar = plat.modifieePar;
+  if (estDansCorbeille(plat)) {
+    sortie.corbeille = { le: (versDate(plat.corbeille.le) ?? quand).toISOString() };
+    const par = reduire(plat.corbeille.par);
+    if (par) sortie.corbeille.par = par;
+  }
   return sortie;
 }
 
@@ -195,7 +203,7 @@ export function creerSauvegarde({ plats = [], profils = [] } = {}, { maintenant 
   const quand = versDate(maintenant) ?? new Date();
   const platsFichier = (Array.isArray(plats) ? plats : [])
     .filter((plat) => estObjet(plat) && typeof plat.id === 'string' && plat.id !== '')
-    .map(platPourSauvegarde)
+    .map((plat) => platPourSauvegarde(plat, quand))
     .sort(parId);
   const profilsFichier = trierProfils((Array.isArray(profils) ? profils : [])
     .filter((profil) => estObjet(profil) && typeof profil.id === 'string' && profil.id !== ''))
@@ -328,7 +336,8 @@ function validerProfils(bruts, erreurs, avertissements) {
  * Vérifie une sauvegarde lue par lireSauvegarde. Seules les fautes du fichier entier bloquent (liste des plats
  * illisible, trop de plats, identifiants en double) ; une recette abîmée n'est simplement pas reprise.
  * → { date (Date ou null), plats: [{ id, nom, recette (null si abîmée), notes, derniereFois?, modifieeLe? (Date),
- *     modifieePar? }], profils, erreurs: [texte], avertissements: [texte], valide }
+ *     modifieePar?, corbeille? ({ le (Date), par? }) }], profils, erreurs: [texte], avertissements: [texte], valide }
+ *   Marque de la corbeille illisible (pas un objet, ou sans date lisible) : ignorée, avec un avertissement.
  */
 export function validerSauvegarde(sauvegarde) {
   const erreurs = [];
@@ -421,6 +430,16 @@ export function validerSauvegarde(sauvegarde) {
       else avertissements.push(`${guillemets(nom)}\u00A0: la date de modification est illisible, elle a été ignorée.`);
     }
     if (typeof brut.modifieePar === 'string' && brut.modifieePar.trim()) plat.modifieePar = brut.modifieePar.trim();
+    if (brut.corbeille != null) {
+      const le = estObjet(brut.corbeille) && typeof brut.corbeille.le === 'string' ? versDate(brut.corbeille.le) : null;
+      if (le) {
+        plat.corbeille = { le };
+        const par = reduire(brut.corbeille.par);
+        if (par) plat.corbeille.par = par;
+      } else {
+        avertissements.push(`${guillemets(nom)}\u00A0: sa mise à la corbeille est illisible dans ce fichier, elle a été ignorée.`);
+      }
+    }
     return plat;
   });
   return fin(plats, profils);
@@ -441,9 +460,11 @@ function enLots(ecritures, taille) {
 }
 
 /**
- * Écritures d'une restauration, à partir des données lues sur le serveur (`plats`, `profils`, `demandes`) et de la
- * personne connectée (`email`, posé en `majPar`). Ce qui est dans l'app reste ; ce qui manque revient (plats,
- * notes, profils, `derniereFois` plus récente, versions des profils qui n'en ont pas sur la fiche) ; seules les
+ * Écritures d'une restauration, à partir des données lues sur le serveur (`plats` : tous, ceux de la corbeille compris ;
+ * `profils`, `demandes`) et de la personne connectée (`email`, posé en `majPar`). Ce qui est dans l'app reste ; ce qui
+ * manque revient (plats, notes, profils, `derniereFois` plus récente, versions des profils qui n'en ont pas sur la
+ * fiche) ; un plat absent revient avec sa marque de corbeille (`corbeille.le` : Date du fichier), la marque d'un plat
+ * présent n'est jamais posée ni effacée (la restauration ne sort jamais un plat de la corbeille) ; seules les
  * recettes de `recettesAReprendre` (identifiants) reprennent leur version sauvegardée, en bloc, sans toucher aux
  * versions de la fiche. L'écran coche d'avance celles dont `cocheeParDefaut` est vrai (fiche ⏳ dans l'app) et les
  * passe ici. Recettes comparées sans leurs versions. Une demande de version n'est close que si la version convient.
@@ -559,6 +580,7 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
       if (plat.derniereFois) donnees.derniereFois = plat.derniereFois;
       if (plat.modifieeLe) donnees.modifieeLe = plat.modifieeLe;
       if (plat.modifieePar) donnees.modifieePar = plat.modifieePar;
+      if (plat.corbeille) donnees.corbeille = { ...plat.corbeille };
       donnees.majPar = auteur;
       donnees.majLe = marqueurHorodatage();
       const satisfaites = plat.recette
@@ -567,7 +589,8 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
         collection: 'plats', id: plat.id, mode: 'fusion', donnees, condition: { absent: true },
         ...(satisfaites.length ? { clore: satisfaites } : {}),
       });
-      resume.platsRemis.push(donnees.nom);
+      // Un plat qui revient dans la corbeille le dit : il n'apparaîtra pas dans la liste des plats.
+      resume.platsRemis.push(plat.corbeille ? `${donnees.nom} (dans la corbeille)` : donnees.nom);
       resume.notesRemises += Object.keys(notes).length;
       if (plat.derniereFois) resume.datesRemises += 1;
       clore(satisfaites);

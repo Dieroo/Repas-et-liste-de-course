@@ -10,6 +10,7 @@ import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
 import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
 import { nouveauPlatParNom } from './coeur/plats.js';
+import { estDansCorbeille, separerCorbeille, demandesDesPlats } from './coeur/corbeille.js';
 import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from './coeur/profils.js';
 import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
@@ -48,12 +49,15 @@ import {
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
 // ou afficher(ctx) → nœud (reconstruit seulement si l'écran change).
+// `avecCorbeille` : `ctx.plats` garde aussi les plats de la corbeille. « Modifier » : un plat mis à la corbeille sur
+// l'autre téléphone pendant la saisie n'y passe pas pour supprimé (la saisie et son brouillon restent, l'enregistrement
+// marche) ; produits connus et noms déjà pris se lisent sur tous les plats.
 const ECRANS = {
   semaine: { titre: 'Semaine', module: semaine, onglet: 'semaine' },
   courses: { titre: 'Courses', module: courses, onglet: 'courses' },
   plats: { titre: 'Plats', module: plats, onglet: 'plats' },
   plat: { titre: 'Plat', module: fiche, onglet: 'plats' },
-  modifier: { titre: 'Modifier la recette', module: modifier, onglet: 'plats', sansOnglets: true },
+  modifier: { titre: 'Modifier la recette', module: modifier, onglet: 'plats', sansOnglets: true, avecCorbeille: true },
   decouvrir: { titre: 'Découvrir', module: decouvrir, onglet: 'decouvrir' },
   reglages: { titre: 'Réglages', module: reglages, onglet: null },
   import: { titre: 'Ajouter des recettes', module: importRecettes, onglet: 'plats' },
@@ -93,7 +97,7 @@ const etat = {
   profils: [],
   profilsCharges: false,
   profilsDepuisCache: false, // copie du téléphone, pas encore confirmée par le serveur
-  plats: [],
+  plats: [], // tous les plats, corbeille comprise (separerCorbeille pour les écrans)
   platsCharges: false,
   platsDepuisCache: false,
   demandes: [],
@@ -285,6 +289,18 @@ function compat(plat, profil) {
   return parProfil.get(profil);
 }
 
+// Plats actifs et corbeille (coeur/corbeille.js › separerCorbeille), gardés tant que `etat.plats` est le même tableau :
+// les écrans reçoivent les mêmes listes d'un rendu à l'autre (mémos par tableau, comme le catalogue des produits).
+let memoCorbeille = { plats: null, actifs: [], corbeille: [] };
+
+function platsSepares() {
+  if (memoCorbeille.plats !== etat.plats) {
+    const { actifs, corbeille } = separerCorbeille(etat.plats);
+    memoCorbeille = { plats: etat.plats, actifs, corbeille };
+  }
+  return memoCorbeille;
+}
+
 // Instructions du projet Claude copiées pendant cette visite ({ uid, version }) : repli si le stockage du téléphone
 // est plein ou bloqué, pour que le rappel ne revienne pas avant la prochaine ouverture.
 let instructionsCopieesIci = null;
@@ -307,11 +323,15 @@ function instructionsAJour() {
  * Contexte passé aux écrans, et aux feuilles ouvertes hors du rendu (panneau du profil, « Qui êtes-vous ? ») : il
  * est recalculé à chaque appel, pour des profils et des plats à jour.
  * `moi` : profil relié à l'adresse connectée, ou null ; en aperçu « Repas et courses », celui du gestionnaire.
+ * `plats` : les plats actifs seulement (un plat de la corbeille disparaît partout), sauf pour un écran `avecCorbeille`
+ * (ECRANS) ; `platsCorbeille` : la corbeille, du plus récent au plus ancien ; `tousLesPlats` : les deux (ajout de
+ * recettes, ajout par nom, « déjà dans l'app » des idées de plats, fiche ouverte par un lien).
  * `instructionsAJour` : faux tant que les instructions du projet Claude de cette version n'ont pas été copiées ici.
  */
 function contexteCourant() {
   const { utilisateur } = etat;
-  const { role, roleReel, parametre } = routeCourante();
+  const { role, roleReel, route, parametre } = routeCourante();
+  const { actifs, corbeille } = platsSepares();
   return {
     utilisateur,
     role,
@@ -320,7 +340,9 @@ function contexteCourant() {
     profils: etat.profils,
     profilsCharges: etat.profilsCharges,
     moi: profilDeLEmail(etat.profils, utilisateur.email),
-    plats: etat.plats,
+    plats: ECRANS[route]?.avecCorbeille ? etat.plats : actifs,
+    platsCorbeille: corbeille,
+    tousLesPlats: etat.plats,
     platsCharges: etat.platsCharges,
     demandes: etat.demandes,
     demandesChargees: etat.demandesChargees,
@@ -470,7 +492,8 @@ const actions = {
       if (etat.utilisateur?.uid !== uid) return { manquants: noms };
       const parProfil = profilsDesVersions(ecritures).map((pour) => {
         const profil = etat.profils.find((p) => p.id === pour);
-        const bilan = profil ? bilanCompatibilite(etat.plats, profil, { evaluer: compat }) : null;
+        // Plats actifs seulement : un plat de la corbeille n'attend pas de version.
+        const bilan = profil ? bilanCompatibilite(platsSepares().actifs, profil, { evaluer: compat }) : null;
         return {
           nom: profil?.nom ?? '',
           ajoutees: versionsEcrites(ecritures, pour, manquants),
@@ -562,6 +585,115 @@ const actions = {
       Promise.reject(erreur).catch(echouer);
     }
     rendre();
+  },
+  /**
+   * Met des plats à la corbeille (les deux membres ; fiche, bandeau « Personne n'en veut »). Appliqué tout de suite sur
+   * ce téléphone, hors ligne compris, envoyé dès que possible ; un échec est annoncé. Annonce « « X » est dans la
+   * corbeille. » ou « N plats mis à la corbeille. », avec « Annuler », qui les remet. Les plats inconnus ou déjà dans
+   * la corbeille sont ignorés. → undefined.
+   */
+  mettreALaCorbeille(platIds) {
+    const vises = platsVises(platIds, (plat) => !estDansCorbeille(plat));
+    if (!vises.length) return;
+    const ids = vises.map((plat) => plat.id);
+    const email = etat.utilisateur.email;
+    const echec = vises.length === 1
+      ? `«\u00A0${vises[0].nom}\u00A0» n’a pas pu être mis à la corbeille. Réessayez.`
+      : 'Les plats n’ont pas pu être mis à la corbeille. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.mettreALaCorbeille(ids, email);
+    } catch {
+      annoncer(echec);
+      return;
+    }
+    ecrire(envoi, echec);
+    // Date du téléphone en attendant celle du serveur (la copie de Firestore la remplace dès son arrivée).
+    const marque = { le: new Date(), par: email };
+    const parId = new Set(ids);
+    etat.plats = etat.plats.map((plat) => (parId.has(plat.id) ? { ...plat, corbeille: marque } : plat));
+    rendre();
+    annoncer(vises.length === 1
+      ? `«\u00A0${vises[0].nom}\u00A0» est dans la corbeille.`
+      : `${vises.length}\u00A0plats mis à la corbeille.`, {
+      action: { libelle: 'Annuler', faire: () => actions.remettreDeLaCorbeille(ids) },
+    });
+  },
+  /**
+   * Sort des plats de la corbeille (« Remettre », les deux membres ; « Annuler » de la mise à la corbeille). Appliqué
+   * tout de suite, envoyé dès que possible ; un échec est annoncé. Annonce « « X » est revenu dans vos plats. ». Les
+   * plats inconnus ou hors de la corbeille sont ignorés.
+   * → promesse de { echec } (jamais rejetée), résolue à la réponse du serveur : `echec` est le message d'échec (déjà
+   *   annoncé ; la feuille « Corbeille » le montre aussi, le bandeau d'annonce étant caché sous elle), ou null. Hors
+   *   ligne, elle attend le retour du réseau.
+   */
+  remettreDeLaCorbeille(platIds) {
+    const vises = platsVises(platIds, (plat) => estDansCorbeille(plat));
+    if (!vises.length) return Promise.resolve({ echec: null });
+    const ids = vises.map((plat) => plat.id);
+    const echec = vises.length === 1
+      ? `«\u00A0${vises[0].nom}\u00A0» n’a pas pu être remis dans vos plats. Réessayez.`
+      : 'Les plats n’ont pas pu être remis dans vos plats. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.remettreDeLaCorbeille(ids);
+    } catch {
+      annoncer(echec);
+      return Promise.resolve({ echec });
+    }
+    ecrire(envoi, echec);
+    const reponse = envoi.then(() => ({ echec: null }), () => ({ echec }));
+    const parId = new Set(ids);
+    etat.plats = etat.plats.map((plat) => {
+      if (!parId.has(plat.id)) return plat;
+      const { corbeille, ...reste } = plat;
+      return reste;
+    });
+    rendre();
+    annoncer(vises.length === 1
+      ? `«\u00A0${vises[0].nom}\u00A0» est revenu dans vos plats.`
+      : `${vises.length}\u00A0plats sont revenus dans vos plats.`);
+    return reponse;
+  },
+  /**
+   * « Vider la corbeille » (gestionnaire, hors aperçu « Repas et courses ») : supprime pour de bon les plats de la
+   * corbeille et leurs photos, clôt leurs demandes ouvertes. Demande du réseau (transactions : rien ne part plus tard) ;
+   * un plat remis entre-temps sur l'autre téléphone reste. N'annonce rien elle-même : la feuille « Corbeille », d'où
+   * elle part, montre `message` (« Corbeille vidée. » une fois fermée, l'échec dans la feuille), car le bandeau
+   * d'annonce, caché sous la feuille ouverte, ne serait ni vu ni lu.
+   * → promesse de { code, message } (jamais rejetée) : ok (avec `supprimes` et `gardes`, nombres), vide, hors_ligne,
+   *   refuse (pas gestionnaire), echec ; `message` : texte à montrer, ou null (vide, refuse, ou personne connectée
+   *   changée entre-temps).
+   */
+  async viderCorbeille() {
+    const role = roleEffectif(roleDe(etat.utilisateur?.email, etat.donnees.reglages), etat.apercu);
+    if (role !== 'gestionnaire') return { code: 'refuse', message: null };
+    if (!navigator.onLine) return { code: 'hors_ligne', message: 'Il faut du réseau pour vider la corbeille.' };
+    const ids = platsSepares().corbeille.map((plat) => plat.id);
+    if (!ids.length) return { code: 'vide', message: null };
+    const uid = etat.utilisateur.uid;
+    // Chaque demande avec son plat : celui qu'elle nomme, sinon celui de son identifiant (`<platId>__…`).
+    const demandesAClore = demandesDesPlats(ids, etat.demandes)
+      .map((id) => ({ id, platId: etat.demandes.find((demande) => demande.id === id)?.platId }));
+    let bilan;
+    try {
+      bilan = await donnees.viderCorbeille(ids, demandesAClore);
+    } catch {
+      return { code: 'echec', message: etat.utilisateur?.uid === uid ? 'La corbeille n’a pas pu être vidée. Réessayez.' : null };
+    }
+    const { supprimes, gardes, demandesCloses } = bilan;
+    let message = null;
+    if (etat.utilisateur?.uid === uid) {
+      // Retirés tout de suite ; la copie de Firestore suit.
+      const partis = new Set(supprimes);
+      etat.plats = etat.plats.filter((plat) => !partis.has(plat.id));
+      cloreDemandes(demandesCloses);
+      rendre();
+      message = gardes.length
+        ? `Corbeille vidée. ${gardes.length === 1 ? 'Un plat remis entre-temps reste' : `${gardes.length}\u00A0plats remis entre-temps restent`} dans vos plats.`
+        : 'Corbeille vidée.';
+    }
+    return { code: 'ok', message, supprimes: supprimes.length, gardes: gardes.length };
   },
   /**
    * « C'est moi : <Prénom> » : relie le profil à l'adresse connectée. Demande du réseau.
@@ -685,6 +817,15 @@ async function changerAdresse(uid, profilId, email, ecrire) {
     rendre();
   }
   return resultat ?? { code: 'echec' };
+}
+
+/**
+ * Plats de `etat.plats` visés par `platIds` (un identifiant ou une liste) et retenus par `garder`, dans l'ordre de la
+ * liste des plats, sans doublon.
+ */
+function platsVises(platIds, garder) {
+  const voulus = new Set((Array.isArray(platIds) ? platIds : [platIds]).filter((id) => typeof id === 'string' && id));
+  return etat.plats.filter((plat) => voulus.has(plat.id) && garder(plat));
 }
 
 /** Demandes satisfaites : closes tout de suite sur ce téléphone (l'envoi suit). */

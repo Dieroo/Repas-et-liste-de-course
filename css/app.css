@@ -2732,3 +2732,143 @@ select.champ {
 
 /* Aperçu d'« Ajouter des recettes » : idée de Claude déjà dans les plats, non reprise (badge neutre). */
 .badge-deja { background: var(--surface); box-shadow: inset 0 0 0 1px var(--bordure); }
+
+/* ——— Corbeille ——— */
+
+/* Annonce avec un bouton (« Annuler ») : le bouton garde 48 px de haut ; son contour de focus reste dans le bandeau
+   (overflow: hidden), au clair sur le fond sombre de l'annonce. */
+.annonce.avec-action {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-right: 6px;
+}
+
+.annonce-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  margin-left: 4px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.annonce-action:focus-visible {
+  outline-color: var(--fond);
+  outline-offset: -3px;
+}
+
+/* Fiche : « Mettre à la corbeille », discret, tout en bas ; carte d'un plat de la corbeille, avec « Remettre ». */
+.bouton-corbeille { align-self: center; }
+
+.carte-corbeille .carte-texte p,
+.carte-sans-preneur .carte-texte p { overflow-wrap: anywhere; }
+
+/* « 🗑️ Le mettre à la corbeille » tient sur une ligne à 360 px, dans la carte. */
+.carte-sans-preneur .bouton { padding: 0 12px; }
+
+/* Plats : titre rejoint par le focus (après « Les mettre à la corbeille »), sans contour. */
+.vue-entete h1:focus { outline: none; }
+
+/* Plats : « 🗑️ Corbeille (N) » sous la liste ; la place du bouton flottant passe sous lui. */
+.liste-plats:has(+ .acces-corbeille:not([hidden])) { padding-bottom: 0; }
+
+.acces-corbeille {
+  align-self: center;
+  margin-bottom: 72px;
+}
+
+/* Feuille « Corbeille » : une ligne par plat (lien vers sa fiche, puis « Remettre »). */
+.feuille-corbeille {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Échec de « Remettre » ou de « Vider la corbeille », dans la feuille (le bandeau d'annonce serait caché dessous). */
+.feuille-corbeille .message-corbeille { max-width: none; }
+
+.liste-corbeille {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ligne-corbeille {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--bordure);
+}
+
+.ligne-corbeille:first-child { border-top: none; }
+
+.corbeille-plat {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 56px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.corbeille-plat .pastille,
+.corbeille-plat .vignette {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  font-size: 1.5rem;
+}
+
+.bouton-remettre {
+  flex: none;
+  min-height: 48px;
+  padding: 0 16px;
+}
+
+/* « Vider la corbeille » (gestionnaire) : sous la liste, puis la question et « Oui, supprimer ». */
+.zone-vider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bordure);
+}
+
+.zone-vider .aide { text-align: center; }
+
+.confirmation-vider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.question-vider { font-weight: 600; }
+
+.question-vider:focus { outline: none; }
+
+.confirmation-vider .bouton-texte { align-self: center; }
+
+/* Ajouter des recettes : plat de la corbeille, non repris (badge neutre, « Remettre » sous son avertissement). */
+.badge-corbeille { background: var(--surface); box-shadow: inset 0 0 0 1px var(--bordure); }
+
+.bouton-remettre-apercu {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0 20px;
+}

@@ -5,6 +5,7 @@ import { APPAREILS, NOM_MAX, statutDe, typeDe } from './plats.js';
 import { FORMAT, validerPaquet } from './paquet.js';
 import { VIANDES, VOCABULAIRES } from './vocabulaire.js';
 import { repereAttendu } from './compatibilite.js';
+import { estDansCorbeille } from './corbeille.js';
 
 // ——— Libellés (ordre d'affichage = ordre des clés) ———
 
@@ -454,10 +455,13 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
   if (touche('nom')) {
     const nom = reduire(saisie.nom);
     const cle = slug(nom);
-    const autre = cle ? (Array.isArray(plats) ? plats : []).find((p) => p?.id !== plat.id && slug(p?.nom) === cle) : null;
+    // Un plat de la corbeille garde son nom (on le remet au lieu de le recréer) ; un plat actif du même nom passe avant.
+    const memeNom = cle ? (Array.isArray(plats) ? plats : []).filter((p) => p?.id !== plat.id && slug(p?.nom) === cle) : [];
+    const autre = memeNom.find((p) => !estDansCorbeille(p)) ?? memeNom[0] ?? null;
     if (!nom) erreur('nom', 'Donnez un nom au plat.');
     else if (nom.length > NOM_MAX) erreur('nom', `Le nom est trop long (${NOM_MAX} caractères au plus).`);
     else if (!cle) erreur('nom', 'Ce nom ne contient ni lettre ni chiffre.');
+    else if (autre && estDansCorbeille(autre)) erreur('nom', `«\u00A0${autre.nom}\u00A0» est dans la corbeille. Choisissez un autre nom.`);
     else if (autre) erreur('nom', `«\u00A0${autre.nom}\u00A0» existe déjà.`);
     champs.nom = nom;
   }

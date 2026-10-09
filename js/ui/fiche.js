@@ -1,4 +1,5 @@
-// Fiche d'un plat : photo, statut, ingrédients, étapes, cuisson, conservation.
+// Fiche d'un plat : photo, statut, ingrédients, étapes, cuisson, conservation ; en bas, « Mettre à la corbeille ».
+// Un plat de la corbeille (fiche ouverte par un lien) se lit sans rien pouvoir y changer : seul « Remettre » agit.
 import { el, pastille, annoncer } from './dom.js';
 import { choisirImage, preparerPhoto } from './photo.js';
 import { copier } from './presse-papiers.js';
@@ -11,6 +12,7 @@ import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
 import { stylesAttendus } from '../coeur/regles.js';
 import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
+import { estDansCorbeille, platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -243,6 +245,28 @@ function versionAttendue(etats) {
     ?? null;
 }
 
+/**
+ * Carte « Personne n'en veut » (les deux membres) : plat noté « Jamais » par tous les profils (coeur/corbeille.js ›
+ * platsSansPreneur). La corbeille est seulement proposée : un toucher, et l'annonce permet d'annuler. Créée une fois
+ * par fiche, son texte mis à jour à chaque rendu (`maj(profils)`) : son bouton garde le focus.
+ * → { noeud, bouton, maj }
+ */
+function creerCarteSansPreneur(mettreALaCorbeille) {
+  const texte = el('p', {});
+  const bouton = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', onclick: mettreALaCorbeille },
+    el('span', { 'aria-hidden': 'true' }, '🗑️'), 'Le mettre à la corbeille');
+  const noeud = el('section', { class: 'carte carte-sans-preneur' },
+    el('div', { class: 'carte-ligne' },
+      pastille('👎', 'ocre'),
+      el('div', { class: 'carte-texte' }, el('h2', {}, 'Personne n’en veut'), texte)),
+    bouton);
+  function maj(profils) {
+    const seul = profils.length === 1 ? nomDe(profils[0]) : null;
+    texte.textContent = `${seul ? `${seul} l’a noté` : 'Tout le monde l’a noté'} «\u00A0Jamais\u00A0». Le mettre à la corbeille\u202F?`;
+  }
+  return { noeud, bouton, maj };
+}
+
 function ligneInfo(terme, definition) {
   return definition ? el('div', { class: 'ligne-info' }, el('dt', {}, terme), el('dd', {}, definition)) : null;
 }
@@ -285,7 +309,26 @@ export function creer(ctx) {
   // Notes de chaque profil : section gardée d'un rendu à l'autre, mise à jour en place (focus conservé).
   const notes = sectionNotes(ctx, id);
 
-  const platCourant = () => courant.plats.find((plat) => plat.id === id);
+  // Corbeille : « Remettre » d'un plat de la corbeille, gardé d'un rendu à l'autre (focus conservé).
+  const texteJete = el('p', {});
+  const boutonRemettre = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'button', onclick: remettre }, 'Remettre');
+  const carteJete = el('section', { class: 'carte carte-corbeille' },
+    el('div', { class: 'carte-ligne' },
+      pastille('🗑️', 'ocre'),
+      el('div', { class: 'carte-texte' },
+        el('h2', {}, 'Ce plat est dans la corbeille'),
+        texteJete,
+        el('p', {}, 'Il n’apparaît plus dans vos plats. Remettez-le pour le retrouver.'))),
+    boutonRemettre);
+  let depart = false; // vrai dès que la fiche part vers la liste, après « Mettre à la corbeille »
+  // « Mettre à la corbeille » (bouton discret) et carte « Personne n'en veut » : gardés d'un rendu à l'autre, comme
+  // « Modifier », pour qu'une mise à jour venue de l'autre téléphone ne leur fasse pas perdre le focus.
+  const boutonCorbeille = el('button', { class: 'bouton bouton-texte bouton-corbeille', type: 'button', onclick: mettreALaCorbeille },
+    el('span', { 'aria-hidden': 'true' }, '🗑️'), 'Mettre à la corbeille');
+  const carteSansPreneur = creerCarteSansPreneur(mettreALaCorbeille);
+
+  // La corbeille comprise : un plat de la corbeille garde sa fiche, ouverte par un lien (sinon « n'existe plus »).
+  const platCourant = () => (courant.tousLesPlats ?? courant.plats).find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
 
   /**
@@ -321,6 +364,30 @@ export function creer(ctx) {
     messageCopie.hidden = !messageCopie.textContent;
   }
 
+  /**
+   * « Mettre à la corbeille » (les deux membres ; aussi depuis la carte « Personne n'en veut ») : retour à la liste des
+   * plats, puis l'action, qui annonce « « X » est dans la corbeille » avec « Annuler ». Venu de la liste (l'entrée
+   * d'historique le dit aussi : une fiche ouverte depuis une autre fiche n'y revient pas) : un pas en arrière ; sinon
+   * la fiche est remplacée (le geste retour ne ramène pas à un plat jeté).
+   */
+  function mettreALaCorbeille() {
+    const plat = platCourant();
+    if (!plat || estDansCorbeille(plat) || depart) return;
+    depart = true;
+    if (courant.routePrecedente === 'plats' && history.state?.precedente === 'plats' && history.length > 1) history.back();
+    else location.replace('#/plats');
+    courant.actions.mettreALaCorbeille([id]);
+  }
+
+  /** « Remettre » : le plat revient dans les plats ; la fiche redevient complète, le focus passe à « Modifier ». */
+  function remettre() {
+    const plat = platCourant();
+    if (!plat || !estDansCorbeille(plat)) return;
+    courant.actions.remettreDeLaCorbeille([id]);
+    const suivant = lienModifier.isConnected ? lienModifier : carteReprise.querySelector('a');
+    if (suivant?.isConnected) suivant.focus();
+  }
+
   const arreterPhoto = ctx.actions.suivrePhoto(id, (donnees) => {
     photo = donnees;
     dessinerPhoto();
@@ -350,8 +417,9 @@ export function creer(ctx) {
 
   function majBoutonsPhoto() {
     const plat = platCourant();
-    actionsPhoto.hidden = !plat;
-    if (!plat) return;
+    // Plat de la corbeille : photo visible, mais rien à y changer.
+    actionsPhoto.hidden = !plat || estDansCorbeille(plat);
+    if (actionsPhoto.hidden) return;
     const enCours = compressions.has(id);
     const avecPhoto = aUnePhoto(plat);
     boutonAppareil.disabled = enCours;
@@ -394,10 +462,13 @@ export function creer(ctx) {
     }
 
     const statut = statutDe(plat);
-    const gestionnaire = courant.role === 'gestionnaire';
+    // Plat de la corbeille : recette en lecture seule, sous la carte « Remettre » (ni notes, ni Claude, ni Modifier).
+    const jete = estDansCorbeille(plat);
+    const gestionnaire = courant.role === 'gestionnaire' && !jete;
     const nomsProfils = new Map((courant.profils ?? []).map((p) => [p.id, p.nom]));
-    // Versions par profil qui a des règles ; les autres versions (profil sans règle, ou inconnu) restent à part.
-    const etats = etatsCompat(plat, courant);
+    // Versions par profil qui a des règles ; les autres versions (profil sans règle, ou inconnu) restent à part. Plat
+    // de la corbeille : toutes ses versions dans la simple liste « Versions », sans rien à demander.
+    const etats = jete ? [] : etatsCompat(plat, courant);
     const versionsMontrees = new Set(etats.filter((e) => e.cas !== 'aCreer').map((e) => e.profil.id));
     const contraints = profilsContraints(courant.profils);
     // Première version qui manque : le bouton unique « Demander à Claude » la demande (demandeDuPlat).
@@ -414,11 +485,18 @@ export function creer(ctx) {
     ].filter(Boolean).join(' · ');
 
     // Mise à jour des notes d'abord : si ses lignes sont reconstruites, l'élément qui reprend le focus est le nouveau.
-    notes.maj(courant);
+    if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
-    const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud].some((n) => n.contains(document.activeElement))
+    const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud]
+      .some((n) => n.contains(document.activeElement))
       ? document.activeElement
       : null;
+    texteJete.textContent = jete
+      ? `${texteCorbeille(plat, { profils: courant.profils ?? [], moi: courant.utilisateur?.email ?? courant.moi })}.`
+      : '';
+    // Personne n'en veut (tous les profils l'ont noté « Jamais ») : la corbeille est suggérée, jamais automatique.
+    const sansPreneur = !jete && platsSansPreneur([plat], courant.profils ?? []).length > 0;
+    if (sansPreneur) carteSansPreneur.maj(courant.profils ?? []);
     // Lien « Modifier › » de l'ingrédient douteux : reconstruit à chaque rendu, son remplaçant reprend le focus.
     const focusDouteux = Boolean(document.activeElement?.closest?.('.compat-douteux'));
     majActionsRecette();
@@ -441,7 +519,7 @@ export function creer(ctx) {
         ),
       ),
 
-      brouillon ? carteReprise : lienModifier,
+      jete ? carteJete : brouillon ? carteReprise : lienModifier,
 
       // Version qui manque (gestionnaire) : « Demander à Claude » se place sous la première, et demande sa version.
       ...etats.map((etat) => sectionVersion(etat, plat, { moi: courant.moi, role: courant.role },
@@ -449,7 +527,7 @@ export function creer(ctx) {
 
       gestionnaire && contraints.length && statut !== 'attente' ? carteDouteux(plat) : null,
 
-      statut === 'attente'
+      statut === 'attente' && !jete
         ? el('section', { class: 'carte' },
           el('div', { class: 'carte-ligne' },
             pastille('⏳', 'ocre'),
@@ -463,7 +541,7 @@ export function creer(ctx) {
         : null,
 
       // Absente tant qu'aucun profil n'existe ; aussi pour un plat ⏳ (le nom suffit pour donner un avis).
-      (courant.profils ?? []).length ? notes.noeud : null,
+      (courant.profils ?? []).length && !jete ? notes.noeud : null,
 
       ingredients.length
         ? section('Ingrédients', el('ul', { class: 'liste-ingredients' }, ingredients.map((ingredient) => el('li', {},
@@ -502,9 +580,18 @@ export function creer(ctx) {
           'Pour une recette entièrement refaite, demandez une nouvelle version à votre projet Claude. Elle remplacera vos modifications.'),
         actionsRecette)
         : null,
+
+      // Tout en bas, pour les deux membres : la suggestion « Personne n'en veut », sinon un simple bouton discret.
+      sansPreneur ? carteSansPreneur.noeud : null,
+      !jete && !sansPreneur ? boutonCorbeille : null,
     ].filter(Boolean));
-    if (focusGarde?.isConnected && document.activeElement !== focusGarde) focusGarde.focus({ preventScroll: true });
-    else if (focusDouteux) contenu.querySelector('.compat-douteux a')?.focus({ preventScroll: true });
+    if (focusGarde?.isConnected) {
+      if (document.activeElement !== focusGarde) focusGarde.focus({ preventScroll: true });
+    } else if (focusGarde === boutonCorbeille || focusGarde === carteSansPreneur.bouton) {
+      // La carte « Personne n'en veut » a remplacé le bouton discret (ou l'inverse) : le focus passe à l'autre.
+      const autre = focusGarde === boutonCorbeille ? carteSansPreneur.bouton : boutonCorbeille;
+      if (autre.isConnected) autre.focus({ preventScroll: true });
+    } else if (focusDouteux) contenu.querySelector('.compat-douteux a')?.focus({ preventScroll: true });
   }
 
   function toutDessiner() {
@@ -532,6 +619,8 @@ export function creer(ctx) {
     noeud: el('div', { class: 'vue fiche' }, retour, figure, actionsPhoto, contenu),
     maj(nouveau) {
       courant = nouveau;
+      // Plat mis à la corbeille : la fiche s'en va vers la liste, elle ne se redessine plus d'ici là.
+      if (depart) return;
       toutDessiner();
     },
     detruire() {

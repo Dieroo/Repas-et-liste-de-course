@@ -9,6 +9,7 @@ import {
 } from '../coeur/paquet.js';
 import { texteCorrectionPourClaude } from '../coeur/claude.js';
 import { FICHIER_MAX } from '../coeur/sauvegarde.js';
+import { estDansCorbeille } from '../coeur/corbeille.js';
 
 // Claude refuse une demande écrite pour d'autres instructions que les siennes (docs/projet-claude.md §0) : mêmes
 // messages pour un collage et pour un fichier.
@@ -69,13 +70,17 @@ const LIBELLES_STATUT = {
   versions: 'Recette gardée',
   identique: 'Déjà dans l’app',
   deja: 'Déjà dans vos plats',
+  corbeille: 'Dans la corbeille',
 };
 
 /**
- * Éléments de l'aperçu qui n'écrivent rien : recette identique à la fiche, ou idée de Claude (DEMANDE-IDEES) pour un
- * plat qui a déjà sa recette (`deja` : son avertissement le dit, elle n'est pas reprise).
+ * Éléments de l'aperçu qui ne sont pas repris : idée de Claude (DEMANDE-IDEES) pour un plat qui a déjà sa recette
+ * (`deja`), recette ou version pour un plat de la corbeille (`corbeille`) ; leur avertissement dit pourquoi.
  */
-const sansEcriture = (element) => element.statut === 'identique' || element.statut === 'deja';
+const nonRepris = (element) => element.statut === 'deja' || element.statut === 'corbeille';
+
+/** Éléments de l'aperçu qui n'écrivent rien : recette identique à la fiche, ou élément non repris. */
+const sansEcriture = (element) => element.statut === 'identique' || nonRepris(element);
 
 // Fiche complète reçue, différente de la recette actuelle, avec des versions : ce que l'on en prend.
 const CHOIX = [
@@ -207,8 +212,11 @@ export function creer(ctx) {
   const noteHorsLigne = el('p', { class: 'aide' },
     'Hors ligne\u00A0: la recette est gardée sur ce téléphone et sera partagée au retour du réseau.');
 
+  // Tous les plats, corbeille comprise : un plat de la corbeille n'est jamais recréé à côté (aperçu « Dans la corbeille »).
+  const tousLesPlats = () => courant.tousLesPlats ?? courant.plats;
+
   function platCible() {
-    return cible ? courant.plats.find((plat) => plat.id === cible) ?? null : null;
+    return cible ? tousLesPlats().find((plat) => plat.id === cible) ?? null : null;
   }
 
   function revenir(evenement) {
@@ -348,7 +356,7 @@ export function creer(ctx) {
     // Sans les profils, une version ne peut pas être jugée.
     if (!courant.platsCharges || !courant.demandesChargees || !courant.profilsCharges) return { type: 'chargement' };
     const prepares = preparerImport(validation.plats.map((plat) => plat.donnees), {
-      plats: courant.plats,
+      plats: tousLesPlats(),
       demandes: courant.demandes,
       cible,
       profils: courant.profils,
@@ -498,16 +506,37 @@ export function creer(ctx) {
   /** Ligne de détail d'un plat de l'aperçu. */
   function detailDuPlat(element) {
     if (element.statut === 'identique') return 'Identique à la fiche actuelle.';
+    if (element.statut === 'corbeille') return 'Rien n’est enregistré pour ce plat.';
     if (['versions', 'inchange', 'deja'].includes(element.statut)) return 'La recette actuelle est gardée.';
     if (!element.ingredients) return 'Sans recette pour l’instant (⏳)';
     return [pluriel(element.ingredients, 'ingrédient', 'ingrédients'), element.etapes ? pluriel(element.etapes, 'étape', 'étapes') : null]
       .filter(Boolean).join(' · ');
   }
 
+  /**
+   * « Remettre » d'un élément « Dans la corbeille » : le plat revient, l'aperçu se recalcule aussitôt (sans recoller).
+   * Seulement si le plat, remis, prendrait ce qui est reçu (`remettable`, décidé par preparerImport) : pas pour une
+   * idée de Claude visant un plat qui a déjà sa recette, ni pour une réponse qui n'apporte rien à ce plat.
+   */
+  function boutonRemettre(element) {
+    if (!element.remettable) return null;
+    const plat = tousLesPlats().find((p) => p.id === element.id);
+    if (!estDansCorbeille(plat)) return null;
+    return el('button', {
+      class: 'bouton bouton-secondaire bouton-remettre-apercu',
+      type: 'button',
+      'data-action': `remettre-${element.id}`,
+      'aria-label': `Remettre «\u00A0${plat.nom}\u00A0» dans vos plats`,
+      onclick: () => courant.actions.remettreDeLaCorbeille([plat.id]),
+    }, 'Remettre');
+  }
+
   function renduPret({ validation, preparation: prepares, instructions }) {
-    // Une idée déjà dans les plats n'est pas reprise : elle ne compte pas parmi les recettes prêtes.
+    // Une idée déjà dans les plats, ou un plat de la corbeille, n'est pas repris : il ne compte pas parmi les recettes
+    // prêtes.
     const deja = prepares.elements.filter((element) => element.statut === 'deja').length;
-    const n = prepares.elements.length - deja;
+    const jetes = prepares.elements.filter((element) => element.statut === 'corbeille').length;
+    const n = prepares.elements.length - deja - jetes;
     const ecrivables = prepares.elements.filter((element) => !sansEcriture(element));
     const filtree = preparation ?? prepares;
     const comptes = compterEcritures(filtree.ecritures);
@@ -524,7 +553,9 @@ export function creer(ctx) {
       ...[...validation.avertissements, ...prepares.avertissements].map((a) => a.message),
     ].filter(Boolean);
     let titre;
-    if (!ecrivables.length && deja) {
+    if (!ecrivables.length && jetes && !deja && !n) titre = jetes > 1 ? 'Ces plats sont dans la corbeille.' : 'Ce plat est dans la corbeille.';
+    else if (!ecrivables.length && jetes) titre = 'Rien de nouveau à enregistrer.';
+    else if (!ecrivables.length && deja) {
       if (n) titre = 'Ces recettes sont déjà dans l’app.';
       else titre = deja > 1 ? 'Ces idées sont déjà dans vos plats.' : 'Cette idée est déjà dans vos plats.';
     } else if (!ecrivables.length) titre = n > 1 ? 'Ces recettes sont déjà dans l’app, à l’identique.' : 'Cette recette est déjà dans l’app, à l’identique.';
@@ -540,12 +571,13 @@ export function creer(ctx) {
         : null,
       el('ul', { class: 'liste-apercu' }, prepares.elements.map((element, i) => {
         const identique = sansEcriture(element);
-        const nonReprise = element.statut === 'deja';
+        const nonReprise = nonRepris(element);
+        const valide = validationDe(validation, prepares.elements, element, i);
         const garde = !decoches.has(element.id);
         // Idée non reprise : seul son avertissement compte (ceux de sa recette, jamais écrite, n'ont plus d'objet).
         const avertissements = [
           identique || element.statut === 'versions' ? null : avertissementModification(element.modifieeA),
-          ...(nonReprise ? [] : (validationDe(validation, prepares.elements, element, i)?.avertissements ?? []).map((a) => a.message)),
+          ...(nonReprise ? [] : (valide?.avertissements ?? []).map((a) => a.message)),
           ...(element.avertissements ?? []),
         ].filter(Boolean);
         return el('li', { class: `apercu-plat${avecCases && !identique ? ' avec-case' : ''}${garde ? '' : ' decoche'}` },
@@ -565,6 +597,7 @@ export function creer(ctx) {
               ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
               : null,
             garde ? null : el('p', { class: 'texte-doux' }, 'Ne sera pas enregistré.'),
+            element.statut === 'corbeille' ? boutonRemettre(element) : null,
           ),
         );
       })),

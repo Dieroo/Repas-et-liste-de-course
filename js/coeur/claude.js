@@ -8,6 +8,7 @@ import { decrireRegles, lireRegime, stylesAttendus } from './regles.js';
 import { evaluer, profilsContraints } from './compatibilite.js';
 import { NOTE_MAX, noteDe } from './notes.js';
 import { slug } from './slug.js';
+import { estDansCorbeille } from './corbeille.js';
 import { VOCABULAIRES, code, texte } from './vocabulaire.js';
 
 const FORMAT = 'paquet@1';
@@ -182,10 +183,10 @@ function envieLue(envie) {
  * (c) Texte copié par « Demander des idées » (Semaine, gestionnaire ; T2b+) : Claude propose des plats originaux,
  * faciles à faire en batch, IDEES_PAR_MESSAGE fiches complètes par message (on écrit « suite » pour les suivantes).
  * `nombre` ∈ IDEES_NOMBRES (nombre ou texte de chiffres ; sinon IDEES_NOMBRE_DEFAUT) ; `envie` : texte libre
- * facultatif (une ligne, IDEES_ENVIE_MAX caractères au plus) ; `plats` : plats de l'app (noms à éviter, ⏳ compris ;
- * notes « J'adore » et « Jamais » des profils de l'app) ; `profils` : profils de l'app (bloc `versions:`, comme
- * DEMANDE-RECETTE, plat inconnu : tous les styles du profil ; notes) ; `appareils` : reglages.appareils (appareils
- * actifs, sinon plaque, four, cookeo, airfryer). Lignes `envie`, `versions`, `aimés`, `évités` et `déjà dans l'app`
+ * facultatif (une ligne, IDEES_ENVIE_MAX caractères au plus) ; `plats` : tous les plats de l'app (noms à éviter, ⏳ et
+ * corbeille compris ; notes « J'adore » et « Jamais » des profils de l'app, un plat de la corbeille n'étant jamais
+ * « aimé ») ; `profils` : profils de l'app (bloc `versions:`, comme DEMANDE-RECETTE, plat inconnu : tous les styles du
+ * profil ; notes) ; `appareils` : reglages.appareils (appareils actifs, sinon plaque, four, cookeo, airfryer). Lignes `envie`, `versions`, `aimés`, `évités` et `déjà dans l'app`
  * omises quand elles sont vides.
  */
 export function texteDemandeIdees({ nombre = IDEES_NOMBRE_DEFAUT, envie = '', plats = [], profils = [], appareils = null } = {}) {
@@ -194,7 +195,8 @@ export function texteDemandeIdees({ nombre = IDEES_NOMBRE_DEFAUT, envie = '', pl
   const fiches = (Array.isArray(plats) ? plats : []).filter(estObjet);
   const lesProfils = Array.isArray(profils) ? profils : [];
   const souhait = envieLue(envie);
-  const aimes = nomsNotes(fiches, lesProfils, NOTE_MAX);
+  // Un plat mis à la corbeille n'est plus un modèle à suivre, même noté « J'adore » ; il reste dans « évités » et « déjà ».
+  const aimes = nomsNotes(fiches.filter((plat) => !estDansCorbeille(plat)), lesProfils, NOTE_MAX);
   const evites = nomsNotes(fiches, lesProfils, 0);
   const deja = nomsDistincts(fiches.map((plat) => plat.nom)).sort(comparerNoms);
   const lignes = [
