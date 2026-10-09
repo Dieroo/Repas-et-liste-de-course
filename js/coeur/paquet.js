@@ -8,7 +8,7 @@ import {
   EMOJIS_STYLE, LIBELLES_STYLE, STYLES, VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient,
 } from './vocabulaire.js';
 import { evaluer, marqueursEffectifs, styleDe } from './compatibilite.js';
-import { VERSION_INSTRUCTIONS } from './claude.js';
+import { SOURCE_IDEE, VERSION_INSTRUCTIONS } from './claude.js';
 import { stylesAttendus } from './regles.js';
 
 // Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
@@ -829,6 +829,11 @@ function modifieeALaMain(plat) {
   return Boolean(plat?.modifieePar) || plat?.modifieeLe != null;
 }
 
+/** Vrai si la fiche a déjà sa recette : statut autre que ⏳ et au moins un ingrédient. */
+function aSaRecette(plat) {
+  return statutDe(plat) !== 'attente' && Array.isArray(plat?.ingredients) && plat.ingredients.length > 0;
+}
+
 /** Recette d'une fiche sans ses versions, son nom ni son statut : ce qui compte pour « même recette ». */
 function recetteSansVersions(plat) {
   const recette = recetteValidee(plat);
@@ -851,7 +856,12 @@ function recetteSansVersions(plat) {
  *     demandesAClore: [id], erreurs, avertissements, corrections: [{ id, pour, style, message, pourClaude }] }
  *   statut ∈ nouveau, complete (⏳ complété), remplace (recette remplacée), inchange (plat ⏳ sans ingrédients reçus),
  *   versions (seules les versions reçues s'écrivent, fusionnées par profil et par style : ni nom, ni statut, ni
- *   recette, marque « modifiée à la main » gardée), identique (rien n'est écrit ; les demandes satisfaites sont closes).
+ *   recette, marque « modifiée à la main » gardée), identique (rien n'est écrit ; les demandes satisfaites sont closes),
+ *   deja (idée de Claude, `source` « Idée de Claude » (claude.js › SOURCE_IDEE), qui vise par son identifiant ou son
+ *   nom un plat qui a déjà sa recette : rien n'est écrit ni clos, un avertissement le dit, le reste du lot
+ *   s'enregistre ; `id` : celui du plat gardé, `nom` : celui de l'idée, `ingredients` et `etapes` : ceux de la fiche
+ *   gardée ; une idée qui vise un plat ⏳ le complète normalement ; une recette collée depuis une fiche (`cible`) suit
+ *   les règles habituelles).
  *   `versions` : [{ pour, style, nom, action: 'ajoutee' | 'remplacee', convient, libelle }] (versions reçues qui
  *   changent ; `style` : celui de la version reçue, ou null). Une version reçue est comparée à celle du même profil et
  *   du même style (déduit pour une version d'avant les styles), et jugée seule (evaluer › versions).
@@ -1061,6 +1071,23 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       if (memeId) avertissementsPlat.push(`«\u00A0${memeId.nom}\u00A0» utilise déjà cet identifiant\u00A0: la recette est ajoutée à part.`);
     } else {
       vise = donnees.id;
+    }
+
+    // Idée de Claude (DEMANDE-IDEES) pour un plat qui a déjà sa recette : une idée ne remplace jamais une recette du
+    // foyer. Rien n'est écrit, sans erreur : les autres idées du lot s'enregistrent.
+    const dejaLa = !viseCible && recue && texte(donnees.source) === SOURCE_IDEE ? parId.get(vise) : null;
+    if (dejaLa && aSaRecette(dejaLa)) {
+      elements.push({
+        index,
+        id: vise,
+        nom: donnees.nom,
+        statut: 'deja',
+        ingredients: dejaLa.ingredients.length,
+        etapes: Array.isArray(dejaLa.etapes) ? dejaLa.etapes.length : 0,
+        avertissements: [...avertissementsPlat, `«\u00A0${dejaLa.nom}\u00A0» est déjà dans vos plats\u00A0: cette idée n’est pas reprise.`],
+        versions: [],
+      });
+      continue;
     }
 
     if (vises.has(vise)) {

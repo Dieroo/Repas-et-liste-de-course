@@ -14,7 +14,9 @@ export async function copier(texte) {
   zone.setAttribute('readonly', '');
   zone.setAttribute('aria-hidden', 'true');
   zone.className = 'hors-ecran';
-  document.body.append(zone);
+  // Depuis une feuille (dialogue modal), la page derrière est inerte : la zone se pose dans la feuille pour être
+  // sélectionnable.
+  (actif?.closest?.('dialog[open]') ?? document.body).append(zone);
   zone.select();
   let reussi = false;
   try {

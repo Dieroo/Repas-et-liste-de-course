@@ -1,19 +1,22 @@
 // Textes copiés pour le Projet Claude (CLAUDE.md §8, T2b) : demande de recette (avec les versions des profils qui ont
-// des règles), demande groupée de versions, corrections. Logique pure : ni DOM ni Firebase.
+// des règles), demande groupée de versions, demande d'idées de plats (T2b+), corrections. Logique pure : ni DOM ni
+// Firebase.
 // Chaque texte porte en deuxième ligne la version des instructions attendue (docs/projet-claude.md, section 0).
 // Les identifiants de profil et leurs règles ne vont qu'au presse-papiers ; jamais d'adresse, de prénom ni d'âge.
 // N'importe jamais paquet.js (qui garde la lecture des réponses) : pas de cycle.
 import { decrireRegles, lireRegime, stylesAttendus } from './regles.js';
 import { evaluer, profilsContraints } from './compatibilite.js';
-import { texte } from './vocabulaire.js';
+import { NOTE_MAX, noteDe } from './notes.js';
+import { slug } from './slug.js';
+import { VOCABULAIRES, code, texte } from './vocabulaire.js';
 
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 2;
+export const VERSION_INSTRUCTIONS = 3;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '49a2dbbaf3bd';
+export const EMPREINTE_INSTRUCTIONS = '38949d3b1ad5';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -21,6 +24,27 @@ const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
 /** Nombre de plats d'une demande groupée de versions : une réponse plus longue risque d'être coupée. */
 export const LOT_VERSIONS = 10;
 
+/** Nombre d'idées proposé par défaut, et choix possibles (feuille « Idées de plats »). */
+export const IDEES_NOMBRES = [5, 10, 15];
+export const IDEES_NOMBRE_DEFAUT = 15;
+/** Recettes par message de Claude : on colle chaque message, puis on écrit « suite » pour les suivantes. */
+export const IDEES_PAR_MESSAGE = 5;
+/** Longueur de l'envie facultative (une ligne). */
+export const IDEES_ENVIE_MAX = 120;
+/** Noms au plus des lignes « aimés » et « évités ». */
+export const IDEES_NOMS_MAX = 20;
+/**
+ * `source` d'une fiche rendue pour DEMANDE-IDEES : une idée qui vise un plat qui a déjà sa recette n'est pas reprise
+ * (paquet.js › preparerImport, statut `deja`).
+ */
+export const SOURCE_IDEE = 'Idée de Claude';
+// Appareils annoncés quand les réglages n'en disent rien (monsieur_cuisine : seulement s'il est actif).
+const APPAREILS_PAR_DEFAUT = ['plaque', 'four', 'cookeo', 'airfryer'];
+
+// Critères de toute demande d'idées (décision du propriétaire) : plats originaux, faciles à faire en batch.
+const CRITERES_IDEES = 'plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts.';
+// Dernière ligne d'une demande d'idées.
+const CONSIGNE_IDEES = `(Rends ${IDEES_PAR_MESSAGE} fiches complètes par message, chacune avec un \`id\` nouveau (slug du nom), \`"statutRecette": "brouillon"\` et \`"source": "${SOURCE_IDEE}"\`, et leurs variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l'app ». Après chaque message, attends « suite » pour les ${IDEES_PAR_MESSAGE} suivantes. Un seul bloc par message.)`;
 // Dernière ligne d'une demande de recette avec des versions.
 const CONSIGNE_RECETTE = '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)';
 // Consigne d'une demande groupée de versions : une seule version par plat (profil sans style attendu)…
@@ -68,29 +92,124 @@ function quantite(ingredient, champ = 'qte') {
 }
 
 /**
+ * Bloc `versions:` d'une demande de fiche complète (DEMANDE-RECETTE, DEMANDE-IDEES) : une ligne par profil contraint
+ * (ordre d'affichage) ; un profil qui attend des styles (regles.js › stylesAttendus) les annonce en fin de ligne
+ * (« — styles: mer, vegetal » ; « — styles: vegetal » pour un plat déjà connu comme dessert ou accompagnement ; sans
+ * plat connu, tous les styles du profil). [] sans profil contraint.
+ */
+function lignesVersions(profils, plat = null) {
+  const contraints = profilsContraints(profils).filter((profil) => typeof profil.id === 'string' && profil.id);
+  if (!contraints.length) return [];
+  return ['versions:', ...contraints.map((profil) => {
+    const styles = stylesAttendus(profil, plat);
+    return `- pour: ${profil.id} — ${reglesPourClaude(profil)}${styles.length ? ` — styles: ${styles.join(', ')}` : ''}`;
+  })];
+}
+
+/**
  * (a) Texte copié par « Demander à Claude » pour une recette à ajouter. Sans profil qui a des règles : texte de T1b
- * (plus la ligne de version des instructions). Sinon, une ligne `versions:` par profil contraint (ordre
- * d'affichage), pour que Claude rende la fiche complète avec leurs variantes ; un profil qui attend des styles
- * (regles.js › stylesAttendus) les annonce en fin de ligne (« — styles: mer, vegetal » ; « — styles: vegetal » pour un
- * plat déjà connu comme dessert ou accompagnement).
+ * (plus la ligne de version des instructions). Sinon, une ligne `versions:` par profil contraint (lignesVersions),
+ * pour que Claude rende la fiche complète avec leurs variantes.
  */
 export function texteDemandeRecette(plat, { profils = [] } = {}) {
-  const contraints = profilsContraints(profils).filter((profil) => typeof profil.id === 'string' && profil.id);
+  const versions = lignesVersions(profils, plat);
   const lignes = [
     `DEMANDE-RECETTE ${FORMAT}`,
     LIGNE_INSTRUCTIONS,
     `id: ${ligne(plat?.id)}`,
     `nom: ${ligne(plat?.nom)}`,
+    ...versions,
   ];
-  if (contraints.length) {
-    lignes.push('versions:');
-    for (const profil of contraints) {
-      const styles = stylesAttendus(profil, plat);
-      lignes.push(`- pour: ${profil.id} — ${reglesPourClaude(profil)}${styles.length ? ` — styles: ${styles.join(', ')}` : ''}`);
-    }
-  }
   lignes.push('(Ajoute un lien, une photo ou la recette dictée.)');
-  if (contraints.length) lignes.push(CONSIGNE_RECETTE);
+  if (versions.length) lignes.push(CONSIGNE_RECETTE);
+  return lignes.join('\n');
+}
+
+const comparerNoms = new Intl.Collator('fr', { sensitivity: 'base' }).compare;
+
+/** Noms sur une ligne, non vides, sans doublon (même nom à la casse et aux accents près), dans l'ordre reçu. */
+function nomsDistincts(noms) {
+  const vus = new Set();
+  const distincts = [];
+  for (const nom of noms.map(ligne)) {
+    const cle = slug(nom);
+    if (!nom || vus.has(cle)) continue;
+    vus.add(cle);
+    distincts.push(nom);
+  }
+  return distincts;
+}
+
+/**
+ * Noms des plats notés `note` par au moins un des profils de l'app (les notes d'un profil retiré sont ignorées),
+ * IDEES_NOMS_MAX au plus : d'abord ceux qu'ont notés ainsi le plus de profils, puis par nom ; rendus dans l'ordre
+ * alphabétique.
+ */
+function nomsNotes(plats, profils, note) {
+  const ids = profils.filter(estObjet).map((profil) => profil.id).filter((id) => typeof id === 'string' && id);
+  const comptes = [];
+  for (const plat of plats) {
+    const combien = ids.filter((id) => noteDe(plat, id) === note).length;
+    if (combien) comptes.push({ nom: ligne(plat.nom), combien });
+  }
+  comptes.sort((a, b) => b.combien - a.combien || comparerNoms(a.nom, b.nom));
+  return nomsDistincts(comptes.map((c) => c.nom)).slice(0, IDEES_NOMS_MAX).sort(comparerNoms);
+}
+
+/**
+ * Codes des appareils actifs des réglages (`reglages/foyer.appareils` : codes, ou objets { id | appareil | code,
+ * actif }), dans l'ordre du vocabulaire ; `monsieur_cuisine` seulement s'il est actif. Sans liste lisible ni appareil
+ * actif : plaque, four, cookeo, airfryer.
+ */
+function appareilsActifs(appareils) {
+  const actifs = new Set();
+  for (const appareil of Array.isArray(appareils) ? appareils : []) {
+    if (estObjet(appareil) && appareil.actif === false) continue;
+    const brut = estObjet(appareil) ? [appareil.id, appareil.appareil, appareil.code].find((v) => typeof v === 'string') : appareil;
+    const valeur = code(brut);
+    if (VOCABULAIRES.appareil.includes(valeur)) actifs.add(valeur);
+  }
+  const ordonnes = VOCABULAIRES.appareil.filter((valeur) => actifs.has(valeur));
+  return ordonnes.length ? ordonnes : APPAREILS_PAR_DEFAUT;
+}
+
+/** Envie facultative (texte) : une ligne, espaces réduits, IDEES_ENVIE_MAX caractères au plus (jamais un emoji coupé). */
+function envieLue(envie) {
+  return [...texte(envie)].slice(0, IDEES_ENVIE_MAX).join('').trim();
+}
+
+/**
+ * (c) Texte copié par « Demander des idées » (Semaine, gestionnaire ; T2b+) : Claude propose des plats originaux,
+ * faciles à faire en batch, IDEES_PAR_MESSAGE fiches complètes par message (on écrit « suite » pour les suivantes).
+ * `nombre` ∈ IDEES_NOMBRES (nombre ou texte de chiffres ; sinon IDEES_NOMBRE_DEFAUT) ; `envie` : texte libre
+ * facultatif (une ligne, IDEES_ENVIE_MAX caractères au plus) ; `plats` : plats de l'app (noms à éviter, ⏳ compris ;
+ * notes « J'adore » et « Jamais » des profils de l'app) ; `profils` : profils de l'app (bloc `versions:`, comme
+ * DEMANDE-RECETTE, plat inconnu : tous les styles du profil ; notes) ; `appareils` : reglages.appareils (appareils
+ * actifs, sinon plaque, four, cookeo, airfryer). Lignes `envie`, `versions`, `aimés`, `évités` et `déjà dans l'app`
+ * omises quand elles sont vides.
+ */
+export function texteDemandeIdees({ nombre = IDEES_NOMBRE_DEFAUT, envie = '', plats = [], profils = [], appareils = null } = {}) {
+  const lu = typeof nombre === 'string' && /^\s*\d+\s*$/.test(nombre) ? Number(nombre) : nombre;
+  const combien = IDEES_NOMBRES.includes(lu) ? lu : IDEES_NOMBRE_DEFAUT;
+  const fiches = (Array.isArray(plats) ? plats : []).filter(estObjet);
+  const lesProfils = Array.isArray(profils) ? profils : [];
+  const souhait = envieLue(envie);
+  const aimes = nomsNotes(fiches, lesProfils, NOTE_MAX);
+  const evites = nomsNotes(fiches, lesProfils, 0);
+  const deja = nomsDistincts(fiches.map((plat) => plat.nom)).sort(comparerNoms);
+  const lignes = [
+    `DEMANDE-IDEES ${FORMAT}`,
+    LIGNE_INSTRUCTIONS,
+    `nombre: ${combien}`,
+  ];
+  if (souhait) lignes.push(`envie: ${souhait}`);
+  lignes.push(`critères: ${CRITERES_IDEES}`);
+  lignes.push(`appareils: ${appareilsActifs(appareils).join(', ')}`);
+  lignes.push(...lignesVersions(lesProfils));
+  if (aimes.length) lignes.push(`aimés: ${aimes.join(' ; ')}`);
+  if (evites.length) lignes.push(`évités: ${evites.join(' ; ')}`);
+  if (deja.length) lignes.push(`déjà dans l'app: ${deja.join(' ; ')}`);
+  lignes.push(CONSIGNE_IDEES);
   return lignes.join('\n');
 }
 
@@ -190,7 +309,9 @@ export function texteDemandeVariantes(plats, profil) {
  * ([{ pourClaude }], identifiant du plat compris) ; seules, elles demandent les versions corrigées plutôt que les
  * fiches entières. Une réponse « versions seules » refusée (chaque plat validé porte `versionsSeules`) redemande les
  * seules versions, et celles de tout le lot : rien n'a été enregistré, et Claude n'a jamais reçu les recettes
- * entières (il les inventerait).
+ * entières (il les inventerait). Plusieurs fiches refusées ensemble (un message de DEMANDE-IDEES, en général) :
+ * toutes celles du message sont redemandées, les autres telles quelles, car rien n'a été enregistré (tout ou rien) et
+ * recoller le message bute sur la même erreur.
  */
 export function texteCorrectionPourClaude(probleme) {
   const lignes = [`CORRECTION ${FORMAT}`, LIGNE_INSTRUCTIONS];
@@ -218,10 +339,16 @@ export function texteCorrectionPourClaude(probleme) {
   for (const correction of corrections) lignes.push(`- ${correction.pourClaude}`);
   const plats = Array.isArray(probleme?.plats) ? probleme.plats.filter(estObjet) : [];
   const lotDeVersions = !probleme?.erreur && plats.length > 0 && plats.every((plat) => plat.versionsSeules);
+  // Plats sans erreur à eux : rien n'a été enregistré, Claude les rend aussi, tels quels.
+  const autres = plats.filter((plat) => !plat.erreurs?.length && plat.id).map((plat) => ligne(plat.id));
   if (lotDeVersions) {
-    const autres = plats.filter((plat) => !plat.erreurs?.length && plat.id).map((plat) => ligne(plat.id));
     if (autres.length) lignes.push(`- Rien n’a été enregistré : rends aussi, telles quelles, les versions des autres plats du lot (${autres.join(', ')}).`);
     lignes.push('(Rends seulement { "id", "nom", "variantes" } de chaque plat du lot, corrigé, en un seul bloc.)');
+  } else if (!probleme?.erreur && erreurs && plats.length > 1) {
+    // Message de plusieurs fiches (DEMANDE-IDEES) : sans cela, Claude ne rendrait que la fiche fautive, et les
+    // autres seraient perdues (le message recollé bute sur la même erreur ; « suite » passe aux idées suivantes).
+    if (autres.length) lignes.push(`- Rien n’a été enregistré : rends aussi, telles quelles, les autres fiches du message (${autres.join(', ')}).`);
+    lignes.push('(Rends toutes les fiches du message, corrigées, en un seul bloc.)');
   } else {
     lignes.push(!erreurs && corrections.length
       ? '(Rends seulement { "id", "nom", "variantes" } de chaque plat corrigé, en un seul bloc.)'

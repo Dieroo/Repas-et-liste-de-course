@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
-  VERSION_INSTRUCTIONS, EMPREINTE_INSTRUCTIONS, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
+  VERSION_INSTRUCTIONS, EMPREINTE_INSTRUCTIONS, texteDemandeIdees, texteDemandeRecette, texteDemandeVariantes,
+  texteCorrectionPourClaude,
 } from '../js/coeur/claude.js';
 import { FORMAT, extrairePaquet, validerPaquet, controlerInstructions } from '../js/coeur/paquet.js';
 import { creerSauvegarde, lireSauvegarde, validerSauvegarde } from '../js/coeur/sauvegarde.js';
@@ -68,11 +69,16 @@ test('chaque texte copié porte en deuxième ligne la version des instructions',
       erreurs: [], corrections: [{ pourClaude: 'id quiche-test variantes[pour=profil-a] : contient lardon fumé (viande), exclu pour profil-a' }],
     }),
     'correction : lot de versions refusé': texteCorrectionPourClaude(versionsRefusees),
+    'correction : message de plusieurs fiches refusé': texteCorrectionPourClaude(validerPaquet([paquet(
+      { ...QUICHE, ingredients: [{ ...LARDONS, forme: undefined }] }, { ...QUICHE, id: 'quiche-bis', nom: 'Quiche bis' },
+    )], { profils: PROFILS })),
+    'idées sans profil': texteDemandeIdees(),
+    'idées avec profils et envie': texteDemandeIdees({ nombre: 5, envie: 'plats d’automne', plats: [QUICHE], profils: PROFILS }),
   };
   assert.match(textes['recette avec profils'], /\nversions:\n/);
   for (const [quoi, texte] of Object.entries(textes)) {
     const lignes = texte.split('\n');
-    assert.match(lignes[0], /^(DEMANDE-RECETTE|DEMANDE-VARIANTES|CORRECTION) paquet@1$/, quoi);
+    assert.match(lignes[0], /^(DEMANDE-RECETTE|DEMANDE-VARIANTES|DEMANDE-IDEES|CORRECTION) paquet@1$/, quoi);
     assert.equal(lignes[1], ligneAttendue, quoi);
     assert.equal(lignes.filter((l) => l.startsWith('instructions:')).length, 1, quoi);
     // Recollé par erreur, il reste reconnu comme une demande.
@@ -270,7 +276,7 @@ test('docs : chaque exemple de réponse porte la version, juste après le format
 
 test('docs : chaque exemple de demande porte la ligne de version en deuxième ligne', () => {
   const demandes = blocs('').filter((b) => /^(DEMANDE-|CORRECTION )/.test(b));
-  assert.ok(demandes.length >= 4, 'exemples DEMANDE-RECETTE, DEMANDE-VARIANTES et deux CORRECTION');
+  assert.ok(demandes.length >= 5, 'exemples DEMANDE-RECETTE, DEMANDE-VARIANTES, deux CORRECTION et DEMANDE-IDEES');
   assert.equal(demandes.length, blocs('').length, 'un bloc sans langage n’est qu’un exemple de demande');
   for (const demande of demandes) assert.equal(demande.split('\n')[1], ligneAttendue, demande.split('\n')[0]);
 });
