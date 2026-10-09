@@ -6,7 +6,9 @@
 // - le barème est complet et générique : rien ici ne dépend de l'âge réel d'un enfant ; une ligne dont l'âge est
 //   passé n'est jamais ajoutée à un profil ;
 // - « plus prudent tout de suite, moins prudent seulement par un toucher » : reglesSelonAge ajoute ou durcit, toujours
-//   face aux règles enregistrées, jamais n'assouplit ni ne retire ;
+//   face aux règles enregistrées, jamais n'assouplit ni ne retire ; une précaution dont l'âge est passé est seulement
+//   proposée (propositionsAge, carte 🧸🎂 de Semaine), et ne s'assouplit, ne disparaît ou n'est gardée que par un choix
+//   de l'écran de l'enfant, pour l'âge où il est fait (appliquerChoixAge, rejouerChoixAge, T2c-3) ;
 // - la borne est copiée dans la règle (`age.jusquAMois`) : precautionsAge ne lit jamais la date, et une modification
 //   future du barème n'agit sur aucun profil sans passer par l'écran ;
 // - les règles d'âge ne sont jamais évaluées par compatibilite.js › evaluer ni décrites à Claude (type propre).
@@ -43,7 +45,8 @@ export const BAREME_AGE = [
   },
   {
     code: 'lait_cru', libelle: 'Fromages au lait cru',
-    aide: 'Sauf comté, beaufort, emmental, gruyère. L’app ne compte pas un fromage bien cuit au four.',
+    aide: 'Sauf comté, beaufort, emmental, gruyère, parmesan, grana padano. '
+      + 'L’app ne compte pas un fromage bien cuit au four.',
     court: 'lait cru', marqueurs: ['lait_cru'],
     paliers: [
       { severite: 'exclu', jusquAMois: 60 },
@@ -385,6 +388,154 @@ export function lireAge(profil, aujourdhui) {
       else if (connue && mois >= borne) etat = 'passee';
       return { regle, entree: entreeDe(codeDe(regle)), etat, resteMois: connue ? borne - mois : null };
     });
+}
+
+// ——— Il a grandi (T2c-3) ———
+//
+// Passer un palier n'est jamais automatique : propositionsAge le propose (lignes « Âge passé : à revoir » de l'écran de
+// l'enfant, carte 🧸🎂 de Semaine), appliquerChoixAge l'applique au brouillon après un toucher. Ordre fixe du brouillon
+// de l'écran : règles enregistrées → reglesSelonAge (plus prudent) → choix de T2c-3, chacun seulement à l'âge où il a
+// été fait (rejouerChoixAge) → interrupteurs. « Garder » est définitif (`age.garde`, plus rien n'est proposé pour cette
+// précaution) et réversible (« Revoir »).
+
+/**
+ * Ce qu'une précaution d'âge permet à `mois` (ni `actif` ni `garde` ne sont lus ici : propositionsAge les filtre, et
+ * un choix fait avant de toucher un interrupteur s'applique quand même, dans l'ordre du brouillon) :
+ * - null : âge inconnu, borne de la règle pas encore atteinte (`mois < age.jusquAMois`), barème de cette version
+ *   qui demande encore ce palier ou un plus strict (borne copiée plus basse que celle du barème), ou palier inconnu
+ *   d'un code connu alors qu'un palier du barème est encore en vigueur (retirée, la précaution reviendrait aussitôt
+ *   par reglesSelonAge : jamais moins prudent que le barème de l'app) ;
+ * - { action: 'assouplir', entree, palier } : un palier moins strict du barème est en vigueur (palierEnVigueur saute
+ *   les paliers passés) ;
+ * - { action: 'retirer' } : tous les paliers du barème sont passés (palier inconnu compris), ou code inconnu de cette
+ *   version (dès la borne de la règle).
+ */
+function choixPossible(regle, mois) {
+  const borne = regle?.age?.jusquAMois;
+  if (!Number.isInteger(mois) || mois < 0 || !Number.isFinite(borne) || mois < borne) return null;
+  const entree = entreeDe(codeDe(regle));
+  if (!entree) return { action: 'retirer' };
+  const enVigueur = palierEnVigueur(entree, mois);
+  if (enVigueur === -1) return { action: 'retirer' };
+  const palier = palierConnu(regle, entree);
+  if (palier !== null && enVigueur > palier) return { action: 'assouplir', entree, palier: enVigueur };
+  return null;
+}
+
+/** Bouton principal d'une précaution à revoir : « Passer à « déconseillé » » ou « Retirer la précaution ». */
+function texteChoix(possible) {
+  if (possible.action !== 'assouplir') return 'Retirer la précaution';
+  const cible = possible.entree.paliers[possible.palier];
+  return cible.severite === 'adaptable'
+    ? 'Passer à «\u00A0déconseillé\u00A0»'
+    : `Passer à «\u00A0pas avant ${texteBorne(cible.jusquAMois)}\u00A0»`;
+}
+
+/**
+ * Précautions d'un profil dont l'âge est passé, à revoir (T2c-3) : règles d'âge actives, non gardées, avec
+ * `mois ≥ age.jusquAMois` (date du profil à `aujourdhui`). `action` : 'assouplir' si un palier suivant du barème est
+ * encore en vigueur, sinon 'retirer' quand plus aucun palier du barème ne l'est (code inconnu de cette version : dès
+ * la borne de la règle ; palier inconnu d'un code connu : rien tant qu'un palier du barème est en vigueur). Une règle
+ * désactivée ou gardée ne propose jamais rien ; sans date lisible, rien. Une entrée par code (doublons réduits comme dans lireAge), dans
+ * l'ordre du barème. `texte` : bouton principal de la ligne. Ne propose que : rien n'est écrit.
+ * → [{ code, regleId, action: 'assouplir' | 'retirer', texte }]
+ */
+export function propositionsAge(profil, aujourdhui) {
+  const mois = ageEnMois(profil?.naissance, aujourdhui);
+  if (mois === null) return [];
+  const propositions = [];
+  for (const { regle } of lireAge(profil, aujourdhui)) {
+    if (regle.actif === false || regle.age.garde === true) continue;
+    const possible = choixPossible(regle, mois);
+    if (!possible) continue;
+    const code = codeDe(regle);
+    propositions.push({
+      code,
+      regleId: typeof regle.id === 'string' && regle.id ? regle.id : `age-${code}`,
+      action: possible.action,
+      texte: texteChoix(possible),
+    });
+  }
+  return propositions;
+}
+
+/**
+ * Choix de l'écran de l'enfant pour une précaution dont l'âge est passé (T2c-3), appliqué au brouillon (copie, sans
+ * valeur undefined) ; seules les règles d'âge de ce `code` changent, les autres sont recopiées telles quelles, à leur
+ * place. `mois` : âge du brouillon (ageEnMois), null s'il n'y a pas de date.
+ * - 'assouplir' : la règle est remplacée à sa place par celle du palier en vigueur (regleDuPalier ; paliers passés
+ *   sautés, `actif` gardé, `garde` retiré) ;
+ * - 'retirer' : la règle disparaît ;
+ * - 'garder' : `age.garde = true` (plus rien n'est proposé pour elle) ;
+ * - 'revoir' : `age.garde` est retiré (toujours permis : jamais moins prudent).
+ * Les trois premiers ne s'appliquent qu'à une règle à revoir à `mois` (choixPossible) : 'assouplir' seulement si un
+ * palier moins strict est en vigueur (impossible pour un code ou un palier inconnu), 'retirer' seulement si aucun
+ * palier du barème n'est plus en vigueur (code inconnu : dès la borne de la règle), 'garder' dans les deux cas. Sinon
+ * (âge pas encore atteint, choix inconnu) : liste inchangée. Ainsi un choix ne rend jamais une précaution moins
+ * prudente que ce que le barème permet à `mois` ; rejouerChoixAge écarte en plus les choix faits pour un autre âge.
+ * → regles
+ */
+export function appliquerChoixAge(regles, code, choix, mois) {
+  const sortie = [];
+  for (const regle of (Array.isArray(regles) ? regles : []).filter((r) => r !== undefined)) {
+    const copie = copier(regle);
+    if (typeof code !== 'string' || !code || codeDe(regle) !== code) {
+      sortie.push(copie);
+      continue;
+    }
+    if (choix === 'revoir') {
+      delete copie.age.garde;
+      sortie.push(copie);
+      continue;
+    }
+    const possible = choixPossible(regle, mois);
+    if (choix === 'retirer' && possible?.action === 'retirer') continue;
+    if (choix === 'assouplir' && possible?.action === 'assouplir') {
+      sortie.push(regleDuPalier(possible.entree, possible.palier, { actif: regle.actif !== false }));
+      continue;
+    }
+    if (choix === 'garder' && possible) copie.age.garde = true;
+    sortie.push(copie);
+  }
+  return sortie;
+}
+
+/**
+ * Choix « Il a grandi » de l'écran de l'enfant, rejoués sur le brouillon dans l'ordre où ils ont été touchés
+ * (appliquerChoixAge). Un choix ne vaut que pour l'âge, en mois révolus, où il a été fait : après une date corrigée ou
+ * effacée, ou un nouveau mois, les choix faits pour un autre âge sont laissés de côté, et leurs précautions redeviennent
+ * à revoir (jamais assouplies ni retirées pour un âge que personne n'a regardé). `choix` : [{ code, choix, mois }]
+ * (`mois` null : fait sans date ; seul « revoir » agit alors). `mois` : âge du brouillon, null sans date. Copie, sans
+ * valeur undefined ; la liste reçue n'est pas modifiée.
+ * → regles
+ */
+export function rejouerChoixAge(regles, choix, mois) {
+  const ageDe = (valeur) => (Number.isInteger(valeur) && valeur >= 0 ? valeur : null);
+  const age = ageDe(mois);
+  let sortie = (Array.isArray(regles) ? regles : []).filter((regle) => regle !== undefined).map(copier);
+  for (const fait of Array.isArray(choix) ? choix : []) {
+    if (!estObjet(fait) || ageDe(fait.mois) !== age) continue;
+    sortie = appliquerChoixAge(sortie, fait.code, fait.choix, age);
+  }
+  return sortie;
+}
+
+/**
+ * Carte « 🧸🎂 <Enfant> a 5 ans ! » de Semaine : le premier profil de profilsAvecAge (ordre d'affichage) qui a au
+ * moins une précaution à revoir ; `age` : son âge (texteAge) ; `nombre` : précautions à revoir, tous profils
+ * confondus. Ne lit aucun plat. null quand rien n'est à revoir.
+ * → null | { profil, age, nombre }
+ */
+export function carteAnniversaire(profils, aujourdhui) {
+  let premier = null;
+  let nombre = 0;
+  for (const profil of profilsAvecAge(profils)) {
+    const propositions = propositionsAge(profil, aujourdhui);
+    if (!propositions.length) continue;
+    nombre += propositions.length;
+    premier ??= profil;
+  }
+  return premier ? { profil: premier, age: texteAge(ageEnMois(premier.naissance, aujourdhui)), nombre } : null;
 }
 
 // ——— Plats repérés ———

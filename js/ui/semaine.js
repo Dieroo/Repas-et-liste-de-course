@@ -1,12 +1,15 @@
 // Écran Semaine (accueil) : salutation, jours de la semaine, carte d'accueil ; pour le gestionnaire (hors aperçu
-// « Repas et courses »), la carte « Idées de plats » qui copie une demande pour le projet Claude.
+// « Repas et courses »), la carte « 🧸🎂 <Enfant> a 5 ans ! » quand des précautions de l'enfant ont passé leur âge
+// (T2c-3), et la carte « Idées de plats » qui copie une demande pour le projet Claude.
 import { el, enteteVue, pastille } from './dom.js';
 import { prenomDe } from './profil.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
+import { aujourdhuiDe } from './regime.js';
 import {
   IDEES_ENVIE_MAX, IDEES_NOMBRES, IDEES_NOMBRE_DEFAUT, IDEES_PAR_MESSAGE, texteDemandeIdees,
 } from '../coeur/claude.js';
+import { carteAnniversaire } from '../coeur/age.js';
 
 const NOMS_JOURS = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
 
@@ -173,11 +176,51 @@ function carteIdees() {
 }
 
 /**
+ * Carte « 🧸🎂 <Enfant> a 5 ans ! » (gestionnaire, hors aperçu « Repas et courses ») : des précautions d'un enfant ont
+ * passé leur âge (coeur/age.js › carteAnniversaire : le premier enfant, dans l'ordre des profils, qui en a). Un résumé
+ * seulement : les choix se font sur « 🧸 Ce que <Enfant> mange », et rien ne change sans un toucher. Ne lit aucun plat,
+ * n'écrit rien, n'envoie aucune notification. Nœud gardé et mis à jour en place (`maj`) : la carte apparaît en direct
+ * (date changée sur l'autre appareil) et disparaît dès qu'aucune précaution n'est à revoir.
+ * → { noeud, maj }
+ */
+function creerCarteAnniversaire(ctx) {
+  const titre = el('span', {});
+  const lien = el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/reglages' }, 'Voir ses précautions ›');
+  const noeud = el('section', { class: 'carte carte-anniversaire', 'aria-labelledby': 'titre-anniversaire', hidden: true },
+    el('h2', { id: 'titre-anniversaire' }, el('span', { 'aria-hidden': 'true' }, '🧸🎂\u00A0'), titre),
+    el('p', {}, 'Certaines précautions peuvent s’assouplir. Rien ne change sans vous.'),
+    lien);
+
+  function maj(c) {
+    const carte = c?.role === 'gestionnaire' && c.profilsCharges
+      ? carteAnniversaire(c.profils ?? [], aujourdhuiDe(c))
+      : null;
+    const profil = carte?.profil;
+    const nom = String(profil?.nom ?? '').replace(/\s+/g, ' ').trim();
+    const age = String(carte?.age ?? '').trim();
+    const montrer = Boolean(profil && typeof profil.id === 'string' && profil.id && nom && age);
+    noeud.hidden = !montrer;
+    if (!montrer) return;
+    const texte = `${nom} a ${age}\u00A0!`;
+    if (titre.textContent !== texte) titre.textContent = texte;
+    const href = `#/regime/${encodeURIComponent(profil.id)}`;
+    if (lien.getAttribute('href') !== href) lien.setAttribute('href', href);
+    const nomAccessible = `Voir les précautions de ${nom}`;
+    if (lien.getAttribute('aria-label') !== nomAccessible) lien.setAttribute('aria-label', nomAccessible);
+  }
+
+  maj(ctx);
+  return { noeud, maj };
+}
+
+/**
  * Écran reconstruit seulement quand sa clé change (jour, salutation, rôle, aperçu) ; `maj(ctx)` garde le contexte à
- * jour pour la feuille « Idées de plats ». `ctx.role` est le rôle affiché : « courses » en aperçu.
+ * jour pour la feuille « Idées de plats » et met à jour en place la carte « 🧸🎂 ». `ctx.role` est le rôle affiché :
+ * « courses » en aperçu.
  */
 export function creer(ctx) {
   contexteSemaine = ctx;
+  const anniversaire = ctx.role === 'gestionnaire' ? creerCarteAnniversaire(ctx) : null;
   const maintenant = new Date();
   const prenom = prenomDe(ctx.utilisateur);
   const jours = joursDeLaSemaine(maintenant);
@@ -186,6 +229,8 @@ export function creer(ctx) {
 
   const noeud = el('div', { class: 'vue' },
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
+
+    anniversaire?.noeud ?? null,
 
     el('section', { class: 'carte carte-ligne' },
       pastille('🍲'),
@@ -219,6 +264,7 @@ export function creer(ctx) {
     noeud,
     maj(nouveau) {
       contexteSemaine = nouveau;
+      anniversaire?.maj(nouveau);
     },
   };
 }

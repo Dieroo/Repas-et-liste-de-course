@@ -3062,6 +3062,50 @@ select.champ {
 
 .precaution-eteinte .precaution-etat { color: var(--texte-doux); }
 
+/* « Il a grandi » (T2c-3) : « <Enfant> a grandi : 2 précautions peuvent s’assouplir. Rien ne change sans vous. »,
+   en tête de la section ; texte normal sur ocre doux (12,7:1 en clair, 11:1 en sombre). */
+.age-grandi {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--ocre-doux);
+  color: var(--texte);
+  font-weight: 600;
+}
+
+.section-age-enfant h2:focus:not(:focus-visible) { outline: none; }
+
+/* Précaution dont l'âge est passé : « Âge passé : à revoir » en gras ; sous la ligne, « Passer à « déconseillé » » ou
+   « Retirer la précaution » puis « Garder » (« Revoir » pour une précaution gardée). Cibles de 48 px au moins ; un
+   libellé trop long passe à la ligne. */
+.precaution-a-revoir .precaution-etat { font-weight: 600; }
+
+.precaution-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin-top: -2px;
+  padding-bottom: 12px;
+}
+
+.precaution-actions .bouton {
+  min-height: 48px;
+  white-space: normal;
+}
+
+/* Choix principal sur toute la largeur, « Garder » dessous : la même place quelle que soit la longueur du libellé. */
+.precaution-actions .precaution-choix {
+  flex: 1 1 100%;
+  padding: 8px 18px;
+}
+
+/* « Garder », « Revoir » : alignés sur le texte de la ligne ; la cible garde 48 px de haut et de large au moins. */
+.precaution-actions .bouton-texte {
+  flex: none;
+  min-width: 48px;
+  padding: 0 2px;
+}
+
 /* Interrupteur (case à cocher, rôle switch) : éteint, contour de champ ; allumé, fond olive et curseur clair.
    Contrastes (éléments graphiques, 3:1 au moins) : contour de champ 3,5:1 sur la surface (clair) et 3,3:1 (sombre) ;
    olive 5,7:1 et 6,6:1 ; curseur sur olive 5,7:1 et 6,6:1. */
@@ -3135,3 +3179,8 @@ body.sans-onglets:has(.message-barre:not([hidden])) main {
 body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
   bottom: calc(var(--hauteur-barre) + 68px + env(safe-area-inset-bottom));
 }
+
+/* Semaine : carte « 🧸🎂 <Enfant> a 5 ans ! » (T2c-3, gestionnaire), sous l'en-tête ; carte ordinaire, comme
+   « Idées de plats ». Un prénom long passe à la ligne. */
+.carte-anniversaire h2,
+.carte-anniversaire p { overflow-wrap: anywhere; }

@@ -10,6 +10,12 @@
 // brouillon précédent ; une date effacée ne retire aucune précaution. Date et règles s'enregistrent ensemble, par une
 // transaction en ligne (actions.enregistrerPrecautions) ; hors ligne, rien n'est écrit et le brouillon reste.
 // Aucune écriture à l'ouverture de l'écran.
+//
+// « Il a grandi » (T2c-3) : une précaution dont l'âge est passé n'est jamais assouplie seule. Sa ligne dit « Âge passé :
+// à revoir » et propose « Passer à « déconseillé » » (palier suivant encore en vigueur) ou « Retirer la précaution »,
+// puis « Garder » ; une précaution gardée propose « Revoir ». Ces choix ne changent que le brouillon, dans un ordre fixe :
+// règles enregistrées → reglesSelonAge → choix (chacun seulement pour l'âge où il a été fait) → interrupteurs ;
+// « Enregistrer » les écrit par la même transaction.
 import { el, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { texteSeverite } from './compat.js';
@@ -18,8 +24,8 @@ import { bilanCompatibilite } from '../coeur/compatibilite.js';
 import { estEnfant } from '../coeur/profils.js';
 import { platsARelire } from '../coeur/relecture.js';
 import {
-  ageEnMois, basculerPrecaution, bilanPrecautions, estRegleAge, lireAge, reglesSelonAge, texteAge, texteReste,
-  validerNaissance,
+  ageEnMois, basculerPrecaution, bilanPrecautions, estRegleAge, lireAge, propositionsAge, reglesSelonAge,
+  rejouerChoixAge, texteAge, texteReste, validerNaissance,
 } from '../coeur/age.js';
 
 const ORDRE_REGIMES = ['tout', 'sans_viande', 'sans_viande_ni_poisson'];
@@ -106,19 +112,40 @@ function libelleInconnu(code) {
 
 /**
  * Deuxième ligne d'une précaution : « Pas avant 5 ans · encore 8 mois », « Déconseillé avant 15 ans · encore 11 ans »,
- * « Pas avant 3 ans · désactivée », « Pas avant 5 ans · âge atteint, à revoir bientôt » ; sans date : « Pas avant 5 ans ».
+ * « Pas avant 3 ans · désactivée », « Pas avant 5 ans · gardée » ; sans date : « Pas avant 5 ans ». Une précaution dont
+ * l'âge est passé dit « Âge passé : à revoir » (TEXTE_A_REVOIR, avec ses choix) ; « Pas avant 4 ans · âge atteint »
+ * ne reste que pour une précaution que coeur/age.js › propositionsAge ne propose pas de revoir (borne copiée d'un
+ * ancien barème, palier d'une autre version de l'app : le barème de l'app la demande encore), sans rien promettre.
  */
 function texteEtatPrecaution({ regle, etat, resteMois }) {
   const base = texteSeverite(regle?.severite, regle?.age?.jusquAMois);
   if (etat === 'desactivee') return `${base}\u00A0· désactivée`;
   if (etat === 'gardee') return `${base}\u00A0· gardée`;
-  if (etat === 'passee') return `${base}\u00A0· âge atteint, à revoir bientôt`;
+  if (etat === 'passee') return `${base}\u00A0· âge atteint`;
   if (Number.isFinite(resteMois) && resteMois > 0) return `${base}\u00A0· ${texteReste(resteMois)}`;
   return base;
 }
 
 /** Code d'une règle d'âge (`age.code`). */
 const codeDe = (regle) => String(regle?.age?.code ?? '');
+
+/**
+ * Deuxième ligne d'une précaution dont l'âge est passé, et libellés de son bouton principal (T2c-3) quand
+ * coeur/age.js › propositionsAge n'en donne pas (`texte`).
+ */
+const TEXTE_A_REVOIR = 'Âge passé\u00A0: à revoir';
+const LIBELLES_CHOIX = {
+  assouplir: 'Passer à «\u00A0déconseillé\u00A0»',
+  retirer: 'Retirer la précaution',
+};
+
+/** « <Enfant> a grandi : 2 précautions peuvent s’assouplir. Rien ne change sans vous. » (accordé) */
+function phraseGrandi(nombre, nom) {
+  const precautions = nombre > 1
+    ? `${nombre}\u00A0précautions peuvent s’assouplir`
+    : '1\u00A0précaution peut s’assouplir';
+  return `${nom} a grandi\u00A0: ${precautions}. Rien ne change sans vous.`;
+}
 
 /**
  * Choix non enregistrés d'un écran quitté sans « Annuler » ni « Enregistrer » (lien de l'en-tête, aperçu…), par
@@ -141,6 +168,11 @@ export function creer(ctx) {
   let incomplete = false; // date à moitié saisie (validity.badInput)
   let erreurMontree = false; // l'erreur de date s'affiche après la sortie du champ ou « Enregistrer », puis en direct
   let bascules = new Map(); // code → actif : interrupteurs touchés dans le brouillon
+  // code → choix touchés dans l'ordre, [{ choix: « assouplir » | « retirer » | « garder » | « revoir », mois }] :
+  // précautions dont l'âge est passé (T2c-3). `mois` : âge du brouillon au toucher (null sans date). Rejoués sur le
+  // brouillon, chacun seulement pour cet âge (coeur/age.js › rejouerChoixAge) : une date corrigée ou effacée les laisse
+  // de côté, et les précautions redeviennent à revoir.
+  let choixAge = new Map();
   let messageEnvoi = ''; // hors ligne, échec : affiché au-dessus de « Enregistrer »
   let conflit = false;
   let garde = false; // entrée d'historique ajoutée pour intercepter le retour d'Android
@@ -155,8 +187,10 @@ export function creer(ctx) {
   const profilCourant = () => (courant.profils ?? []).find((profil) => profil.id === id);
   const aujourdhui = () => aujourdhuiDe(courant);
   const modeAge = () => Boolean(ouverture?.avecAge) || avecEcranAge(profilCourant());
-  // Écran d'origine encore dans l'historique : Réglages, ou la fiche d'un plat (« Ses précautions › »).
+  // Écran d'origine encore dans l'historique : Réglages, la fiche d'un plat (« Ses précautions › ») ou Semaine
+  // (carte « 🧸🎂 <Enfant> a 5 ans ! », « Voir ses précautions › »).
   const vientDeLaFiche = () => courant.routePrecedente === 'plat' && history.length > 1;
+  const vientDeLaSemaine = () => courant.routePrecedente === 'semaine' && history.length > 1;
   const vientDesReglages = () => courant.routePrecedente === 'reglages' && history.length > 1;
 
   /** Empreinte de ce que l'écran enregistre (`regles` et `naissance`), comparée pour repérer un changement venu d'ailleurs. */
@@ -217,9 +251,14 @@ export function creer(ctx) {
   const texteBilanAge = el('span', {});
   const bilanAge = el('p', { class: 'bilan-age', role: 'status' },
     el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), texteBilanAge);
-  const titreAge = el('h2', { id: 'regime-age-titre' }, el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), 'Selon son âge');
+  // Focalisable par le code : il reçoit le focus quand la dernière précaution touchée disparaît (« Retirer »).
+  const titreAge = el('h2', { id: 'regime-age-titre', tabindex: '-1' },
+    el('span', { 'aria-hidden': 'true' }, '🧸\u00A0'), 'Selon son âge');
+  // « <Enfant> a grandi : 2 précautions peuvent s’assouplir. Rien ne change sans vous. » (T2c-3), tant qu'il en reste.
+  const texteGrandi = el('p', { class: 'age-grandi', hidden: true });
   const sectionAge = el('section', { class: 'carte carte-edition section-age-enfant', 'aria-labelledby': titreAge.id, hidden: true },
     titreAge,
+    texteGrandi,
     el('label', { class: 'etiquette-champ', for: champDate.id }, 'Date de naissance'),
     champDate,
     erreurDate,
@@ -305,11 +344,11 @@ export function creer(ctx) {
   const barre = el('div', { class: 'barre-enregistrer', hidden: true },
     el('div', { class: 'barre-enregistrer-contenu' }, messageBarre, boutonEnregistrer));
 
-  // « ‹ Réglages », ou « ‹ Retour » vers la fiche du plat d'où l'on vient.
-  const texteRetour = el('span', { class: 'retour-texte' }, vientDeLaFiche() ? 'Retour' : 'Réglages');
+  // « ‹ Réglages », ou « ‹ Retour » vers la fiche du plat ou la Semaine d'où l'on vient.
+  const texteRetour = el('span', { class: 'retour-texte' }, vientDeLaFiche() || vientDeLaSemaine() ? 'Retour' : 'Réglages');
   const retour = el('a', {
     class: 'retour',
-    href: '#/reglages',
+    href: vientDeLaSemaine() ? '#/semaine' : '#/reglages',
     onclick: (evenement) => {
       evenement.preventDefault();
       quitter();
@@ -344,6 +383,7 @@ export function creer(ctx) {
     incomplete = false;
     erreurMontree = false;
     bascules = new Map();
+    choixAge = new Map();
     messageEnvoi = '';
     conflit = false;
     repris = false;
@@ -358,6 +398,7 @@ export function creer(ctx) {
     incomplete = false;
     erreurMontree = false;
     bascules = new Map(brouillon.bascules ?? []);
+    choixAge = new Map((brouillon.choixAge ?? []).map(([code, suite]) => [code, suite.map((fait) => ({ ...fait }))]));
     messageEnvoi = '';
     conflit = false;
     repris = true;
@@ -396,13 +437,40 @@ export function creer(ctx) {
   }
 
   /**
-   * Règles du brouillon côté âge : les règles enregistrées, rendues plus prudentes pour la date du brouillon (jamais
-   * moins ; sans date valide, rien n'est ajouté ni retiré), puis les interrupteurs touchés.
+   * Règles du brouillon côté âge, dans un ordre fixe : les règles enregistrées, rendues plus prudentes pour la date du
+   * brouillon (jamais moins ; sans date valide, rien n'est ajouté ni retiré), puis les choix « Il a grandi », puis les
+   * interrupteurs touchés.
    */
   function reglesAgeBrouillon(date = dateBrouillon().naissance) {
-    let regles = reglesSelonAge(date || null, aujourdhui(), ouverture.regles).regles;
+    const jour = aujourdhui();
+    let regles = reglesSelonAge(date || null, jour, ouverture.regles).regles;
+    regles = appliquerChoix(regles, date || null, jour);
     for (const [code, actif] of bascules) regles = basculerPrecaution(regles, code, actif);
     return regles;
+  }
+
+  /**
+   * Choix « Il a grandi » rejoués dans l'ordre où ils ont été touchés (coeur/age.js › rejouerChoixAge), chacun
+   * seulement pour l'âge du brouillon où il a été fait : une date corrigée ou effacée n'assouplit, ne retire ni ne
+   * garde rien pour un autre âge. Les interrupteurs viennent après.
+   */
+  function appliquerChoix(regles, date, jour) {
+    if (!choixAge.size) return regles;
+    const faits = [...choixAge].flatMap(([code, suite]) => suite
+      .map((fait) => ({ code, choix: fait.choix, mois: fait.mois })));
+    return rejouerChoixAge(regles, faits, moisDuBrouillon(date, jour));
+  }
+
+  /** Âge du brouillon en mois révolus (coeur/age.js › ageEnMois), null sans date valide. */
+  function moisDuBrouillon(date = dateBrouillon().naissance, jour = aujourdhui()) {
+    return date ? ageEnMois(date, jour) : null;
+  }
+
+  /** Précautions dont l'âge est passé (coeur/age.js › propositionsAge) pour ces règles et cette date ; [] sans date. */
+  function propositionsDe(regles, date, jour) {
+    if (!date) return [];
+    const propositions = propositionsAge({ naissance: date, regles }, jour);
+    return Array.isArray(propositions) ? propositions : [];
   }
 
   /** Règles qu'écrirait « Enregistrer » maintenant (liste entière : régime, précautions d'âge, règles gardées). */
@@ -432,7 +500,12 @@ export function creer(ctx) {
 
   // ——— Affichage ———
 
-  /** Une ligne de précaution : interrupteur dans un label qui couvre toute la ligne (48 px au moins). */
+  /**
+   * Une ligne de précaution : interrupteur dans un label qui couvre toute la ligne (48 px au moins). Sous le label
+   * (jamais dedans : un bouton n'a pas sa place dans un label), les choix « Il a grandi » : « Passer à « déconseillé » »
+   * ou « Retirer la précaution », puis « Garder », pour une précaution dont l'âge est passé ; « Revoir » pour une
+   * précaution gardée.
+   */
   function construireLigne(code) {
     const base = `regime-age-${code}`;
     const libelle = el('span', { class: 'precaution-libelle', id: `${base}-libelle` });
@@ -451,18 +524,36 @@ export function creer(ctx) {
         changement();
       },
     });
+    // Chaque bouton est décrit par la précaution et son état (« Fromages au lait cru, Âge passé : à revoir »).
+    const bouton = (classe, texte, quoi) => el('button', {
+      class: `bouton ${classe}`,
+      type: 'button',
+      'data-code': code,
+      'aria-describedby': `${libelle.id} ${etat.id}`,
+      onclick: () => choisir(code, quoi()),
+    }, texte);
+    let ligne = null;
+    const boutonChoix = bouton('bouton-secondaire precaution-choix', '', () => ligne?.action);
+    const boutonGarder = bouton('bouton-texte', 'Garder', () => 'garder');
+    const boutonRevoir = bouton('bouton-texte', 'Revoir', () => 'revoir');
+    const actions = el('div', { class: 'precaution-actions', hidden: true }, boutonChoix, boutonGarder, boutonRevoir);
     const noeud = el('li', {},
       el('label', { class: 'ligne-precaution' },
         el('span', { class: 'precaution-texte' }, libelle, etat, aide, conseil),
-        input));
-    return { code, noeud, input, libelle, etat, aide, conseil };
+        input),
+      actions);
+    ligne = { code, noeud, input, libelle, etat, aide, conseil, actions, boutonChoix, boutonGarder, boutonRevoir, action: null };
+    return ligne;
   }
 
-  function majLigne(ligne, { regle, entree, etat, resteMois }) {
+  /** `proposition` : ce que propose coeur/age.js › propositionsAge pour cette précaution (âge passé), ou null. */
+  function majLigne(ligne, { regle, entree, etat, resteMois }, proposition) {
     const libelle = entree?.libelle ?? libelleInconnu(codeDe(regle));
     const aide = typeof entree?.aide === 'string' ? entree.aide : '';
     const conseil = regle.severite === 'adaptable' && typeof regle.consigne === 'string' ? regle.consigne.trim() : '';
-    const texteEtat = texteEtatPrecaution({ regle, etat, resteMois });
+    const aRevoir = Boolean(proposition);
+    const gardee = etat === 'gardee';
+    const texteEtat = aRevoir ? TEXTE_A_REVOIR : texteEtatPrecaution({ regle, etat, resteMois });
     if (ligne.libelle.textContent !== libelle) ligne.libelle.textContent = libelle;
     if (ligne.etat.textContent !== texteEtat) ligne.etat.textContent = texteEtat;
     if (ligne.aide.textContent !== aide) ligne.aide.textContent = aide;
@@ -474,13 +565,70 @@ export function creer(ctx) {
       [ligne.etat.id, aide ? ligne.aide.id : null, conseil ? ligne.conseil.id : null].filter(Boolean).join(' '));
     ligne.input.checked = regle.actif !== false;
     ligne.noeud.classList.toggle('precaution-eteinte', regle.actif === false);
+    ligne.noeud.classList.toggle('precaution-a-revoir', aRevoir);
+
+    // Choix « Il a grandi » : rien ne change sans un toucher, et seulement dans le brouillon.
+    ligne.action = aRevoir ? (proposition.action === 'assouplir' ? 'assouplir' : 'retirer') : null;
+    const donne = typeof proposition?.texte === 'string' ? proposition.texte.trim() : '';
+    const texteChoix = ligne.action ? donne || LIBELLES_CHOIX[ligne.action] : '';
+    if (ligne.boutonChoix.textContent !== texteChoix) ligne.boutonChoix.textContent = texteChoix;
+    ligne.boutonChoix.hidden = !aRevoir;
+    ligne.boutonGarder.hidden = !aRevoir;
+    ligne.boutonRevoir.hidden = aRevoir || !gardee;
+    ligne.actions.hidden = !aRevoir && !gardee;
   }
 
-  /** Lignes des précautions : reconstruites seulement si la liste des codes change (le focus reste sur l'interrupteur). */
-  function majLignes(entrees) {
+  /** Premier élément touchable d'une ligne affichée : son choix principal, sinon son interrupteur. */
+  function cibleDe(ligne) {
+    if (!ligne.actions.hidden && !ligne.boutonChoix.hidden) return ligne.boutonChoix;
+    return ligne.input;
+  }
+
+  /**
+   * Choix « Il a grandi » d'une précaution (« assouplir », « retirer », « garder », « revoir ») : seul le brouillon
+   * change, et seulement pour l'âge qu'il a maintenant. « Garder » puis « Revoir » (ou l'inverse), au même âge,
+   * s'annulent. Le focus suit : « Revoir » après « Garder », le choix principal après « Revoir », l'interrupteur après
+   * « Passer à « déconseillé » » ; une ligne retirée le passe à la suivante (sinon à la précédente, sinon au titre de
+   * la section).
+   */
+  function choisir(code, choisi) {
+    if (termine || enCours || !ouverture || !choisi) return;
+    const ordre = [...lignes.keys()];
+    const position = ordre.indexOf(code);
+    const mois = moisDuBrouillon();
+    const suite = [...(choixAge.get(code) ?? [])];
+    const inverse = { garder: 'revoir', revoir: 'garder' }[choisi];
+    const dernier = suite[suite.length - 1];
+    if (inverse && dernier?.choix === inverse && dernier.mois === mois) suite.pop();
+    else suite.push({ choix: choisi, mois });
+    if (suite.length) choixAge.set(code, suite);
+    else choixAge.delete(code);
+    changement();
+
+    const ligne = lignes.get(code);
+    if (ligne && listePrecautions.contains(ligne.noeud)) {
+      const cible = choisi === 'garder' && !ligne.boutonRevoir.hidden && !ligne.actions.hidden
+        ? ligne.boutonRevoir
+        : cibleDe(ligne);
+      cible.focus();
+      return;
+    }
+    const voisins = [...ordre.slice(position + 1), ...ordre.slice(0, Math.max(position, 0)).reverse()];
+    const voisine = voisins.map((autre) => lignes.get(autre)).find((autre) => autre && listePrecautions.contains(autre.noeud));
+    if (voisine) cibleDe(voisine).focus();
+    else titreAge.focus();
+  }
+
+  /**
+   * Lignes des précautions : reconstruites seulement si la liste des codes change (le focus reste sur l'élément touché,
+   * sinon sur l'interrupteur de sa ligne). `propositions` : code → proposition de coeur/age.js › propositionsAge.
+   */
+  function majLignes(entrees, propositions = new Map()) {
     const cle = entrees.map(({ regle }) => codeDe(regle)).join('|');
+    let focus = null;
     if (cle !== cleLignes) {
-      const focusCode = listePrecautions.contains(document.activeElement) ? document.activeElement.dataset.code : null;
+      const actif = listePrecautions.contains(document.activeElement) ? document.activeElement : null;
+      focus = actif ? { element: actif, code: actif.dataset.code } : null;
       cleLignes = cle;
       const nouvelles = new Map();
       for (const { regle } of entrees) {
@@ -489,13 +637,19 @@ export function creer(ctx) {
       }
       lignes = nouvelles;
       listePrecautions.replaceChildren(...[...lignes.values()].map((ligne) => ligne.noeud));
-      if (focusCode) lignes.get(focusCode)?.input.focus();
     }
     for (const entree of entrees) {
-      const ligne = lignes.get(codeDe(entree.regle));
-      if (ligne) majLigne(ligne, entree);
+      const code = codeDe(entree.regle);
+      const ligne = lignes.get(code);
+      if (ligne) majLigne(ligne, entree, propositions.get(code) ?? null);
     }
     listePrecautions.hidden = !entrees.length;
+    if (focus) {
+      const { element, code } = focus;
+      const visible = listePrecautions.contains(element) && !element.hidden && !element.closest('[hidden]');
+      if (visible) element.focus();
+      else if (code && lignes.has(code)) lignes.get(code).input.focus();
+    }
   }
 
   function majTitre(profil) {
@@ -545,7 +699,15 @@ export function creer(ctx) {
       : 'Seuls les plats repérés sont signalés\u00A0: 1\u00A0recette attend encore la relecture de Claude, dans Réglages.';
     if (texteReperes.textContent !== phraseReperes) texteReperes.textContent = phraseReperes;
     texteReperes.hidden = !avecLignes || !aRelire;
-    majLignes(entrees);
+
+    // « Il a grandi » (T2c-3) : précautions du brouillon dont l'âge est passé, ni éteintes ni gardées.
+    const propositions = new Map(propositionsDe(regles, date, jour)
+      .filter((proposition) => typeof proposition?.code === 'string')
+      .map((proposition) => [proposition.code, proposition]));
+    const grandi = propositions.size ? phraseGrandi(propositions.size, nom) : '';
+    if (texteGrandi.textContent !== grandi) texteGrandi.textContent = grandi;
+    texteGrandi.hidden = !grandi;
+    majLignes(entrees, propositions);
 
     bilanAge.hidden = !avecLignes;
     if (!avecLignes) return;
@@ -726,14 +888,14 @@ export function creer(ctx) {
   }
 
   /**
-   * Retour à l'écran d'origine (Réglages, ou la fiche du plat d'où l'on vient), sans doublon dans l'historique
-   * (l'entrée de garde comprise) ; ouvert autrement (lien direct) : Réglages, à la place de l'écran.
+   * Retour à l'écran d'origine (Réglages, la fiche du plat ou la Semaine d'où l'on vient), sans doublon dans
+   * l'historique (l'entrée de garde comprise) ; ouvert autrement (lien direct) : Réglages, à la place de l'écran.
    */
   function sortir() {
     termine = true;
     brouillons.delete(cleBrouillon);
     feuilleOuverte?.fermer();
-    if (vientDesReglages() || vientDeLaFiche()) history.go(garde ? -2 : -1);
+    if (vientDesReglages() || vientDeLaFiche() || vientDeLaSemaine()) history.go(garde ? -2 : -1);
     else location.replace('#/reglages');
     garde = false;
   }
@@ -824,6 +986,7 @@ export function creer(ctx) {
           choix: { regime: choix.regime, precisions: [...choix.precisions] },
           naissance,
           bascules: [...bascules],
+          choixAge: [...choixAge].map(([code, suite]) => [code, suite.map((fait) => ({ ...fait }))]),
         });
       } else {
         brouillons.delete(cleBrouillon);
