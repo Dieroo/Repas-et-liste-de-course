@@ -96,3 +96,33 @@ export function noterInstructionsCopiees(uid, version) {
     // Stockage plein ou bloqué : rien à faire.
   }
 }
+
+// Dernier lot de relecture des repères copié pour Claude (T2d) : ses identifiants, gardés deux jours sur ce téléphone,
+// pour reconnaître des recettes entières rendues à la place d'une relecture (coeur/paquet.js › preparerImport, option
+// `relectureEnCours`). Sous PREFIXE : effacé à la déconnexion avec les plats envoyés.
+const cleRelecture = (uid) => `${PREFIXE}relecture:${uid}`;
+const DUREE_RELECTURE_MS = 2 * 24 * 60 * 60 * 1000;
+
+/** Identifiants du dernier lot de relecture copié par ce compte sur ce téléphone depuis moins de deux jours, ou []. */
+export function lireRelectureEnCours(uid, { maintenant = Date.now() } = {}) {
+  if (!uid) return [];
+  try {
+    const memo = JSON.parse(localStorage.getItem(cleRelecture(uid)) ?? 'null');
+    if (memo?.v !== 1 || typeof memo.le !== 'number' || !Array.isArray(memo.ids)) return [];
+    if (maintenant - memo.le > DUREE_RELECTURE_MS || memo.le > maintenant) return [];
+    return memo.ids.filter((id) => typeof id === 'string' && id);
+  } catch {
+    return [];
+  }
+}
+
+/** Retient le lot de relecture copié (remplace le précédent). Échec silencieux. */
+export function noterRelectureEnCours(uid, platIds, { maintenant = Date.now() } = {}) {
+  if (!uid || !Array.isArray(platIds)) return;
+  const ids = platIds.filter((id) => typeof id === 'string' && id);
+  try {
+    localStorage.setItem(cleRelecture(uid), JSON.stringify({ v: 1, le: maintenant, ids }));
+  } catch {
+    // Stockage plein ou bloqué : des recettes entières rendues par erreur resteront un remplacement ordinaire.
+  }
+}

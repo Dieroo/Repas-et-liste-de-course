@@ -526,9 +526,13 @@ export function creer(ctx) {
                 el('span', { class: 'case-recette-texte' },
                   el('span', { class: 'case-recette-nom' }, recette.nom),
                   el('span', { class: 'case-recette-detail' }, detail),
+                  // Le fichier a des repères de précaution que la fiche n'a plus (T2d).
+                  recette.mention ? el('span', { class: 'case-recette-detail' }, recette.mention) : null,
                 ),
               ));
-          })))
+          })),
+          // Recettes cochées : les repères de précaution de la fiche actuelle sont gardés (T2d).
+          (resume.reperesGardes ?? []).map((ligne) => el('p', { class: 'aide' }, ligne)))
         : null,
 
       el('div', { class: 'apercu-bloc' },

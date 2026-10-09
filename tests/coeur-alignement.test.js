@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   VERSION_INSTRUCTIONS, EMPREINTE_INSTRUCTIONS, texteDemandeIdees, texteDemandeRecette, texteDemandeVariantes,
-  texteCorrectionPourClaude,
+  texteCorrectionPourClaude, texteDemandePrecautions,
 } from '../js/coeur/claude.js';
 import { FORMAT, extrairePaquet, validerPaquet, controlerInstructions } from '../js/coeur/paquet.js';
 import { creerSauvegarde, lireSauvegarde, validerSauvegarde } from '../js/coeur/sauvegarde.js';
@@ -74,11 +74,15 @@ test('chaque texte copié porte en deuxième ligne la version des instructions',
     )], { profils: PROFILS })),
     'idées sans profil': texteDemandeIdees(),
     'idées avec profils et envie': texteDemandeIdees({ nombre: 5, envie: 'plats d’automne', plats: [QUICHE], profils: PROFILS }),
+    'relecture des repères': texteDemandePrecautions([QUICHE]),
+    'correction : lot de relecture refusé': texteCorrectionPourClaude(validerPaquet([{ format: FORMAT, plats: [
+      { id: 'quiche-test', precautions: [{ produit: 'lardon', poser: ['inconnu'] }], empreinte: 'abc123' },
+    ] }])),
   };
   assert.match(textes['recette avec profils'], /\nversions:\n/);
   for (const [quoi, texte] of Object.entries(textes)) {
     const lignes = texte.split('\n');
-    assert.match(lignes[0], /^(DEMANDE-RECETTE|DEMANDE-VARIANTES|DEMANDE-IDEES|CORRECTION) paquet@1$/, quoi);
+    assert.match(lignes[0], /^(DEMANDE-RECETTE|DEMANDE-VARIANTES|DEMANDE-IDEES|DEMANDE-PRECAUTIONS|CORRECTION) paquet@1$/, quoi);
     assert.equal(lignes[1], ligneAttendue, quoi);
     assert.equal(lignes.filter((l) => l.startsWith('instructions:')).length, 1, quoi);
     // Recollé par erreur, il reste reconnu comme une demande.
@@ -310,7 +314,7 @@ test('non-régression : une sauvegarde validée n’a aucun avertissement de ver
 });
 
 test('aucune espace insécable écrite telle quelle dans les fichiers de l’alignement', async () => {
-  for (const fichier of ['../js/coeur/claude.js', '../js/coeur/paquet.js', './coeur-alignement.test.js', './projet-claude.test.js']) {
+  for (const fichier of ['../js/coeur/claude.js', '../js/coeur/paquet.js', '../js/coeur/relecture.js', './coeur-alignement.test.js', './projet-claude.test.js']) {
     const source = await readFile(new URL(fichier, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /[\u00A0\u202F]/, fichier);
   }

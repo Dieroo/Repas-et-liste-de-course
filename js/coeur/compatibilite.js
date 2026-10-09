@@ -5,7 +5,7 @@
 // de son régime (regles.js › stylesAttendus) ; une version sans `style` reçoit un style déduit à la lecture (styleDe),
 // jamais écrit.
 import { slug } from './slug.js';
-import { STYLES, marqueursEffectifs } from './vocabulaire.js';
+import { MARQUEURS_PRECAUTION, STYLES, estRelue, marqueursEffectifs } from './vocabulaire.js';
 import { TYPES_A_ADAPTER, aAdapterSelon, aCompleterSelon, compteDansLeBilan } from './plats.js';
 import { noteRetenue } from './notes.js';
 import { trierProfils } from './profils.js';
@@ -327,9 +327,11 @@ export function platsSansVersion(plats, profil, { demandes = [], envoyes = [], p
  * - les repères de précaution (T2c-2) se lisent chacun à part : « jambon cru » attend `viande` et `cru` ;
  * - `apres` : un de ces mots doit suivre (« fumet de poisson » n'est jamais douteux) ;
  * - `sauf` : des mots qui annulent la ligne, où qu'ils soient dans le nom (« noix de coco », « sauce soja »).
- * Seulement des mots sans ambiguïté : avant T2d, un soupçon ne peut pas être déclaré vérifié. Aucun mot pour le lait cru
- * (« reblochon au lait cru » d'une tartiflette ne porte pas le repère) ni pour l'alcool non cuit (un vin mijoté n'est
- * pas `alcool_cru`) : T2d s'en charge. La sauce soja n'est jamais `soja`.
+ * Seulement des mots sans ambiguïté. Sur une fiche relue par Claude (T2d, vocabulaire.js › estRelue), les soupçons
+ * de précaution se taisent : la relecture en a décidé ; le soupçon `viande` (groupe `nature`), qui n'est pas relu,
+ * reste. Aucun mot pour le lait cru (« reblochon » d'une tartiflette cuite au four ne porte pas le repère) ni pour
+ * l'alcool non cuit (un vin mijoté n'est pas `alcool_cru`) : la relecture s'en charge, des mots viendront peut-être en
+ * T2d-2. La sauce soja n'est jamais `soja`.
  */
 export const MOTS_DOUTEUX = [
   {
@@ -433,10 +435,11 @@ function suivi(marqueur, surveilles) {
  * regles.js › marqueursSurveilles ; absent, tous). `cru` n'est soupçonné que sur une viande, un poisson ou des fruits
  * de mer (ailleurs, le repère serait sans effet) ; une viande annoncée compte aussi quand `cru` est surveillé et annoncé
  * (« jambon cru » non marqué viande : la précaution ne pourrait pas agir). Ne change jamais le niveau : sert au bandeau
- * « à vérifier » de la fiche. → [{ produit, attendu }], un élément par repère manquant, dans l'ordre des ingrédients.
+ * « à vérifier » de la fiche. Fiche relue par Claude (estRelue) : plus aucun soupçon de précaution. → [{ produit, attendu }], un élément par repère manquant, dans l'ordre des ingrédients.
  */
 export function marqueursDouteux(plat, { surveilles = null } = {}) {
   const suivis = ensembleSurveille(surveilles);
+  const relue = estRelue(plat);
   const douteux = [];
   for (const ingredient of ingredientsDe(plat)) {
     if (typeof ingredient.produit !== 'string') continue;
@@ -446,6 +449,7 @@ export function marqueursDouteux(plat, { surveilles = null } = {}) {
     const produit = reduire(ingredient.produit);
     for (const attendu of attendus) {
       if (effectifs.has(attendu)) continue;
+      if (relue && MARQUEURS_PRECAUTION.includes(attendu)) continue;
       if (attendu === 'cru' && !CRUS_POSSIBLES.some((m) => effectifs.has(m))) continue;
       const surveille = suivi(attendu, suivis)
         || (attendu === 'viande' && attendus.includes('cru') && suivi('cru', suivis));

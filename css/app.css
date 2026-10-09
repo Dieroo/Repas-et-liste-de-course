@@ -2653,6 +2653,46 @@ select.champ {
 
 .carte-projet-claude .lien-fiche { align-self: flex-start; }
 
+/* Réglages : carte « 🧸 Relire les recettes » (T2d). */
+.carte-relecture { gap: 10px; }
+
+.carte-relecture h2,
+.carte-relecture p { margin: 0; }
+
+.carte-relecture .actions-recette[hidden] { display: none; }
+
+/* Ajouter des recettes : relecture des repères, une case par repère, tout le libellé touchable (48 px). */
+.apercu-relecture .apercu-nom { margin: 0; font-size: 1.0625rem; }
+
+.liste-reperes-relecture {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.case-repere-relecture {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  cursor: pointer;
+}
+
+.case-repere-relecture input {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+
+.repere-pourquoi,
+.repere-suite { margin: 0 0 4px 38px; }
+
 /* Rappel « Nouvelles instructions » (bandeau-alerte) : sans bandeau, sa région vivante, vide, ne laisse pas d'espace. */
 .rappel-instructions:not(:has(> :not([hidden]))) { margin-top: -10px; }
 

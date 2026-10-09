@@ -16,6 +16,8 @@ import { appliquerConditions } from './coeur/sauvegarde.js';
 import { fusionnerVariantes } from './coeur/paquet.js';
 import { cheminNote, noteValide } from './coeur/notes.js';
 import { estDansCorbeille } from './coeur/corbeille.js';
+import { empreinteRelecture, appliquerReperes } from './coeur/relecture.js';
+import { VERSION_REPERES } from './coeur/vocabulaire.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -186,23 +188,37 @@ function cloreDemandes(demandesAClore) {
  *   `variantes`, `majPar`, `majLe` (jamais le nom, le statut, la recette ni la marque « modifiée à la main »). Plat
  *   disparu entre-temps : rien n'est écrit, son identifiant est rendu dans `manquants`. Hors ligne, une transaction
  *   échoue au lieu d'être mise en file : l'app refuse ces envois avant d'appeler (actions.importer).
+ * - Relectures des repères `{ id, mode: 'precautions', ajouts, retraits, marquerRelue, empreinte }` (T2d) : une
+ *   transaction par plat (relireReperes). Un autre `mode` est refusé : rien n'est écrit.
  * Les demandes satisfaites sont closes dans un lot à part : celles des fiches complètes tout de suite, celles des
- * versions après leurs transactions, sauf pour un plat disparu.
- * → { envoi, versions } : `envoi`, promesse de l'envoi du lot des fiches (rejetée aussi si le lot n'a pas pu être
- *   construit) ; `versions`, promesse de { manquants: [id] } (rejetée à la première transaction qui échoue ; les
- *   précédentes restent faites, et une relance ne fait que fusionner à nouveau les mêmes versions).
+ * versions après leurs transactions, sauf pour un plat disparu. Une relecture n'en clôt aucune.
+ * → { envoi, versions, precautions } : `envoi`, promesse de l'envoi du lot des fiches (rejetée aussi si le lot n'a
+ *   pas pu être construit) ; `versions`, promesse de { manquants: [id] } (rejetée à la première transaction qui
+ *   échoue ; les précédentes restent faites, et une relance ne fait que fusionner à nouveau les mêmes versions) ;
+ *   `precautions`, promesse de { manquants, corbeille, changes, ecrites } (relireReperes).
  */
 export function importer({ ecritures, demandesAClore }, auteur) {
-  const completes = ecritures.filter((ecriture) => ecriture.mode !== 'versions');
+  // Un mode inconnu est refusé : `{ ...undefined, id }` recréerait sinon une fiche vide (T2d).
+  const inconnue = ecritures.find((ecriture) => ecriture.mode !== undefined
+    && ecriture.mode !== 'versions' && ecriture.mode !== 'precautions');
+  if (inconnue) {
+    const refus = Promise.reject(new Error('Écriture d’import inconnue.'));
+    refus.catch(() => {});
+    return { envoi: refus, versions: refus, precautions: refus };
+  }
+  const completes = ecritures.filter((ecriture) => ecriture.mode === undefined);
   const versions = ecritures.filter((ecriture) => ecriture.mode === 'versions');
+  const relectures = ecritures.filter((ecriture) => ecriture.mode === 'precautions');
   const idsVersions = new Set(versions.map(({ id }) => id));
   const deVersion = (demande) => idsVersions.has(String(demande).split('__')[0]);
   let envoi;
   try {
     const lot = writeBatch(db);
-    for (const { id, donnees, effacerModification } of completes) {
+    for (const { id, donnees, effacerModification, effacerRelue } of completes) {
       const document = { ...donnees, id, ...trace(auteur) };
       if (effacerModification) Object.assign(document, { modifieeLe: deleteField(), modifieePar: deleteField() });
+      // Recette remplacée ou complétée par Claude : elle n'est plus relue (T2d).
+      if (effacerRelue) document.reperesRelus = deleteField();
       lot.set(doc(db, 'plats', id), document, { mergeFields: Object.keys(document) });
     }
     // Recettes toutes identiques : seules les demandes restées ouvertes sont closes.
@@ -231,7 +247,41 @@ export function importer({ ecritures, demandesAClore }, auteur) {
     cloreDemandes((demandesAClore ?? []).filter((demande) => deVersion(demande) && !absents.has(String(demande).split('__')[0])));
     return { manquants };
   })();
-  return { envoi, versions: envoiVersions };
+  return { envoi, versions: envoiVersions, precautions: relireReperes(relectures, auteur) };
+}
+
+/**
+ * Relecture des repères par Claude (T2d, mode `precautions`) : une transaction par plat, qui relit la fiche et n'écrit
+ * que `ingredients` (seulement si un repère change), `reperesRelus` (si `marquerRelue`), `majPar` et `majLe`. Jamais
+ * le nom, les versions, les étapes, les portions, le statut, les notes, la corbeille ni la marque « modifiée à la
+ * main ». Rien n'est écrit si la fiche a disparu (`manquants`), est passée à la corbeille (`corbeille`) ou a changé
+ * depuis l'aperçu (`changes` : produit, repère, étape ou cuisson ; une quantité changée est gardée). Hors ligne, une
+ * transaction échoue : l'app refuse l'envoi avant d'appeler.
+ * → promesse de { manquants, corbeille, changes, ecrites } (identifiants), rejetée à la première transaction qui
+ *   échoue (les précédentes restent faites).
+ */
+async function relireReperes(relectures, auteur) {
+  const resultat = { manquants: [], corbeille: [], changes: [], ecrites: [] };
+  for (const { id, ajouts = [], retraits = [], marquerRelue, empreinte } of relectures) {
+    const issue = await runTransaction(db, async (transaction) => {
+      const reference = doc(db, 'plats', id);
+      const actuel = await transaction.get(reference);
+      if (!actuel.exists()) return 'manquants';
+      const fiche = { id, ...actuel.data() };
+      if (estDansCorbeille(fiche)) return 'corbeille';
+      if (empreinteRelecture(fiche) !== empreinte) return 'changes';
+      const lus = Array.isArray(fiche.ingredients) ? fiche.ingredients : [];
+      const ingredients = appliquerReperes(lus, { ajouts, retraits });
+      const document = {};
+      if (JSON.stringify(ingredients) !== JSON.stringify(lus)) document.ingredients = ingredients;
+      if (marquerRelue) document.reperesRelus = VERSION_REPERES;
+      if (!Object.keys(document).length) return 'ecrites';
+      transaction.update(reference, { ...document, ...trace(auteur) });
+      return 'ecrites';
+    });
+    resultat[issue].push(id);
+  }
+  return resultat;
 }
 
 /**

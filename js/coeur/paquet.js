@@ -5,12 +5,17 @@
 import { sansAccents, slug } from './slug.js';
 import { NOM_MAX, statutDe } from './plats.js';
 import {
-  EMOJIS_STYLE, LIBELLES_STYLE, STYLES, VOCABULAIRES, code, estObjet, liste, nombre, texte, validerIngredient,
+  EMOJIS_STYLE, LIBELLES_STYLE, STYLES, VOCABULAIRES, code, estObjet, estRelue, libelleRepere, liste, nombre, texte,
+  validerIngredient,
 } from './vocabulaire.js';
 import { evaluer, marqueursEffectifs, styleDe } from './compatibilite.js';
 import { SOURCE_IDEE, VERSION_INSTRUCTIONS } from './claude.js';
 import { stylesAttendus } from './regles.js';
 import { estDansCorbeille } from './corbeille.js';
+import {
+  changementsRelecture, comparerAuxReperesPres, ecrituresRelecture, effetsSurLesVersions, empreinteRelecture,
+  garderReperes, texteReperes, validerPrecautions,
+} from './relecture.js';
 
 // Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
 export { VOCABULAIRES, SOUS_TYPES_VIANDE, VIANDES, IMPLICATIONS, code, validerIngredient } from './vocabulaire.js';
@@ -27,7 +32,10 @@ export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 
   'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
 // Champs de la fiche connus mais jamais repris par l'ajout de recettes (notes, dernier passage, marque « modifiée à
 // la main », marque de la corbeille) : ils voyagent dans une sauvegarde, que seule la restauration reprend.
-const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille'];
+// `reperesRelus` (T2d) : marque posée par l'app seule, jamais reprise d'une réponse de Claude.
+const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille', 'reperesRelus'];
+// Champs d'une entrée de relecture (réponse à DEMANDE-PRECAUTIONS, T2d).
+const CHAMPS_RELECTURE = ['id', 'nom', 'empreinte', 'precautions'];
 const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
 const CHAMPS_VARIANTE = ['pour', 'style', 'retirer', 'ajouter', 'consigne', 'frigoJours'];
@@ -179,6 +187,56 @@ function estDeLaMer(ingredient) {
 }
 
 // ——— Validation ———
+
+/**
+ * Une entrée d'un lot de relecture (réponse à DEMANDE-PRECAUTIONS, T2d) : `id` obligatoire, `nom` facultatif (jamais
+ * repris), `empreinte` et `precautions` (liste, même vide) obligatoires ; une recette entière ou des versions sont une
+ * erreur (rien n'est jamais créé ni remplacé par un lot de relecture). Un statut, un type ou une autre clé de fiche
+ * recopiés par habitude sont ignorés sans bloquer. → même forme que validerPlat, avec `precautionsSeules` ; `donnees` :
+ * { id, nom?, empreinte, precautions, horsRelecture? }.
+ */
+function validerEntreeRelecture(brut, index) {
+  const erreurs = [];
+  const avertissements = [];
+  const nom = texte(brut?.nom);
+  const id = slug(typeof brut?.id === 'string' && brut.id.trim() ? brut.id : '');
+  const affiche = nom ? `«\u00A0${nom}\u00A0»` : (id ? `«\u00A0${id}\u00A0»` : `Recette ${index + 1}`);
+  const claude = `plats[${index}]${id ? ` (${id})` : ''}`;
+  const malFormee = `La relecture de ${affiche} est mal formée.`;
+  const signaler = (message, pourClaude) => erreurs.push({ message, pourClaude: `${claude} ${pourClaude}` });
+  const resultat = (donnees) => ({
+    index, id, nom, donnees: erreurs.length ? null : donnees, erreurs, avertissements, precautionsSeules: true,
+  });
+  if (!estObjet(brut)) {
+    signaler(malFormee, ': objet attendu');
+    return resultat(null);
+  }
+  if (brut.ingredients != null || brut.variantes != null) {
+    signaler(`Claude a rendu la recette entière de ${affiche} au lieu de sa seule relecture.`,
+      ': rends seulement { "id", "nom", "empreinte", "precautions" }, sans la recette ni les versions');
+    return resultat(null);
+  }
+  if (!id || !ID.test(id)) signaler(`${affiche}\u00A0: identifiant invalide (minuscules, chiffres et tirets seulement).`, 'id : minuscules, chiffres et tirets seulement');
+  const donnees = { id };
+  if (nom) donnees.nom = nom;
+  const empreinte = typeof brut.empreinte === 'string' || typeof brut.empreinte === 'number' ? texte(String(brut.empreinte)) : '';
+  if (!empreinte) signaler(malFormee, ': empreinte manquante, recopie celle de la demande');
+  else donnees.empreinte = empreinte;
+  if (brut.precautions == null) {
+    signaler(malFormee, ': precautions : liste attendue, même vide');
+  } else {
+    const lu = validerPrecautions(brut.precautions, { position: { affiche: nom || id } });
+    for (const e of lu.erreurs) signaler(e.message, e.pourClaude);
+    for (const a of lu.avertissements) avertissements.push({ message: a.message, pourClaude: `${claude} ${a.pourClaude}` });
+    donnees.precautions = lu.precautions;
+    if (lu.horsRelecture.length) donnees.horsRelecture = lu.horsRelecture;
+  }
+  const connues = [...CHAMPS_RELECTURE, ...CHAMPS_PLAT, ...CHAMPS_IGNORES];
+  if (Object.keys(brut).some((cle) => !connues.includes(cle))) {
+    avertissements.push({ message: `${affiche}\u00A0: des informations non reconnues ont été ignorées.`, pourClaude: `${claude} : champs inconnus ignorés` });
+  }
+  return resultat(donnees);
+}
 
 /**
  * Une recette du collage. → { index, id, nom, donnees (null si erreur), erreurs, avertissements }
@@ -520,8 +578,10 @@ export function estSauvegarde(paquets) {
  * `versionsEnDouble` : 'erreur' (ajout de recettes) ou 'premiere' (sauvegarde, fiches en base : seule la première de
  * deux versions en conflit est gardée ; une version dont le style ne va pas avec ses ajouts ou ses jours au frigo
  * reste, avec un avertissement).
- * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide }
+ * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide, relecture? }
  *   `donnees` ne contient que des champs présents et valides (aucune valeur undefined, aucune table vide).
+ *   `relecture` (T2d) : vrai si une entrée porte `precautions` ou `empreinte` (réponse à DEMANDE-PRECAUTIONS) ; chaque
+ *   entrée est alors une relecture (`precautionsSeules`), jamais une recette.
  */
 export function validerPaquet(paquets, {
   profils = null, platsMax = PLATS_MAX, doublonsDeNom = true, versionsEnDouble = 'erreur',
@@ -549,6 +609,9 @@ export function validerPaquet(paquets, {
   if (bruts.some((brut) => estObjet(brut) && brut.notes != null)) {
     avertissements.push({ message: 'Les notes ne sont pas reprises ici.', pourClaude: 'notes ignorées' });
   }
+  if (bruts.some((brut) => estObjet(brut) && brut.reperesRelus != null)) {
+    avertissements.push({ message: 'La marque «\u00A0relue par Claude\u00A0» n’est pas reprise ici.', pourClaude: 'reperesRelus ignoré' });
+  }
   if (!bruts.length && !erreurs.length) {
     erreurs.push({ message: 'Aucune recette dans ce texte.', pourClaude: 'plats : au moins une recette attendue' });
   }
@@ -558,13 +621,18 @@ export function validerPaquet(paquets, {
   }
 
   const idsProfils = Array.isArray(profils) && profils.length ? new Set(profils.map((p) => p.id)) : null;
-  const plats = bruts.map((brut, index) => validerPlat(brut, index, idsProfils, { versionsEnDouble }));
+  // Lot de relecture (réponse à DEMANDE-PRECAUTIONS, T2d) : une seule entrée qui porte `precautions` ou `empreinte`
+  // suffit ; toutes les entrées sont alors des relectures (validerEntreeRelecture).
+  const relecture = bruts.some((brut) => estObjet(brut) && (Object.hasOwn(brut, 'precautions') || Object.hasOwn(brut, 'empreinte')));
+  const plats = bruts.map((brut, index) => (relecture
+    ? validerEntreeRelecture(brut, index)
+    : validerPlat(brut, index, idsProfils, { versionsEnDouble })));
 
   // Doublons dans le collage : même identifiant ou même nom (sauf demande contraire).
   const vus = new Map();
   for (const plat of plats) {
     const cles = [[`id:${plat.id}`, 'identifiant']];
-    if (doublonsDeNom) cles.push([`nom:${slug(plat.nom)}`, 'nom']);
+    if (doublonsDeNom && !relecture) cles.push([`nom:${slug(plat.nom)}`, 'nom']);
     for (const [cle, quoi] of cles) {
       if (cle.endsWith(':')) continue;
       if (vus.has(cle)) {
@@ -579,7 +647,7 @@ export function validerPaquet(paquets, {
   }
 
   const valide = !erreurs.length && plats.every((plat) => !plat.erreurs.length);
-  return { plats, erreurs, avertissements, valide };
+  return { plats, erreurs, avertissements, valide, ...(relecture ? { relecture: true } : {}) };
 }
 
 // ——— Version des instructions ———
@@ -837,6 +905,20 @@ function aSaRecette(plat) {
   return statutDe(plat) !== 'attente' && Array.isArray(plat?.ingredients) && plat.ingredients.length > 0;
 }
 
+/**
+ * Vrai si deux recettes (recetteSansVersions) sont la même : le reste de la recette égal (egales), les ingrédients
+ * égaux aux repères de précaution près, la fiche actuelle en ayant au moins autant (relecture.js ›
+ * comparerAuxReperesPres : `egaux` ou `plusIci`). Une recette recollée sans les repères posés depuis par une
+ * relecture n'est donc pas « différente ».
+ */
+function memeRecette(actuelle, recue) {
+  if (!actuelle || !recue) return false;
+  const { ingredients: ici, ...resteIci } = actuelle;
+  const { ingredients: la, ...resteLa } = recue;
+  if (!egales(resteIci, resteLa)) return false;
+  return ['egaux', 'plusIci'].includes(comparerAuxReperesPres(ici ?? [], la ?? []));
+}
+
 /** Recette d'une fiche sans ses versions, son nom ni son statut : ce qui compte pour « même recette ». */
 function recetteSansVersions(plat) {
   const recette = recetteValidee(plat);
@@ -885,7 +967,14 @@ function recetteSansVersions(plat) {
  *   reste s'enregistre. Une version qui ne convient pas encore est importée, avec un avertissement et une
  *   correction pour Claude ; sa demande reste ouverte.
  */
-export function preparerImport(valides, { plats = [], demandes = [], cible = null, profils = [], choix = {} } = {}) {
+export function preparerImport(valides, {
+  plats = [], demandes = [], cible = null, profils = [], choix = {}, relectureEnCours = [], controle = null,
+} = {}) {
+  if ((Array.isArray(valides) ? valides : []).some((donnees) => Array.isArray(donnees?.precautions))) {
+    return preparerRelecture(valides, { plats, profils, controle });
+  }
+  const enRelecture = new Set(Array.isArray(relectureEnCours) ? relectureEnCours : []);
+  let recetteAuLieuDeRelecture = false;
   const erreurs = [];
   const avertissements = [];
   const corrections = [];
@@ -1137,9 +1226,25 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     // Nom retenu pour la fiche : celui reçu, sauf nom de la fiche gardé (plus haut).
     const nomRetenu = nomGarde ?? donnees.nom;
 
+    // Une idée de Claude (DEMANDE-IDEES, `source` « Idée de Claude ») : jamais une recette rendue à la place d'une
+    // relecture ; pour un plat qui a déjà sa recette, elle n'est simplement pas reprise (plus bas).
+    const idee = !viseCible && recue && texte(donnees.source) === SOURCE_IDEE;
+
+    // Recette entière rendue à la place d'une relecture (T2d) : le plat est dans le dernier lot de relecture copié sur
+    // ce téléphone, a sa recette et n'est pas encore relu. Erreur, corrigée par Claude (relectures seules) ; jamais
+    // pour « Coller la recette » d'une fiche, ni pour une idée de Claude.
+    const enCours = !viseCible && recue && !idee && enRelecture.has(vise) ? parId.get(vise) : null;
+    if (enCours && !estDansCorbeille(enCours) && aSaRecette(enCours) && !estRelue(enCours)) {
+      erreurs.push({
+        message: `Claude a rendu la recette entière de «\u00A0${enCours.nom}\u00A0» au lieu de sa seule relecture.`,
+        pourClaude: `plats[${index}] (${donnees.id}) : rends seulement { "id", "nom", "empreinte", "precautions" }, sans la recette ni les versions`,
+      });
+      recetteAuLieuDeRelecture = true;
+      continue;
+    }
+
     // Plat de la corbeille : rien n'est écrit, sans erreur ; on le remet d'abord (les autres entrées s'enregistrent).
     // Une idée de Claude pour un plat de la corbeille qui a déjà sa recette n'est simplement pas reprise.
-    const idee = !viseCible && recue && texte(donnees.source) === SOURCE_IDEE;
     const jete = parId.get(vise);
     if (estDansCorbeille(jete)) {
       // Rien à lui ajouter, même remis : entrée sans recette (ni version : voir plus haut), ou idée pour un plat qui a
@@ -1205,7 +1310,7 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
         continue;
       }
       const actuelle = recetteSansVersions(existant);
-      if (actuelle && egales(actuelle, recetteSansVersions(ecriture))) {
+      if (actuelle && memeRecette(actuelle, recetteSansVersions(ecriture))) {
         // Même recette (hors versions, nom et statut) : seules les versions reçues comptent ; le nom reste.
         if (slug(nomRetenu) !== slug(existant.nom)) {
           avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
@@ -1234,6 +1339,14 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       }
     }
 
+    // Recette remplacée (T2d) : les repères de précaution de la recette actuelle sont gardés, ingrédient par
+    // ingrédient (plus prudent tout de suite, moins prudent seulement par un toucher dans « Modifier »).
+    let reperes = null;
+    if (rempli && recue && Array.isArray(existant.ingredients)) {
+      reperes = garderReperes(existant.ingredients, ecriture.ingredients);
+      ecriture.ingredients = reperes.ingredients;
+    }
+
     // Versions reçues avec une fiche complète : fusionnées avec celles de la fiche (celles des autres profils restent,
     // celles d'un style que leur profil n'attend pas partent).
     const attendus = existant && ecriture.variantes
@@ -1244,6 +1357,10 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     if (existant) statut = !recue ? 'inchange' : rempli ? 'remplace' : 'complete';
     // Modifications faites à la main remplacées : l'aperçu le dit, l'écriture efface leur marque.
     const effacerModification = (statut === 'remplace' || statut === 'complete') && modifieeALaMain(existant);
+    // Une recette remplacée ou complétée revient à relire (T2d) : jamais marquée relue d'office. Effacée même si la
+    // fiche n'était pas relue à l'aperçu : une relecture enregistrée entre-temps ailleurs (ou avant l'envoi d'un ajout
+    // fait hors ligne) jugeait l'ancienne recette.
+    const effacerRelue = statut === 'remplace' || statut === 'complete';
     const secondes = existant?.modifieeLe?.seconds;
     const fiche = { ...(existant ?? {}), ...ecriture };
     const { versions } = jugerVersions(vise, fiche, recues, existant?.variantes, avertissementsPlat, attendus);
@@ -1259,11 +1376,112 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       avertissements: avertissementsPlat,
       versions,
       ...(choixPlat ? { choix: choixPlat } : {}),
+      ...(reperes?.gardes.length ? {
+        reperesGardes: `Repères gardés de la recette actuelle\u00A0: ${texteReperes(reperes.gardes)}. Pour en enlever un\u00A0: Modifier.`,
+      } : {}),
+      ...(reperes?.perdus.length ? {
+        reperesPerdus: `Repères perdus avec des ingrédients qui ne sont plus dans la recette\u00A0: ${texteReperes(reperes.perdus)}.`,
+      } : {}),
     });
-    ecritures.push({ id: vise, donnees: propre(ecriture), ...(effacerModification ? { effacerModification: true } : {}) });
+    ecritures.push({
+      id: vise,
+      donnees: propre(ecriture),
+      ...(effacerModification ? { effacerModification: true } : {}),
+      ...(effacerRelue ? { effacerRelue: true } : {}),
+    });
     clore(demandesSatisfaites(vise, ecriture, ouvertes, { plat: fiche, profils: connus }));
   }
-  return { elements, ecritures, demandesAClore, erreurs, avertissements, corrections };
+  return {
+    elements, ecritures, demandesAClore, erreurs, avertissements, corrections,
+    ...(recetteAuLieuDeRelecture ? { relecture: true } : {}),
+  };
+}
+
+const MESSAGE_REFUS_RELECTURE = 'Cette relecture ne vient pas des instructions actuelles. Recopiez-les depuis Réglages › Projet Claude, puis redemandez ce lot.';
+
+/**
+ * Branche « relecture » de preparerImport (T2d) : chaque entrée vise un plat par son seul `id` (un nom différent est
+ * ignoré, la fiche n'est jamais renommée ni créée). Statuts : `inconnu` (pas dans les plats), `corbeille`, `attente`
+ * (⏳ ou sans ingrédients), `dejaRelue` (rien n'est écrit, quoi que Claude propose ; `propose` : vrai s'il proposait un
+ * changement), `relecture` (changements proposés, voir relecture.js › changementsRelecture : `ajouts` cochés par
+ * défaut, `retraits` décochés, `introuvables`, `ignores`, `complete` ; `empreinte` : celle de la fiche actuelle ;
+ * `empreinteClaude` ; `change` : la fiche a changé depuis la demande ; `marquerRelue` : relecture complète sur une
+ * fiche inchangée ; `effets` : effets des ajouts par défaut sur les versions des adultes (effetsSurLesVersions, à
+ * recalculer quand une case change) ; `infos` : repères connus hors relecture). Rien n'est demandé ni clos.
+ * `controle` : résultat de controlerInstructions ; non nul, la relecture n'est pas enregistrable (`refus:
+ * 'instructions'`, `messageRefus`, aucune écriture).
+ * → { relecture: true, elements, ecritures (ecrituresRelecture sans choix), demandesAClore: [], erreurs: [],
+ *     avertissements, corrections: [], refus?, messageRefus? }
+ */
+function preparerRelecture(valides, { plats = [], profils = [], controle = null } = {}) {
+  const parId = new Map((Array.isArray(plats) ? plats : []).filter(estObjet).map((p) => [p.id, p]));
+  const connus = (Array.isArray(profils) ? profils : []).filter(estObjet);
+  const elements = [];
+  for (const [index, donnees] of valides.entries()) {
+    if (!estObjet(donnees)) continue;
+    const plat = parId.get(donnees.id);
+    const element = {
+      index,
+      id: donnees.id,
+      nom: texte(plat?.nom) || donnees.nom || donnees.id,
+      ingredients: Array.isArray(plat?.ingredients) ? plat.ingredients.length : 0,
+      etapes: Array.isArray(plat?.etapes) ? plat.etapes.length : 0,
+      avertissements: [],
+      // Mot du repère (« légume », « fruits de mer ») : aucun code à l'écran.
+      infos: (donnees.horsRelecture ?? []).map(({ produit, marqueur }) => `Claude signale aussi «\u00A0${libelleRepere(marqueur)}\u00A0» pour «\u00A0${produit}\u00A0»\u00A0: à corriger dans Modifier si c’est juste.`),
+      versions: [],
+    };
+    if (!plat) {
+      elements.push({ ...element, statut: 'inconnu' });
+      continue;
+    }
+    if (estDansCorbeille(plat)) {
+      elements.push({ ...element, statut: 'corbeille' });
+      continue;
+    }
+    if (statutDe(plat) === 'attente' || !aSaRecette(plat)) {
+      elements.push({ ...element, statut: 'attente' });
+      continue;
+    }
+    const precautions = Array.isArray(donnees.precautions) ? donnees.precautions : [];
+    if (estRelue(plat)) {
+      const propose = precautions.some((p) => p.poser?.length || p.enlever?.length);
+      elements.push({
+        ...element, statut: 'dejaRelue', propose, ...(propose ? { avertissements: ['Pour changer un repère\u00A0: Modifier.'] } : {}),
+      });
+      continue;
+    }
+    const changements = changementsRelecture(plat, precautions);
+    const empreinte = empreinteRelecture(plat);
+    const change = donnees.empreinte !== empreinte;
+    const avertissements = [...changements.avertissements];
+    if (change) {
+      avertissements.push(`«\u00A0${plat.nom}\u00A0» a changé depuis la demande\u00A0: les repères cochés seront enregistrés, mais elle restera à relire.`);
+    } else if (!changements.complete) {
+      avertissements.push('Cette recette restera à relire.');
+    }
+    elements.push({
+      ...element,
+      statut: 'relecture',
+      ajouts: changements.ajouts,
+      retraits: changements.retraits,
+      introuvables: changements.introuvables,
+      ignores: changements.ignores,
+      complete: changements.complete,
+      empreinte,
+      empreinteClaude: donnees.empreinte,
+      change,
+      marquerRelue: changements.complete && !change,
+      effets: effetsSurLesVersions(plat, { ajouts: changements.ajouts }, connus),
+      avertissements,
+    });
+  }
+  const preparation = {
+    relecture: true, elements, ecritures: [], demandesAClore: [], erreurs: [], avertissements: [], corrections: [],
+  };
+  if (controle) return { ...preparation, refus: 'instructions', messageRefus: MESSAGE_REFUS_RELECTURE };
+  preparation.ecritures = ecrituresRelecture(preparation, {});
+  return preparation;
 }
 
 /**

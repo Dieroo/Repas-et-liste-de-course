@@ -10,15 +10,18 @@ import { evaluer, profilsContraints } from './compatibilite.js';
 import { NOTE_MAX, noteDe } from './notes.js';
 import { slug } from './slug.js';
 import { estDansCorbeille } from './corbeille.js';
-import { VOCABULAIRES, code, texte } from './vocabulaire.js';
+import { MARQUEURS_PRECAUTION, VOCABULAIRES, code, texte } from './vocabulaire.js';
+import { LOT_PRECAUTIONS, empreinteRelecture, lignesRelecture } from './relecture.js';
+
+export { LOT_PRECAUTIONS };
 
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 4;
+export const VERSION_INSTRUCTIONS = 5;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '75eec0a050aa';
+export const EMPREINTE_INSTRUCTIONS = '675c2cffeacf';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -53,6 +56,9 @@ const CONSIGNE_RECETTE = '(Si le plat contient ce qu\'un de ces profils ne mange
 const CONSIGNE_VARIANTES = '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)';
 // … ou une par style de sa ligne « à faire » (fusion par style : les autres versions restent).
 const CONSIGNE_STYLES = '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [les versions de sa ligne « à faire »] }, jamais la recette entière. Une version par style, avec `style` (et `frigoJours` pour `mer`) ; une version que tu rends remplace celle du même style, les autres restent. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)';
+
+// Consigne d'une demande de relecture des repères (T2d) : changements seuls, jamais la recette.
+export const CONSIGNE_PRECAUTIONS = '(Relis les repères de chaque ingrédient selon leurs définitions (section 3), en t\'aidant des étapes et de la cuisson ; seulement ceux de la ligne « repères ». Pour chaque plat, rends seulement { "id", "nom", "empreinte", "precautions": [{ "produit", "poser", "enlever", "pourquoi" }] } avec les seuls ingrédients à changer, ou "precautions": [] si tout est juste ; recopie l\'empreinte telle quelle. Dans le doute, pose ; n\'enlève que ce qui contredit une définition. Jamais la recette entière. Tous les plats du lot dans un seul bloc paquet@1.)';
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 
@@ -307,6 +313,33 @@ export function texteDemandeVariantes(plats, profil) {
 }
 
 /**
+ * (d) Texte copié par « 🧸 Relire les recettes » (Réglages, T2d) : Claude relit les repères de précaution des plats
+ * reçus (ceux qui ont des ingrédients, LOT_PRECAUTIONS au plus, dans l'ordre reçu : relecture.js › platsARelire).
+ * Aucun profil n'est reçu : ni âge, ni date, ni règle, ni identifiant de profil ne peut partir. Pour chaque plat :
+ * `id`, `nom`, `empreinte` (relecture.js › empreinteRelecture, que Claude recopie), ingrédients avec leurs repères
+ * bruts (sans quantités), étapes et cuisson (lignes omises quand elles sont vides).
+ */
+export function texteDemandePrecautions(plats) {
+  const fiches = (Array.isArray(plats) ? plats : [])
+    .filter((plat) => estObjet(plat) && Array.isArray(plat.ingredients) && plat.ingredients.some(estObjet))
+    .slice(0, LOT_PRECAUTIONS);
+  const lignes = [
+    `DEMANDE-PRECAUTIONS ${FORMAT}`,
+    LIGNE_INSTRUCTIONS,
+    `repères: ${MARQUEURS_PRECAUTION.join(', ')}`,
+    CONSIGNE_PRECAUTIONS,
+    'plats:',
+  ];
+  for (const plat of fiches) {
+    lignes.push(`- id: ${ligne(plat.id)}`);
+    lignes.push(`  nom: ${ligne(plat.nom)}`);
+    lignes.push(`  empreinte: ${empreinteRelecture(plat)}`);
+    lignes.push(...lignesRelecture(plat));
+  }
+  return lignes.join('\n');
+}
+
+/**
  * Texte copié par « Copier les corrections pour Claude ».
  * `probleme` : { erreur } (texte illisible), résultat de validerPaquet ({ plats, erreurs }) ou de preparerImport
  * ({ erreurs, corrections }). `corrections` : versions importées qui ne conviennent pas encore
@@ -345,7 +378,11 @@ export function texteCorrectionPourClaude(probleme) {
   const lotDeVersions = !probleme?.erreur && plats.length > 0 && plats.every((plat) => plat.versionsSeules);
   // Plats sans erreur à eux : rien n'a été enregistré, Claude les rend aussi, tels quels.
   const autres = plats.filter((plat) => !plat.erreurs?.length && plat.id).map((plat) => ligne(plat.id));
-  if (lotDeVersions) {
+  if (!probleme?.erreur && probleme?.relecture) {
+    // Lot de relecture (T2d), même si l'entrée fautive est une recette entière : relectures seules, tout le lot.
+    if (autres.length) lignes.push(`- Rien n’a été enregistré : rends aussi, telles quelles, les relectures des autres plats du lot (${autres.join(', ')}).`);
+    lignes.push('(Rends seulement { "id", "nom", "empreinte", "precautions" } de chaque plat du lot, corrigé, en un seul bloc.)');
+  } else if (lotDeVersions) {
     if (autres.length) lignes.push(`- Rien n’a été enregistré : rends aussi, telles quelles, les versions des autres plats du lot (${autres.join(', ')}).`);
     lignes.push('(Rends seulement { "id", "nom", "variantes" } de chaque plat du lot, corrigé, en un seul bloc.)');
   } else if (!probleme?.erreur && erreurs && plats.length > 1) {

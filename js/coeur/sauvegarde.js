@@ -13,6 +13,7 @@ import { estRegleAge, naissanceLisible } from './age.js';
 import { styleDe } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
 import { STYLES } from './vocabulaire.js';
+import { comparerAuxReperesPres, garderReperes, reperesEnPlus, texteReperes } from './relecture.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
   validerPaquet,
@@ -29,7 +30,8 @@ const JOUR_MS = 86_400_000;
 // Défauts d'un plat ajouté par son nom (⏳), écrits dans le fichier comme le prévoit le §8.
 const DEFAUTS_PLAT = { type: 'plat', recurrence: 'aucune', statutRecette: 'attente' };
 // Champs ajoutés à la recette dans le fichier.
-const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille'];
+// `reperesRelus` (T2d) : marque « relue par Claude », posée par l'app.
+const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille', 'reperesRelus'];
 // Champs d'un profil repris à la restauration (ceux qu'écrit coeur/profils.js › preparerProfil, ses règles, T2a, et
 // la date de naissance d'un enfant, T2c).
 const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion', 'regles', 'naissance'];
@@ -165,6 +167,7 @@ function platPourSauvegarde(plat, quand) {
   const modifieeLe = versDate(plat.modifieeLe);
   if (modifieeLe) sortie.modifieeLe = modifieeLe.toISOString();
   if (typeof plat.modifieePar === 'string' && plat.modifieePar) sortie.modifieePar = plat.modifieePar;
+  if (Number.isInteger(plat.reperesRelus) && plat.reperesRelus >= 1) sortie.reperesRelus = plat.reperesRelus;
   if (estDansCorbeille(plat)) {
     sortie.corbeille = { le: (versDate(plat.corbeille.le) ?? quand).toISOString() };
     const par = reduire(plat.corbeille.par);
@@ -345,7 +348,7 @@ function validerProfils(bruts, erreurs, avertissements) {
  * Vérifie une sauvegarde lue par lireSauvegarde. Seules les fautes du fichier entier bloquent (liste des plats
  * illisible, trop de plats, identifiants en double) ; une recette abîmée n'est simplement pas reprise.
  * → { date (Date ou null), plats: [{ id, nom, recette (null si abîmée), notes, derniereFois?, modifieeLe? (Date),
- *     modifieePar?, corbeille? ({ le (Date), par? }) }], profils, erreurs: [texte], avertissements: [texte], valide }
+ *     modifieePar?, corbeille? ({ le (Date), par? }), reperesRelus? (entier ≥ 1, T2d) }], profils, erreurs: [texte], avertissements: [texte], valide }
  *   Marque de la corbeille illisible (pas un objet, ou sans date lisible) : ignorée, avec un avertissement.
  */
 export function validerSauvegarde(sauvegarde) {
@@ -439,6 +442,10 @@ export function validerSauvegarde(sauvegarde) {
       else avertissements.push(`${guillemets(nom)}\u00A0: la date de modification est illisible, elle a été ignorée.`);
     }
     if (typeof brut.modifieePar === 'string' && brut.modifieePar.trim()) plat.modifieePar = brut.modifieePar.trim();
+    if (brut.reperesRelus != null) {
+      if (Number.isInteger(brut.reperesRelus) && brut.reperesRelus >= 1) plat.reperesRelus = brut.reperesRelus;
+      else avertissements.push(`${guillemets(nom)}\u00A0: sa marque de relecture est illisible, elle a été ignorée.`);
+    }
     if (brut.corbeille != null) {
       const le = estObjet(brut.corbeille) && typeof brut.corbeille.le === 'string' ? versDate(brut.corbeille.le) : null;
       if (le) {
@@ -483,7 +490,11 @@ function enLots(ecritures, taille) {
  * `resume.precautionsARemettre` : [nom] des profils présents dont la date revient, ou dont le fichier porte des
  * précautions d'âge absentes de l'app sans que leurs règles reviennent : l'écran invite à ouvrir « 🧸 Ce que <Enfant>
  * mange » (aucune précaution n'est écrite par la restauration sur un profil qui a déjà des règles).
- * → { resume, recettesDifferentes: [{ id, nom, modifieeLe? (Date), appEnAttente, cocheeParDefaut }],
+ * Repères de précaution (T2d) : les ingrédients se comparent aux repères près (relecture.js › comparerAuxReperesPres :
+ * une fiche qui en a autant ou plus que le fichier a la même recette ; moins : recette différente, avec `mention`) ;
+ * une recette reprise garde les repères de précaution de la fiche (`resume.reperesGardes` : [texte]) ; la marque
+ * `reperesRelus` revient avec un plat absent ou suit le fichier pour une recette reprise, jamais seule.
+ * → { resume, recettesDifferentes: [{ id, nom, modifieeLe? (Date), appEnAttente, cocheeParDefaut, mention? }],
  *     lots: [[{ collection, id, mode: 'fusion' | 'update', donnees, effacer?, condition, clore? }]], demandesAClore,
  *     avertissements, rien }
  *   `condition` : ce qui doit encore être vrai au moment de l'envoi (voir appliquerConditions) ; `clore` : demandes
@@ -524,6 +535,7 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     versionsRemises: [],
     naissancesRemises: [],
     precautionsARemettre: [],
+    reperesGardes: [],
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -615,6 +627,7 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
       if (plat.modifieeLe) donnees.modifieeLe = plat.modifieeLe;
       if (plat.modifieePar) donnees.modifieePar = plat.modifieePar;
       if (plat.corbeille) donnees.corbeille = { ...plat.corbeille };
+      if (plat.reperesRelus) donnees.reperesRelus = plat.reperesRelus;
       donnees.majPar = auteur;
       donnees.majLe = marqueurHorodatage();
       const satisfaites = plat.recette
@@ -658,17 +671,25 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     let reprise = false;
     if (recette && statutDe(recette) !== 'attente') {
       const actuelle = recetteValidee(existant);
-      if (actuelle && egalProfonde(sansVersions(actuelle), sansVersions(recette))) {
+      // Ingrédients comparés aux repères de précaution près (T2d) : une fiche qui en a plus que le fichier (relue
+      // depuis) garde la même recette ; une fiche qui en a moins reste « différente », et le dit.
+      const { ingredients: ingredientsIci, ...resteIci } = sansVersions(actuelle) ?? {};
+      const { ingredients: ingredientsLa, ...resteLa } = sansVersions(recette);
+      const comparaison = actuelle && egalProfonde(resteIci, resteLa)
+        ? comparerAuxReperesPres(ingredientsIci ?? [], ingredientsLa ?? []) : 'differents';
+      if (comparaison === 'egaux' || comparaison === 'plusIci') {
         resume.identiques += 1;
       } else {
         const appEnAttente = statutDe(existant) === 'attente';
         const modifieeLe = versDate(existant.modifieeLe);
+        const enPlus = comparaison === 'moinsIci' ? reperesEnPlus(ingredientsIci, ingredientsLa) : [];
         recettesDifferentes.push({
           id: plat.id,
           nom: reduire(existant.nom) || plat.nom,
           ...(modifieeLe ? { modifieeLe } : {}),
           appEnAttente,
           cocheeParDefaut: appEnAttente,
+          ...(enPlus.length ? { mention: `Le fichier a des repères que l’app n’a plus\u00A0: ${texteReperes(enPlus)}.` } : {}),
         });
         if (reprises.has(plat.id)) {
           reprise = true;
@@ -679,6 +700,11 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
               const autre = nomPrisPar(recette.nom, plat.id);
               if (autre) avertissements.push(`${guillemets(existant.nom ?? plat.nom)} garde son nom actuel\u00A0: un autre plat porte déjà celui du fichier.`);
               else donnees.nom = recette.nom;
+            } else if (champ === 'ingredients' && recette.ingredients !== undefined) {
+              // Repères de précaution de la fiche actuelle gardés, ingrédient par ingrédient (T2d).
+              const { ingredients, gardes } = garderReperes(existant.ingredients, recette.ingredients);
+              donnees.ingredients = ingredients;
+              if (gardes.length) resume.reperesGardes.push(`${guillemets(reduire(existant.nom) || plat.nom)}\u00A0: repères gardés\u00A0: ${texteReperes(gardes)}.`);
             } else if (recette[champ] !== undefined) {
               donnees[champ] = recette[champ];
             } else if (existant[champ] !== undefined) {
@@ -686,7 +712,8 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
               effacer.push(champ);
             }
           }
-          for (const champ of ['modifieeLe', 'modifieePar']) {
+          // Marque « relue par Claude » (T2d) : elle suit le fichier, comme la marque « modifiée à la main ».
+          for (const champ of ['modifieeLe', 'modifieePar', 'reperesRelus']) {
             if (plat[champ] !== undefined) donnees[champ] = plat[champ];
             else if (existant[champ] !== undefined) effacer.push(champ);
           }
@@ -863,6 +890,11 @@ export function appliquerConditions(ecriture, actuel) {
   }
   // Demandes : celles de la recette reprise si elle est écrite ; celles d'une version remise si elle l'est.
   const reprise = condition.recette !== undefined && recetteEcrite;
+  // Recette reprise : la marque « relue par Claude » suit le fichier (T2d), même posée sur la fiche depuis l'aperçu
+  // (une relecture qui n'a changé aucun repère ne change pas l'empreinte de la recette).
+  if (reprise && donnees.reperesRelus === undefined && actuel.reperesRelus !== undefined && !effacer.includes('reperesRelus')) {
+    effacer.push('reperesRelus');
+  }
   const recetteDuPlat = `${ecriture.id}__recette`;
   clore = clore.filter((demande) => reprise
     || (demande !== recetteDuPlat && Boolean(ajoutees?.has(demande.slice(`${ecriture.id}__`.length)))));

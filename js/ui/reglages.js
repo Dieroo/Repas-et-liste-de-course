@@ -9,8 +9,10 @@ import { copier } from './presse-papiers.js';
 import { avecEcranAge, aujourdhuiDe } from './regime.js';
 import { PORTIONS, NOM_PROFIL_MAX, trierProfils, preparerProfil, libellePortion } from '../coeur/profils.js';
 import { dateDeSauvegarde, joursDepuis } from '../coeur/sauvegarde.js';
-import { REGIMES, lireRegime } from '../coeur/regles.js';
-import { VERSION_INSTRUCTIONS } from '../coeur/claude.js';
+import { REGIMES, lireRegime, marqueursSurveilles } from '../coeur/regles.js';
+import { VERSION_INSTRUCTIONS, LOT_PRECAUTIONS, texteDemandePrecautions } from '../coeur/claude.js';
+import { platsARelire, lotDePrecautions } from '../coeur/relecture.js';
+import { MARQUEURS_PRECAUTION, estRelue } from '../coeur/vocabulaire.js';
 import { ageEnMois, estRegleAge, reglesSelonAge, texteAge } from '../coeur/age.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
@@ -308,9 +310,108 @@ function creerCarteProjetClaude(ctx) {
   };
 }
 
+/**
+ * Libellé du bouton de copie d'un lot de relecture : « les 10 premières », « les 4 recettes », « la recette » tant
+ * qu'aucune recette n'est relue ; ensuite « les 10 suivantes », « les 4 dernières », « la dernière ».
+ */
+export function libelleLotRelecture(restantes, dejaRelues) {
+  if (restantes > LOT_PRECAUTIONS) {
+    return `Demander à Claude les ${LOT_PRECAUTIONS}\u00A0${dejaRelues ? 'suivantes' : 'premières'}`;
+  }
+  if (restantes > 1) return `Demander à Claude les ${restantes}\u00A0${dejaRelues ? 'dernières' : 'recettes'}`;
+  return dejaRelues ? 'Demander à Claude la dernière' : 'Demander à Claude la recette';
+}
+
+/**
+ * Carte « 🧸 Relire les recettes » (T2d, gestionnaire hors aperçu, sous « Projet Claude ») : Claude relit les repères
+ * de précaution des recettes pas encore relues, par lots de LOT_PRECAUTIONS. Visible seulement si une recette attend
+ * et qu'une règle active d'un profil surveille l'un de ces repères. Tant que les instructions de cette version ne
+ * sont pas copiées, elle le demande d'abord, sans bouton. La copie retient les identifiants du lot sur le téléphone
+ * (`relectureEnCours`) ; un second toucher recopie le même lot. Nœuds gardés : le focus reste sur le bouton touché.
+ * → { noeud, maj }
+ */
+function creerCarteRelecture(ctx) {
+  let courant = ctx;
+  let copie = false;
+  let dernierLot = null; // { attente: signature des recettes à relire, ids: [platId] }
+  const nombre = el('p', {});
+  const consigne = el('p', { class: 'aide' }, 'Copiez d’abord les nouvelles instructions ci-dessus.');
+  const boutonDemander = el('button', { class: 'bouton bouton-plein', type: 'button', 'data-action': 'relire', onclick: demander });
+  const lienColler = el('a', { class: 'bouton bouton-plein', href: '#/import' }, 'Coller la réponse de Claude');
+  const actions = el('div', { class: 'actions-recette' }, boutonDemander, lienColler);
+  const message = el('p', { class: 'aide', role: 'status' });
+  const noeud = el('section', { class: 'carte carte-relecture', hidden: true },
+    el('h2', {}, el('span', { 'aria-hidden': 'true' }, '🧸'), ' Relire les recettes'),
+    nombre,
+    el('p', { class: 'texte-doux' },
+      'Il y repère ce qui demande une précaution\u00A0: fromage au lait cru, viande rosée, fruits à coque, alcool non cuit… Seuls ces repères changent.'),
+    consigne,
+    actions,
+    message);
+
+  /** Recettes à relire, si la carte a lieu d'être ; [] sinon. */
+  function aRelire(c) {
+    if (c.role !== 'gestionnaire' || !c.platsCharges || !c.profilsCharges) return [];
+    const surveilles = c.surveilles ?? marqueursSurveilles(c.profils ?? []);
+    if (!MARQUEURS_PRECAUTION.some((marqueur) => surveilles.has(marqueur))) return [];
+    return platsARelire(c.plats ?? []);
+  }
+
+  async function demander() {
+    const attente = aRelire(courant);
+    if (!attente.length || !courant.instructionsAJour) return;
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    const signature = attente.map((plat) => plat.id).sort().join('\n');
+    const parId = new Map(attente.map((plat) => [plat.id, plat]));
+    const recopie = dernierLot?.attente === signature;
+    const lot = recopie ? dernierLot.ids.map((id) => parId.get(id)).filter(Boolean) : lotDePrecautions(courant.plats ?? []);
+    if (!lot.length) return;
+    const reussi = await copier(texteDemandePrecautions(lot));
+    if (reussi) {
+      copie = true;
+      dernierLot = { attente: signature, ids: lot.map((plat) => plat.id) };
+      courant.actions?.noterRelectureEnCours?.(dernierLot.ids);
+      message.textContent = recopie
+        ? 'Recopié.'
+        : 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse de Claude\u00A0». Lisez aussi ses remarques sous le bloc\u00A0: un repère comme «\u00A0viande\u00A0» se corrige dans Modifier.';
+    } else {
+      message.textContent = 'La copie n’a pas marché. Réessayez.';
+    }
+    majBoutons();
+  }
+
+  function majBoutons() {
+    boutonDemander.className = `bouton bouton-plein ${copie ? 'bouton-secondaire' : 'bouton-principal'}`;
+    lienColler.className = `bouton bouton-plein ${copie ? 'bouton-principal' : 'bouton-secondaire'}`;
+    message.hidden = !message.textContent;
+  }
+
+  function maj(nouveau) {
+    courant = nouveau;
+    const attente = aRelire(nouveau);
+    noeud.hidden = !attente.length;
+    if (!attente.length) return;
+    const n = attente.length;
+    nombre.textContent = n > 1
+      ? `${n}\u00A0recettes n’ont pas encore été relues par Claude.`
+      : '1\u00A0recette n’a pas encore été relue par Claude.';
+    const pret = Boolean(nouveau.instructionsAJour);
+    consigne.hidden = pret;
+    actions.hidden = !pret;
+    if (!pret) message.textContent = '';
+    const dejaRelues = (nouveau.plats ?? []).some((plat) => estRelue(plat));
+    boutonDemander.replaceChildren(el('span', { 'aria-hidden': 'true' }, '📋'), ` ${libelleLotRelecture(n, dejaRelues)}`);
+    majBoutons();
+  }
+
+  maj(ctx);
+  return { noeud, maj };
+}
+
 export function creer(ctx) {
   let courant = ctx;
   const carteProjetClaude = creerCarteProjetClaude(ctx);
+  const carteRelecture = creerCarteRelecture(ctx);
   const gestionnaire = el('dd', {});
   const listeProfils = el('div', { class: 'section' });
 
@@ -426,6 +527,7 @@ export function creer(ctx) {
       listeProfils,
       carteSauvegarde,
       carteProjetClaude.noeud,
+      carteRelecture.noeud,
       etatVide({
         emoji: '⚙️',
         teinte: 'olive',
@@ -437,6 +539,7 @@ export function creer(ctx) {
       courant = nouveau;
       remplir();
       carteProjetClaude.maj(nouveau);
+      carteRelecture.maj(nouveau);
     },
     detruire() {
       carteProjetClaude.detruire();
