@@ -1,5 +1,6 @@
-// Écran Plats : recherche, filtres, liste, ajout d'un plat par son nom.
-import { el, etatVide, pastille } from './dom.js';
+// Écran Plats : recherche, filtres, liste, ajout d'un plat par son nom ; bandeau « Personne n'en veut » et, en bas de
+// la liste, la corbeille (« Remettre » pour les deux membres, « Vider la corbeille » pour le gestionnaire).
+import { el, etatVide, pastille, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { modeDeCuisson } from './pictos.js';
 import { copier } from './presse-papiers.js';
@@ -11,6 +12,7 @@ import { profilsContraints, platsSansVersion } from '../coeur/compatibilite.js';
 import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { ligneCompat, garderPour, nomDe, libellesStyles, rangerStyles } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
+import { platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
 let recherche = '';
@@ -221,7 +223,222 @@ function creerBandeauVersions(lireCtx) {
   return { noeud, maj };
 }
 
-function ouvrirAjout(ctx) {
+/** « A, B et C », « A, B, C et 2 autres » : trois noms au plus. */
+function nomsCourts(plats) {
+  const noms = plats.map((plat) => String(plat.nom ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (noms.length > 3) return `${noms.slice(0, 3).join(', ')} et ${noms.length - 3}\u00A0autre${noms.length - 3 > 1 ? 's' : ''}`;
+  return noms.length > 1 ? `${noms.slice(0, -1).join(', ')} et ${noms.at(-1)}` : noms.join('');
+}
+
+/**
+ * Bandeau « Personne n'en veut » (les deux membres) : plats notés « Jamais » par tous les profils
+ * (coeur/corbeille.js › platsSansPreneur). Un toucher les met à la corbeille ; l'annonce permet d'annuler. Nœuds
+ * gardés d'un rendu à l'autre. → { noeud, maj(ctx, plats) }
+ */
+function creerBandeauSansPreneur(lireCtx, apresMiseALaCorbeille) {
+  let ids = [];
+  const titre = el('h2', {});
+  const noms = el('p', {});
+  const qui = el('p', {});
+  const bouton = el('button', {
+    class: 'bouton bouton-secondaire bouton-plein',
+    type: 'button',
+    onclick: () => {
+      if (!ids.length) return;
+      lireCtx().actions.mettreALaCorbeille([...ids]);
+      apresMiseALaCorbeille();
+    },
+  });
+  const noeud = el('section', { class: 'carte carte-sans-preneur', hidden: true },
+    el('div', { class: 'carte-ligne' },
+      pastille('👎', 'ocre'),
+      el('div', { class: 'carte-texte' }, titre, noms, qui)),
+    bouton);
+
+  function maj(ctx, plats) {
+    ids = plats.map((plat) => plat.id);
+    noeud.hidden = !ids.length;
+    if (!ids.length) return;
+    const seul = (ctx.profils ?? []).length === 1 ? nomDe(ctx.profils[0]) : null;
+    titre.textContent = ids.length > 1 ? `${ids.length}\u00A0plats dont personne ne veut` : '1\u00A0plat dont personne ne veut';
+    noms.textContent = nomsCourts(plats);
+    qui.textContent = seul
+      ? `${seul} ${ids.length > 1 ? 'les a notés' : 'l’a noté'} «\u00A0Jamais\u00A0».`
+      : `Tout le monde ${ids.length > 1 ? 'les a notés' : 'l’a noté'} «\u00A0Jamais\u00A0».`;
+    bouton.replaceChildren(el('span', { 'aria-hidden': 'true' }, '🗑️'),
+      ids.length > 1 ? 'Les mettre à la corbeille' : 'Le mettre à la corbeille');
+  }
+
+  return { noeud, maj };
+}
+
+/**
+ * Feuille « Corbeille » (les deux membres) : une ligne par plat (visuel, nom, « Mis à la corbeille le … »), lien vers
+ * sa fiche et « Remettre ». Pour le gestionnaire, « Vider la corbeille » en bas : confirmation en deux temps, réseau
+ * obligatoire (bouton inactif hors ligne). Mise à jour en direct par l'écran Plats (`maj`) ; se ferme d'elle-même
+ * quand la corbeille est vide. `focusPlat` : plat dont le bouton « Remettre » reçoit le focus à l'ouverture.
+ * Le bandeau d'annonce, caché sous la feuille ouverte (et hors de portée des lecteurs d'écran), ne sert pas ici : un
+ * échec s'affiche dans la feuille, et « Corbeille vidée. » s'annonce une fois la feuille fermée.
+ * → { maj(ctx), fermer }
+ */
+function ouvrirFeuilleCorbeille(lireCtx, { focusPlat = null, onFermer } = {}) {
+  let confirmer = false; // « Vider la corbeille » touché une fois : la question attend sa réponse
+  let enCours = false; // suppression envoyée, réponse attendue
+  let ouverte = true;
+  const liste = el('ul', { class: 'liste-corbeille' });
+  // Échec de « Remettre » ou de « Vider la corbeille », dans la feuille ; effacé au toucher suivant.
+  const messageEchec = el('p', { class: 'message-erreur message-corbeille', role: 'alert', hidden: true });
+  const montrerEchec = (texte) => {
+    messageEchec.textContent = texte ?? '';
+    messageEchec.hidden = !texte;
+  };
+  const boutonVider = el('button', {
+    class: 'bouton bouton-texte bouton-danger bouton-vider',
+    type: 'button',
+    onclick: () => {
+      montrerEchec(null);
+      confirmer = true;
+      maj(lireCtx());
+      // Toute la question à l'écran, « Oui, supprimer » et « Annuler » compris, même au bas d'une longue feuille.
+      question.focus({ preventScroll: true });
+      confirmation.scrollIntoView({ block: 'nearest' });
+    },
+  }, 'Vider la corbeille');
+  const question = el('p', { class: 'question-vider', tabindex: '-1' });
+  const boutonOui = el('button', {
+    class: 'bouton bouton-principal bouton-plein bouton-supprimer',
+    type: 'button',
+    onclick: vider,
+  }, 'Oui, supprimer');
+  const boutonNon = el('button', {
+    class: 'bouton bouton-texte',
+    type: 'button',
+    onclick: () => {
+      montrerEchec(null);
+      confirmer = false;
+      maj(lireCtx());
+      boutonVider.focus();
+    },
+  }, 'Annuler');
+  const confirmation = el('div', { class: 'confirmation-vider' }, question, boutonOui, boutonNon);
+  const horsLigne = el('p', { class: 'aide', id: 'corbeille-hors-ligne' }, 'Il faut du réseau pour vider la corbeille.');
+  const zoneVider = el('div', { class: 'zone-vider' }, boutonVider, confirmation, horsLigne);
+
+  const feuille = ouvrirFeuille('Corbeille', () => el('div', { class: 'feuille-corbeille' },
+    el('p', { class: 'texte-doux' }, 'Ces plats n’apparaissent plus nulle part. Remettez-en un pour le retrouver.'),
+    liste,
+    messageEchec,
+    zoneVider), {
+    onFermer: () => {
+      ouverte = false;
+      onFermer?.();
+    },
+  });
+  const titre = feuille.dialogue.querySelector('h2');
+
+  async function vider() {
+    if (enCours || !navigator.onLine) return;
+    montrerEchec(null);
+    enCours = true;
+    maj(lireCtx());
+    // L'action n'annonce rien : son message se montre ici (`message` : null si rien à dire).
+    const { code, message } = await lireCtx().actions.viderCorbeille();
+    enCours = false;
+    // Corbeille vidée, ou feuille déjà fermée : la feuille se ferme d'abord, puis l'annonce, visible et lue.
+    if (code === 'ok' || !ouverte) {
+      if (ouverte) feuille.fermer();
+      if (message) annoncer(message);
+      return;
+    }
+    confirmer = false;
+    // Hors ligne, l'explication est déjà sous le bouton (inactif) ; un échec s'affiche dans la feuille.
+    if (code === 'echec') montrerEchec(message);
+    maj(lireCtx());
+    if (ouverte) (boutonVider.disabled || boutonVider.hidden ? titre : boutonVider).focus();
+  }
+
+  /** « Remettre » : un échec du serveur (refus) s'affiche dans la feuille, si elle est encore ouverte. */
+  async function remettre(plat) {
+    montrerEchec(null);
+    const { echec } = (await lireCtx().actions.remettreDeLaCorbeille([plat.id])) ?? {};
+    if (echec && ouverte) montrerEchec(echec);
+  }
+
+  function ligne(plat, ctx) {
+    return el('li', { class: 'ligne-corbeille' },
+      el('a', {
+        class: 'corbeille-plat',
+        href: `#/plat/${encodeURIComponent(plat.id)}`,
+        'data-cle': `fiche:${plat.id}`,
+        onclick: () => feuille.fermer(),
+      },
+      vignetteDuPlat(plat),
+      el('span', { class: 'carte-plat-texte' },
+        el('span', { class: 'carte-plat-nom' }, plat.nom),
+        el('span', { class: 'carte-plat-detail' },
+          texteCorbeille(plat, { profils: ctx.profils ?? [], moi: ctx.utilisateur?.email ?? ctx.moi })))),
+      el('button', {
+        class: 'bouton bouton-secondaire bouton-remettre',
+        type: 'button',
+        'data-cle': `remettre:${plat.id}`,
+        'aria-label': `Remettre «\u00A0${plat.nom}\u00A0»`,
+        onclick: () => remettre(plat),
+      }, 'Remettre'));
+  }
+
+  function maj(ctx) {
+    if (!ouverte) return;
+    const plats = ctx.platsCorbeille ?? [];
+    // Corbeille vide (vidée, ou tout remis ici ou sur l'autre téléphone) : la feuille n'a plus d'objet.
+    if (!plats.length && !enCours) {
+      feuille.fermer();
+      return;
+    }
+    // Ligne touchée (« Remettre ») : le focus passe à la ligne suivante, ou au titre s'il n'en reste aucune.
+    const actif = liste.contains(document.activeElement) ? document.activeElement : null;
+    const cleFocus = actif?.dataset.cle ?? null;
+    const indexFocus = actif ? [...liste.querySelectorAll('.bouton-remettre')].indexOf(actif) : -1;
+    liste.replaceChildren(...plats.map((plat) => ligne(plat, ctx)));
+    if (cleFocus) {
+      const boutons = liste.querySelectorAll('.bouton-remettre');
+      const meme = liste.querySelector(`[data-cle="${CSS.escape(cleFocus)}"]`);
+      (meme ?? (indexFocus >= 0 ? boutons[Math.min(indexFocus, boutons.length - 1)] : null) ?? titre)?.focus();
+    }
+
+    // Vider : gestionnaire seulement (rôle affiché : pas en aperçu « Repas et courses »).
+    const gestionnaire = ctx.role === 'gestionnaire';
+    if (!gestionnaire) confirmer = false;
+    zoneVider.hidden = !gestionnaire;
+    const enLigne = navigator.onLine;
+    boutonVider.hidden = confirmer;
+    boutonVider.disabled = !enLigne;
+    confirmation.hidden = !confirmer;
+    const n = plats.length;
+    question.textContent = n > 1
+      ? `Supprimer définitivement ${n}\u00A0plats et leurs photos\u202F? Ce n’est pas réversible.`
+      : 'Supprimer définitivement ce plat et sa photo\u202F? Ce n’est pas réversible.';
+    boutonOui.disabled = !enLigne || enCours;
+    boutonOui.textContent = enCours ? 'Suppression…' : 'Oui, supprimer';
+    boutonOui.setAttribute('aria-busy', String(enCours));
+    boutonNon.disabled = enCours;
+    horsLigne.hidden = enLigne;
+    // Le bouton inactif dit pourquoi, seulement hors ligne (une description cachée serait lue quand même).
+    for (const bouton of [boutonVider, boutonOui]) {
+      if (enLigne) bouton.removeAttribute('aria-describedby');
+      else bouton.setAttribute('aria-describedby', 'corbeille-hors-ligne');
+    }
+  }
+
+  maj(lireCtx());
+  if (focusPlat) liste.querySelector(`[data-cle="${CSS.escape(`remettre:${focusPlat}`)}"]`)?.focus();
+  return { maj, fermer: feuille.fermer };
+}
+
+/**
+ * Feuille « Ajouter un plat ». `ouvrirCorbeille(platId)` : ouvre la corbeille sur ce plat, quand le nom est celui d'un
+ * plat de la corbeille (on le remet au lieu de le recréer).
+ */
+function ouvrirAjout(ctx, { ouvrirCorbeille = null } = {}) {
   ouvrirFeuille('Ajouter un plat', (fermer) => {
     const erreur = el('p', { class: 'message-erreur', role: 'alert', hidden: true });
     const entree = el('input', {
@@ -249,6 +466,16 @@ function ouvrirAjout(ctx) {
                 href: `#/plat/${encodeURIComponent(resultat.existant)}`,
                 onclick: fermer,
               }, 'Voir sa fiche')]
+              : []),
+            ...(resultat.corbeille && ouvrirCorbeille
+              ? [el('button', {
+                class: 'bouton bouton-secondaire bouton-plein lien-erreur',
+                type: 'button',
+                onclick: () => {
+                  fermer();
+                  ouvrirCorbeille(resultat.corbeille);
+                },
+              }, el('span', { 'aria-hidden': 'true' }, '🗑️'), 'Ouvrir la corbeille')]
               : []),
           );
           erreur.hidden = false;
@@ -280,6 +507,32 @@ export function creer(ctx) {
   const zoneLots = el('div', { class: 'zone-lots' });
   const bandeaux = new Map(); // profilId → bandeau gardé d'un rendu à l'autre
   const liste = el('ul', { class: 'liste-plats' });
+  const titrePlats = el('h1', { tabindex: '-1' }, 'Plats');
+  // « Personne n'en veut » : en haut de la liste (filtre « Tous » ou par type, hors recherche).
+  const bandeauSansPreneur = creerBandeauSansPreneur(() => courant, () => titrePlats.focus());
+  // Corbeille : en bas de la liste, seulement si elle n'est pas vide ; sa feuille suit les plats en direct.
+  let feuilleCorbeille = null;
+  const boutonCorbeille = el('button', {
+    class: 'bouton bouton-texte acces-corbeille',
+    type: 'button',
+    hidden: true,
+    onclick: () => ouvrirLaCorbeille(),
+  });
+
+  /** Ouvre la feuille « Corbeille » (`focusPlat` : plat dont « Remettre » reçoit le focus). */
+  function ouvrirLaCorbeille(focusPlat = null) {
+    if (feuilleCorbeille) return;
+    feuilleCorbeille = ouvrirFeuilleCorbeille(() => courant, {
+      focusPlat,
+      onFermer: () => {
+        feuilleCorbeille = null;
+        // Le focus revient au bouton de la corbeille, ou au titre si elle est maintenant vide.
+        if (!boutonCorbeille.isConnected) return;
+        if (!boutonCorbeille.hidden) boutonCorbeille.focus();
+        else titrePlats.focus();
+      },
+    });
+  }
   // Invitation (§4) : seulement tant que la personne connectée n'a noté aucun plat.
   const invitation = el('section', { class: 'carte carte-invitation', hidden: true },
     el('h2', {}, 'Aucun plat noté'),
@@ -369,10 +622,24 @@ export function creer(ctx) {
     zoneLots.hidden = !noeuds.some((n) => !n.hidden);
   }
 
+  /** Bouton « 🗑️ Corbeille (N) », bandeau « Personne n'en veut » et feuille de la corbeille, si elle est ouverte. */
+  function remplirCorbeille(choisi) {
+    const jetes = courant.platsCharges ? courant.platsCorbeille ?? [] : [];
+    boutonCorbeille.hidden = !jetes.length;
+    boutonCorbeille.replaceChildren(el('span', { 'aria-hidden': 'true' }, '🗑️'), `Corbeille (${jetes.length})`);
+    const parType = ['tous', 'plat', 'dessert', 'apero'].includes(choisi.id) && !recherche.trim();
+    const sansPreneur = courant.platsCharges && parType
+      ? filtrerPlats(platsSansPreneur(courant.plats, courant.profils ?? []), { filtre: choisi })
+      : [];
+    bandeauSansPreneur.maj(courant, sansPreneur);
+    feuilleCorbeille?.maj(courant);
+  }
+
   function remplir() {
     // Pas d'ajout avant le chargement : sans la liste, un doublon ne serait pas repéré.
     boutonAjouter.disabled = !courant.platsCharges;
     majFiltres();
+    remplirCorbeille(filtreRetenu(filtres, filtre));
     const moi = courant.moi;
     invitation.hidden = !(courant.platsCharges && moi && nombreANoter(courant.plats, moi.id, { garder: garderPour(courant, moi.id) }) > 0
       && !courant.plats.some((plat) => estNote(plat, moi.id)));
@@ -416,14 +683,14 @@ export function creer(ctx) {
   const boutonAjouter = el('button', {
     class: 'bouton bouton-principal bouton-flottant',
     type: 'button',
-    onclick: () => ouvrirAjout(courant),
+    onclick: () => ouvrirAjout(courant, { ouvrirCorbeille: (platId) => ouvrirLaCorbeille(platId) }),
   }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Ajouter un plat');
 
   remplir();
 
   return {
     noeud: el('div', { class: 'vue' },
-      el('header', { class: 'vue-entete' }, el('h1', {}, 'Plats'), compteur),
+      el('header', { class: 'vue-entete' }, titrePlats, compteur),
       champRecherche,
       // Action propre au gestionnaire : ajouter les recettes rendues par son projet Claude.
       ctx.role === 'gestionnaire'
@@ -432,8 +699,10 @@ export function creer(ctx) {
       groupeFiltres,
       zoneLots,
       invitation,
+      bandeauSansPreneur.noeud,
       zoneMessage,
       liste,
+      boutonCorbeille,
       boutonAjouter,
     ),
     defilement,
@@ -443,6 +712,7 @@ export function creer(ctx) {
     },
     detruire() {
       defilement = window.scrollY;
+      feuilleCorbeille?.fermer();
     },
   };
 }

@@ -1,5 +1,6 @@
 // Plats : visuel, filtres, ajout par nom, affichage des quantités. Logique pure.
 import { slug, correspond } from './slug.js';
+import { estDansCorbeille } from './corbeille.js';
 
 export const LIBELLES_TYPE = {
   plat: 'Plat',
@@ -172,7 +173,10 @@ export function filtrerPlats(plats, { recherche = '', filtre = 'tous', evaluer =
  * Plat créé à partir de son seul nom : { id, nom } seulement. Les champs absents valent leurs valeurs par
  * défaut (type « plat », statut ⏳) : l'enregistrement, fusionné, ne peut ainsi jamais écraser une recette
  * ajoutée entre-temps sur l'autre téléphone.
- * → { plat } ou { erreur, existant? } (existant : id du plat qui porte déjà ce nom).
+ * `plats` : tous les plats, ceux de la corbeille compris (un nom pris par un plat de la corbeille ne se recrée pas : on
+ * le remet depuis la corbeille). Un plat actif du même nom passe avant celui de la corbeille.
+ * → { plat } ou { erreur, existant? } (existant : id du plat actif qui porte déjà ce nom) ou { erreur, corbeille }
+ *   (corbeille : id du plat de la corbeille qui porte ce nom).
  */
 export function nouveauPlatParNom(nom, plats = []) {
   const propre = String(nom ?? '').replace(/\s+/g, ' ').trim();
@@ -180,8 +184,16 @@ export function nouveauPlatParNom(nom, plats = []) {
   if (propre.length > NOM_MAX) return { erreur: `Le nom est trop long (${NOM_MAX} caractères au plus).` };
   const base = slug(propre);
   if (!base) return { erreur: 'Ce nom ne contient ni lettre ni chiffre.' };
-  const existant = plats.find((plat) => slug(plat.nom) === base);
+  const memeNom = plats.filter((plat) => slug(plat.nom) === base);
+  const existant = memeNom.find((plat) => !estDansCorbeille(plat));
   if (existant) return { erreur: `«\u00A0${existant.nom}\u00A0» existe déjà.`, existant: existant.id };
+  const jete = memeNom[0];
+  if (jete) {
+    return {
+      erreur: `«\u00A0${jete.nom}\u00A0» est dans la corbeille. Remettez-le depuis la corbeille, en bas de cet écran.`,
+      corbeille: jete.id,
+    };
+  }
   const pris = new Set(plats.map((plat) => plat.id));
   let id = base;
   for (let n = 2; pris.has(id); n += 1) id = `${base}-${n}`;

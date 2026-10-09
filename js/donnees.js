@@ -15,6 +15,7 @@ import { demandeDeRecette } from './coeur/plats.js';
 import { appliquerConditions } from './coeur/sauvegarde.js';
 import { fusionnerVariantes } from './coeur/paquet.js';
 import { cheminNote, noteValide } from './coeur/notes.js';
+import { estDansCorbeille } from './coeur/corbeille.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -428,6 +429,113 @@ export async function restaurer({ lots }, auteur) {
       }
     });
   }
+}
+
+// ——— Corbeille ———
+
+/** Identifiants de plats sans doublon, utilisables dans un chemin (jamais de « / »). */
+function idsDePlats(platIds) {
+  const liste = Array.isArray(platIds) ? platIds : [platIds];
+  return [...new Set(liste.filter((id) => typeof id === 'string' && id.trim() && !id.includes('/')))];
+}
+
+/**
+ * Une écriture `update` par plat, en lots de ECRITURES_PAR_TRANSACTION au plus (sous les 500 d'un lot Firestore,
+ * horodatages compris) : un seul lot pour un foyer. `update` : un plat supprimé entre-temps n'est jamais recréé à
+ * moitié (refus `not-found`). Hors ligne : part plus tard. → promesse de l'envoi de tous les lots.
+ */
+function mettreAJourPlats(platIds, champs) {
+  const ids = idsDePlats(platIds);
+  const envois = [];
+  for (let debut = 0; debut < ids.length; debut += ECRITURES_PAR_TRANSACTION) {
+    const lot = writeBatch(db);
+    for (const id of ids.slice(debut, debut + ECRITURES_PAR_TRANSACTION)) lot.update(doc(db, 'plats', id), champs());
+    envois.push(lot.commit());
+  }
+  return Promise.all(envois);
+}
+
+/**
+ * Met des plats à la corbeille (les deux membres, jamais automatique) : `corbeille: { le, par }` (horodatage du
+ * serveur, adresse de la personne). Seul ce champ est écrit : ni la recette, ni `majPar`, ni `majLe`.
+ * → promesse de l'envoi.
+ */
+export function mettreALaCorbeille(platIds, auteur) {
+  return mettreAJourPlats(platIds, () => ({ corbeille: { le: serverTimestamp(), par: String(auteur ?? '') } }));
+}
+
+/** Sort des plats de la corbeille : `corbeille` effacé (deleteField), rien d'autre. → promesse de l'envoi. */
+export function remettreDeLaCorbeille(platIds) {
+  return mettreAJourPlats(platIds, () => ({ corbeille: deleteField() }));
+}
+
+/**
+ * Vide la corbeille (gestionnaire) : supprime chaque plat et sa photo (`photos/{id}`), et clôt ses demandes encore
+ * ouvertes (`demandesAClore`, préparées par coeur/corbeille.js › demandesDesPlats : identifiants `<platId>__…`, ou
+ * { id, platId } quand la demande dit elle-même son plat).
+ * Transactions de ECRITURES_PAR_TRANSACTION écritures au plus, qui relisent chaque plat : un plat remis entre-temps
+ * sur l'autre téléphone n'est jamais supprimé (ni sa photo, ni ses demandes touchées) ; un plat déjà disparu voit
+ * seulement sa photo et ses demandes réglées. Une demande n'est close que si elle est encore ouverte. Hors ligne, une
+ * transaction échoue au lieu d'être mise en file : rien n'est supprimé plus tard à l'insu de la personne.
+ * → promesse de { supprimes: [platId], gardes: [platId], demandesCloses: [id] } ; rejetée à la première transaction
+ *   qui échoue (les précédentes restent faites ; une relance ne retrouve que ce qui reste dans la corbeille).
+ */
+export async function viderCorbeille(platIds, demandesAClore = []) {
+  const parPlat = new Map(idsDePlats(platIds).map((id) => [id, []]));
+  const vues = new Set();
+  for (const demande of Array.isArray(demandesAClore) ? demandesAClore : []) {
+    const id = typeof demande === 'string' ? demande : demande?.id;
+    if (typeof id !== 'string' || !id.trim() || id.includes('/') || vues.has(id)) continue;
+    const plat = parPlat.get(demande?.platId) ?? parPlat.get(id.split('__')[0]);
+    if (!plat) continue;
+    vues.add(id);
+    plat.push(id);
+  }
+  // Groupes de plats : chacun pèse sa suppression, celle de sa photo et ses demandes.
+  const groupes = [];
+  let groupe = [];
+  let poids = 0;
+  for (const [id, demandes] of parPlat) {
+    const ecritures = 2 + demandes.length;
+    if (groupe.length && poids + ecritures > ECRITURES_PAR_TRANSACTION) {
+      groupes.push(groupe);
+      groupe = [];
+      poids = 0;
+    }
+    groupe.push({ id, demandes });
+    poids += ecritures;
+  }
+  if (groupe.length) groupes.push(groupe);
+
+  const bilan = { supprimes: [], gardes: [], demandesCloses: [] };
+  for (const plats of groupes) {
+    // Résultat rendu par la transaction (qui peut être rejouée) : rien n'est retenu avant qu'elle aboutisse.
+    const fait = await runTransaction(db, async (transaction) => {
+      // Toutes les lectures d'abord, comme l'exige une transaction.
+      const lus = await Promise.all(plats.map(({ id }) => transaction.get(doc(db, 'plats', id))));
+      const aSupprimer = plats.filter((_, i) => !lus[i].exists() || estDansCorbeille(lus[i].data()));
+      const idsDemandes = aSupprimer.flatMap(({ demandes }) => demandes);
+      const demandesLues = await Promise.all(idsDemandes.map((id) => transaction.get(doc(db, 'demandes', id))));
+      const ouvertes = idsDemandes.filter((_, i) => demandesLues[i].exists() && demandesLues[i].data().statut === 'ouverte');
+      for (const { id } of aSupprimer) {
+        transaction.delete(doc(db, 'plats', id));
+        transaction.delete(doc(db, 'photos', id));
+      }
+      for (const id of ouvertes) {
+        transaction.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
+      }
+      const supprimes = new Set(aSupprimer.map(({ id }) => id));
+      return {
+        supprimes: [...supprimes],
+        gardes: plats.map(({ id }) => id).filter((id) => !supprimes.has(id)),
+        demandesCloses: ouvertes,
+      };
+    });
+    bilan.supprimes.push(...fait.supprimes);
+    bilan.gardes.push(...fait.gardes);
+    bilan.demandesCloses.push(...fait.demandesCloses);
+  }
+  return bilan;
 }
 
 /**

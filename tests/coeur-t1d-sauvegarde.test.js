@@ -26,6 +26,7 @@ const PROFILS = [ENFANT, ADULTE_B, ADULTE_A]; // volontairement dans le désordr
 
 const MAINTENANT = new Date('2026-10-06T16:42:00.000Z');
 const MODIFIEE = new Date('2026-10-05T18:12:00.000Z');
+const JETE = new Date('2026-10-06T07:30:00.000Z'); // mise à la corbeille (Corbeille)
 
 const clone = (valeur) => JSON.parse(JSON.stringify(valeur));
 
@@ -58,6 +59,7 @@ const FICHE_COMPLETE = {
   derniereFois: '2026-09-27',
   modifieeLe: MODIFIEE,
   modifieePar: 'a@example.com',
+  corbeille: { le: JETE, par: 'b@example.com' },
   vignette: 'data:image/jpeg;base64,AAAA',
   majPar: 'a@example.com',
   majLe: { seconds: 1790000000, nanoseconds: 0 },
@@ -239,8 +241,9 @@ test('creerSauvegarde : clés exactes, tris, ordre des champs du §8, défauts d
   assert.deepEqual(fichier.profils[0], ADULTE_A);
   assert.deepEqual(fichier.plats.map((p) => p.id), ['gratin-test', 'lasagnes', 'tarte-test']);
   const gratin = fichier.plats[0];
-  assert.deepEqual(Object.keys(gratin), [...CHAMPS_PLAT, 'notes', 'derniereFois', 'modifieeLe', 'modifieePar']);
+  assert.deepEqual(Object.keys(gratin), [...CHAMPS_PLAT, 'notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille']);
   assert.equal(gratin.modifieeLe, '2026-10-05T18:12:00.000Z');
+  assert.deepEqual(gratin.corbeille, { le: '2026-10-06T07:30:00.000Z', par: 'b@example.com' });
   assert.deepEqual(fichier.plats[1], {
     id: 'lasagnes', nom: 'Lasagnes', type: 'plat', recurrence: 'aucune', statutRecette: 'attente', notes: { 'profil-b': 3 },
   });
@@ -381,7 +384,8 @@ test('validerSauvegarde : date, recettes reprises, défauts', () => {
   assert.ok(gratin.modifieeLe instanceof Date);
   assert.equal(gratin.modifieeLe.getTime(), MODIFIEE.getTime());
   assert.equal(gratin.modifieePar, 'a@example.com');
-  for (const champ of ['notes', 'derniereFois', 'modifieeLe', 'modifieePar']) assert.equal(champ in gratin.recette, false, champ);
+  for (const champ of ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille']) assert.equal(champ in gratin.recette, false, champ);
+  assert.deepEqual(gratin.corbeille, { le: JETE, par: 'b@example.com' });
   assert.deepEqual(recetteValidee(gratin.recette), recetteValidee(FICHE_COMPLETE));
   const lasagnes = v.plats.find((p) => p.id === 'lasagnes');
   assert.equal(lasagnes.recette.statutRecette, 'attente');
@@ -516,7 +520,7 @@ test('aller-retour : sur une base vide, tout revient à l’identique', () => {
   const etat = etatDeBase();
   const r = preparerRestauration(relue(etat), { plats: [], profils: [], demandes: [], email: 'a@example.com' });
   assert.equal(r.rien, false);
-  assert.deepEqual(r.resume.platsRemis.sort(), ['Gratin de test', 'Lasagnes', 'Tarte de test']);
+  assert.deepEqual(r.resume.platsRemis.sort(), ['Gratin de test (dans la corbeille)', 'Lasagnes', 'Tarte de test']);
   assert.deepEqual(r.resume.profilsRemis, ['Adulte A', 'Adulte B', 'Enfant']);
   assert.equal(r.resume.notesRemises, 3);
   assert.equal(r.resume.datesRemises, 1);
@@ -542,11 +546,17 @@ test('garde-fou : une fiche portant tous les champs que l’app écrit survit au
     { plats: [], profils: clone(PROFILS), demandes: [], email: 'b@example.com' });
   const apres = appliquer({ plats: [], profils: clone(PROFILS) }, r.lots);
   const remis = apres.plats[0];
+  // Dates comparées par leur valeur, à toute profondeur (egalProfonde tient deux Date pour égales).
+  const sansDates = (v) => {
+    if (v instanceof Date) return `date:${v.toISOString()}`;
+    if (Array.isArray(v)) return v.map(sansDates);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([c, x]) => [c, sansDates(x)]));
+    return v;
+  };
   for (const champ of champsApp) {
-    const attendu = FICHE_COMPLETE[champ];
-    const recu = remis[champ];
-    if (attendu instanceof Date) assert.equal(recu?.getTime(), attendu.getTime(), champ);
-    else assert.ok(egalProfonde(recu, attendu), `${champ} : ${JSON.stringify(recu)} au lieu de ${JSON.stringify(attendu)}`);
+    const attendu = sansDates(FICHE_COMPLETE[champ]);
+    const recu = sansDates(remis[champ]);
+    assert.ok(egalProfonde(recu, attendu), `${champ} : ${JSON.stringify(recu)} au lieu de ${JSON.stringify(attendu)}`);
   }
   for (const champ of EXCLUSIONS_PLAT) assert.notDeepEqual(remis[champ], FICHE_COMPLETE[champ], champ);
 });

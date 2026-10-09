@@ -116,7 +116,8 @@ function ouvrirIdees() {
       const texte = texteDemandeIdees({
         nombre,
         envie: envie.value,
-        plats: ctx.plats ?? [],
+        // Tous les plats, corbeille comprise : Claude ne repropose pas un plat mis de côté (« déjà dans l'app »).
+        plats: ctx.tousLesPlats ?? ctx.plats ?? [],
         profils: ctx.profils ?? [],
         appareils: ctx.reglages?.appareils ?? null,
       });

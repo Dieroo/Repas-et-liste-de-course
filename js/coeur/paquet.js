@@ -10,6 +10,7 @@ import {
 import { evaluer, marqueursEffectifs, styleDe } from './compatibilite.js';
 import { SOURCE_IDEE, VERSION_INSTRUCTIONS } from './claude.js';
 import { stylesAttendus } from './regles.js';
+import { estDansCorbeille } from './corbeille.js';
 
 // Déplacés dans vocabulaire.js (module feuille, T2a) ; toujours importables d'ici.
 export { VOCABULAIRES, SOUS_TYPES_VIANDE, VIANDES, IMPLICATIONS, code, validerIngredient } from './vocabulaire.js';
@@ -25,8 +26,8 @@ const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
 export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
   'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
 // Champs de la fiche connus mais jamais repris par l'ajout de recettes (notes, dernier passage, marque « modifiée à
-// la main ») : ils voyagent dans une sauvegarde, que seule la restauration reprend.
-const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar'];
+// la main », marque de la corbeille) : ils voyagent dans une sauvegarde, que seule la restauration reprend.
+const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille'];
 const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
 const CHAMPS_VARIANTE = ['pour', 'style', 'retirer', 'ajouter', 'consigne', 'frigoJours'];
@@ -844,11 +845,13 @@ function recetteSansVersions(plat) {
 
 /**
  * Plat visé par chaque recette valide, écritures et demandes à clore (CLAUDE.md §8, T2b).
- * `valides` : `donnees` des plats validés. `cible` : plat depuis lequel on a touché « Coller la réponse » (prime si une
- * seule entrée est collée). `profils` : profils de l'app (libellés, versions qui conviennent). `choix` : { [platId]:
- * 'version' | 'remplacer' }, pour une fiche complète reçue, différente de la recette actuelle et porteuse de versions.
- * → { elements: [{ index, id, nom, statut, ancienNom?, modifieeA?, ingredients, etapes, avertissements, versions,
- *       choix? }],
+ * `valides` : `donnees` des plats validés. `plats` : tous les plats de l'app, ceux de la corbeille compris (un plat de
+ * la corbeille ne se recrée pas à côté, et son identifiant n'est jamais repris). `cible` : plat depuis lequel on a
+ * touché « Coller la réponse » (prime si une seule entrée est collée). `profils` : profils de l'app (libellés, versions
+ * qui conviennent). `choix` : { [platId]: 'version' | 'remplacer' }, pour une fiche complète reçue, différente de la
+ * recette actuelle et porteuse de versions.
+ * → { elements: [{ index, id, nom, statut, ancienNom?, modifieeA?, remettable?, ingredients, etapes, avertissements,
+ *       versions, choix? }],
  *   `index` : position de l'entrée dans `valides` (une entrée ignorée ou en erreur n'a pas d'élément).
  *     ecritures: [{ id, donnees, effacerModification? } | { id, mode: 'versions', variantes, attendus? }],
  *   `attendus` : styles attendus des profils de ces versions (stylesAttendusDesVersions), pour refaire la même fusion
@@ -861,7 +864,16 @@ function recetteSansVersions(plat) {
  *   nom un plat qui a déjà sa recette : rien n'est écrit ni clos, un avertissement le dit, le reste du lot
  *   s'enregistre ; `id` : celui du plat gardé, `nom` : celui de l'idée, `ingredients` et `etapes` : ceux de la fiche
  *   gardée ; une idée qui vise un plat ⏳ le complète normalement ; une recette collée depuis une fiche (`cible`) suit
- *   les règles habituelles).
+ *   les règles habituelles),
+ *   corbeille (l'entrée vise, selon les règles habituelles du plat visé, un plat de la corbeille : rien n'est écrit ni
+ *   clos, sans erreur, un avertissement dit de le remettre d'abord, le reste du lot s'enregistre ; `id` : celui du
+ *   plat de la corbeille ; `ingredients` et `etapes` : ceux de la recette reçue, ou de la fiche pour une entrée « versions
+ *   seules » ; `remettable` : vrai si le plat, remis, prendrait ce qui est reçu ; faux, et l'avertissement le dit, pour
+ *   une idée de Claude visant un plat qui a sa recette (« cette idée n'est pas reprise »), des versions pour un plat ⏳
+ *   ou une entrée sans recette ni version (« cette réponse n'apporte rien à ce plat »)).
+ *   Quand deux plats portent le même nom, le plat actif est visé plutôt que celui de la corbeille. Une recette collée
+ *   depuis une fiche (`cible`) sous le nom d'un plat de la corbeille garde le nom de la fiche (avertissement « le nom
+ *   de la fiche est gardé ») ; sous le nom d'un plat actif, c'est une erreur, comme avant.
  *   `versions` : [{ pour, style, nom, action: 'ajoutee' | 'remplacee', convient, libelle }] (versions reçues qui
  *   changent ; `style` : celui de la version reçue, ou null). Une version reçue est comparée à celle du même profil et
  *   du même style (déduit pour une version d'avant les styles), et jugée seule (evaluer › versions).
@@ -879,7 +891,13 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
   const prenom = (pour) => texte(connus.find((p) => p.id === pour)?.nom) || pour;
   const choixRetenus = estObjet(choix) ? choix : {};
   const parId = new Map(plats.map((p) => [p.id, p]));
-  const parNom = new Map(plats.map((p) => [slug(p.nom), p]));
+  // Même nom : le dernier plat actif, sinon le dernier plat de la corbeille.
+  const parNom = new Map();
+  for (const plat of plats) {
+    const cle = slug(plat.nom);
+    const deja = parNom.get(cle);
+    if (!deja || estDansCorbeille(deja) || !estDansCorbeille(plat)) parNom.set(cle, plat);
+  }
   const ouvertes = new Set(demandes.filter((d) => d.statut === 'ouverte').map((d) => d.id));
   const pris = new Set(plats.map((p) => p.id));
   const vises = new Map();
@@ -895,6 +913,27 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
   let indexCourant = 0; // position de l'entrée dans `valides` (une entrée ignorée n'a pas d'élément)
   const clore = (ids) => {
     for (const id of ids) if (!demandesAClore.includes(id)) demandesAClore.push(id);
+  };
+  /**
+   * Entrée qui vise le plat `jete`, dans la corbeille : un élément et son avertissement, ni écriture, ni demande close,
+   * ni erreur. `apport` : ce que l'entrée apporterait au plat une fois remis (« cette recette », « cette version »…) ;
+   * null s'il n'en prendrait rien (idée pour un plat qui a sa recette, versions pour un plat ⏳, entrée sans recette ni
+   * version) : l'avertissement le dit, et l'élément n'est pas `remettable` (l'aperçu ne propose pas « Remettre »).
+   */
+  const dansLaCorbeille = ({ index, id, nom, jete, ingredients, etapes, avertissementsPlat, apport, idee = false }) => {
+    let quoi = `remettez-le pour lui ajouter ${apport}.`;
+    if (!apport) quoi = idee ? 'cette idée n’est pas reprise.' : 'cette réponse n’apporte rien à ce plat.';
+    elements.push({
+      index,
+      id,
+      nom,
+      statut: 'corbeille',
+      remettable: Boolean(apport),
+      ingredients,
+      etapes,
+      avertissements: [...avertissementsPlat, `«\u00A0${jete.nom}\u00A0» est dans la corbeille\u00A0: ${quoi}`],
+      versions: [],
+    });
   };
 
   /**
@@ -1008,6 +1047,20 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
         });
         continue;
       }
+      if (estDansCorbeille(existant)) {
+        // Remis, un plat ⏳ ignorerait ses versions (voir plus bas) : rien à lui ajouter.
+        dansLaCorbeille({
+          index,
+          id: existant.id,
+          nom: existant.nom,
+          jete: existant,
+          ingredients: Array.isArray(existant.ingredients) ? existant.ingredients.length : 0,
+          etapes: Array.isArray(existant.etapes) ? existant.etapes.length : 0,
+          avertissementsPlat,
+          apport: aSaRecette(existant) ? (recues.length > 1 ? 'ces versions' : 'cette version') : null,
+        });
+        continue;
+      }
       if (statutDe(existant) === 'attente' || !(Array.isArray(existant.ingredients) && existant.ingredients.length)) {
         avertissements.push({
           message: `«\u00A0${existant.nom}\u00A0» n’a pas encore sa recette\u00A0: sa version est ignorée. Demandez la recette avec sa version.`,
@@ -1048,9 +1101,15 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     // ou fiche modifiée à la main, qui a pu être renommée), sinon le même nom (doublons repérés par le nom, §8),
     // sinon un nouveau plat (identifiant libre si un autre plat utilise déjà le sien).
     let vise;
+    let nomGarde = null; // nom de la fiche visée, gardé : un plat de la corbeille porte déjà le nom reçu
     if (viseCible) {
-      // La recette d'un autre plat déjà présent, collée sur cette fiche, en ferait un doublon.
-      if (memeNom && memeNom.id !== cible) {
+      // Un plat de la corbeille porte déjà ce nom (Claude a raccourci celui de la fiche) : la recette va bien à la
+      // fiche, qui garde son nom (jamais deux plats du même nom, ni erreur pour un plat qui n'apparaît plus).
+      if (memeNom && memeNom.id !== cible && estDansCorbeille(memeNom)) {
+        nomGarde = parId.get(cible).nom;
+        avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
+      } else if (memeNom && memeNom.id !== cible) {
+        // La recette d'un autre plat déjà présent, collée sur cette fiche, en ferait un doublon.
         erreurs.push({
           message: `Cette réponse est la recette de «\u00A0${memeNom.nom}\u00A0», déjà dans vos plats. Copiez la réponse pour «\u00A0${parId.get(cible).nom}\u00A0».`,
           pourClaude: `id ${cible} : recette de ${memeNom.id} reçue, recette de ${cible} attendue`,
@@ -1073,14 +1132,38 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       vise = donnees.id;
     }
 
+    // Nom retenu pour la fiche : celui reçu, sauf nom de la fiche gardé (plus haut).
+    const nomRetenu = nomGarde ?? donnees.nom;
+
+    // Plat de la corbeille : rien n'est écrit, sans erreur ; on le remet d'abord (les autres entrées s'enregistrent).
+    // Une idée de Claude pour un plat de la corbeille qui a déjà sa recette n'est simplement pas reprise.
+    const idee = !viseCible && recue && texte(donnees.source) === SOURCE_IDEE;
+    const jete = parId.get(vise);
+    if (estDansCorbeille(jete)) {
+      // Rien à lui ajouter, même remis : entrée sans recette (ni version : voir plus haut), ou idée pour un plat qui a
+      // déjà sa recette.
+      dansLaCorbeille({
+        index,
+        id: vise,
+        nom: nomRetenu,
+        jete,
+        ingredients: donnees.ingredients?.length ?? 0,
+        etapes: donnees.etapes?.length ?? 0,
+        avertissementsPlat,
+        apport: recue && !(idee && aSaRecette(jete)) ? 'cette recette' : null,
+        idee,
+      });
+      continue;
+    }
+
     // Idée de Claude (DEMANDE-IDEES) pour un plat qui a déjà sa recette : une idée ne remplace jamais une recette du
     // foyer. Rien n'est écrit, sans erreur : les autres idées du lot s'enregistrent.
-    const dejaLa = !viseCible && recue && texte(donnees.source) === SOURCE_IDEE ? parId.get(vise) : null;
+    const dejaLa = idee ? parId.get(vise) : null;
     if (dejaLa && aSaRecette(dejaLa)) {
       elements.push({
         index,
         id: vise,
-        nom: donnees.nom,
+        nom: nomRetenu,
         statut: 'deja',
         ingredients: dejaLa.ingredients.length,
         etapes: Array.isArray(dejaLa.etapes) ? dejaLa.etapes.length : 0,
@@ -1097,14 +1180,14 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       });
       continue;
     }
-    vises.set(vise, donnees.nom);
+    vises.set(vise, nomRetenu);
     pris.add(vise);
 
     const existant = parId.get(vise);
-    if (memeNom && memeNom.id !== vise) {
+    if (memeNom && memeNom.id !== vise && !nomGarde) {
       avertissementsPlat.push(`Un autre plat s’appelle déjà «\u00A0${memeNom.nom}\u00A0».`);
     }
-    const ecriture = { ...donnees, id: vise };
+    const ecriture = { ...donnees, id: vise, nom: nomRetenu };
     const rempli = existant && statutDe(existant) !== 'attente';
 
     // Plat rempli : la recette actuelle reste, sauf fiche complète différente (et, si elle porte des versions,
@@ -1122,7 +1205,7 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       const actuelle = recetteSansVersions(existant);
       if (actuelle && egales(actuelle, recetteSansVersions(ecriture))) {
         // Même recette (hors versions, nom et statut) : seules les versions reçues comptent ; le nom reste.
-        if (slug(donnees.nom) !== slug(existant.nom)) {
+        if (slug(nomRetenu) !== slug(existant.nom)) {
           avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
         }
         prendreVersions(existant, recues, avertissementsPlat, {}, ecriture);
@@ -1142,7 +1225,7 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
       const actuelle = recetteValidee(existant);
       if (actuelle && egales(actuelle, recetteValidee(ecriture))) {
         elements.push({
-          index, id: vise, nom: donnees.nom, statut: 'identique', ingredients: 0, etapes: 0, avertissements: avertissementsPlat, versions: [],
+          index, id: vise, nom: nomRetenu, statut: 'identique', ingredients: 0, etapes: 0, avertissements: avertissementsPlat, versions: [],
         });
         clore(demandesSatisfaites(vise, ecriture, ouvertes, { plat: { ...existant, ...ecriture }, profils: connus }));
         continue;
@@ -1165,9 +1248,9 @@ export function preparerImport(valides, { plats = [], demandes = [], cible = nul
     elements.push({
       index,
       id: vise,
-      nom: donnees.nom,
+      nom: nomRetenu,
       statut,
-      ...(existant && slug(existant.nom) !== slug(donnees.nom) ? { ancienNom: existant.nom } : {}),
+      ...(existant && slug(existant.nom) !== slug(nomRetenu) ? { ancienNom: existant.nom } : {}),
       ...(effacerModification ? { modifieeA: typeof secondes === 'number' && Number.isFinite(secondes) ? secondes : true } : {}),
       ingredients: donnees.ingredients?.length ?? 0,
       etapes: donnees.etapes?.length ?? 0,

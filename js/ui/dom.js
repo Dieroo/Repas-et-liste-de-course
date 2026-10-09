@@ -70,14 +70,77 @@ export function logo(classe = 'logo') {
   return svg;
 }
 
-let minuteurAnnonce = null;
+// Durée d'affichage d'un message, et d'un message avec un bouton (« Annuler ») : le temps de le toucher.
+const DUREE_ANNONCE_MS = 3500;
+const DUREE_ANNONCE_ACTION_MS = 8000;
+// Le bouton part après le fondu du message (transition de .annonce), pour que le bandeau ne change pas de taille.
+const DUREE_FONDU_MS = 250;
 
-/** Message bref en bas de l'écran (« Photo enregistrée. »), lu par les lecteurs d'écran. */
-export function annoncer(texte) {
+let minuteurAnnonce = null;
+let minuteurBouton = null;
+let numeroAnnonce = 0;
+
+/**
+ * Message bref en bas de l'écran (« Photo enregistrée. »), lu par les lecteurs d'écran.
+ * `action` : { libelle, faire } ajoute au message un bouton (« Annuler ») ; le message reste alors 8 s au lieu de
+ * 3,5 s, et tant que le bouton a le focus (clavier, lecteur d'écran). Le bouton disparaît avec le message ; un toucher
+ * cache le message puis appelle `faire()`, une seule fois. Sans action : le comportement d'avant, à l'identique.
+ */
+export function annoncer(texte, options = {}) {
   const zone = document.getElementById('annonce');
   if (!zone) return;
-  zone.textContent = texte;
-  zone.classList.add('visible');
+  const action = options?.action;
+  const avecAction = Boolean(action && typeof action.faire === 'function' && String(action.libelle ?? '').trim());
+  const numero = ++numeroAnnonce;
   clearTimeout(minuteurAnnonce);
-  minuteurAnnonce = setTimeout(() => zone.classList.remove('visible'), 3500);
+  clearTimeout(minuteurBouton);
+  zone.textContent = texte;
+  zone.classList.toggle('avec-action', avecAction);
+
+  const cacher = () => {
+    if (numero !== numeroAnnonce) return;
+    clearTimeout(minuteurAnnonce);
+    zone.classList.remove('visible');
+    const bouton = zone.querySelector('.annonce-action');
+    if (!bouton) return;
+    // Caché : plus touchable ni atteignable au clavier, puis retiré une fois le fondu fini.
+    bouton.inert = true;
+    minuteurBouton = setTimeout(() => {
+      if (numero !== numeroAnnonce) return;
+      bouton.remove();
+      zone.classList.remove('avec-action');
+    }, DUREE_FONDU_MS);
+  };
+  const programmer = (duree) => {
+    clearTimeout(minuteurAnnonce);
+    minuteurAnnonce = setTimeout(cacher, duree);
+  };
+
+  if (avecAction) {
+    let fait = false;
+    const bouton = el('button', {
+      type: 'button',
+      class: 'annonce-action',
+      onclick: () => {
+        if (fait || numero !== numeroAnnonce) return;
+        fait = true;
+        // Caché d'abord : si `faire()` annonce à son tour, son message reste.
+        cacher();
+        action.faire();
+      },
+      // Le message ne part pas sous le doigt ni sous le focus ; il repart pour 3,5 s quand le focus le quitte.
+      onfocus: () => {
+        if (numero === numeroAnnonce) clearTimeout(minuteurAnnonce);
+      },
+      onblur: () => {
+        if (numero === numeroAnnonce && bouton.isConnected && !bouton.inert) programmer(DUREE_ANNONCE_MS);
+      },
+    }, String(action.libelle));
+    // Le bandeau ne capte pas les touchers (.annonce : pointer-events: none) ; son bouton, si.
+    bouton.style.pointerEvents = 'auto';
+    zone.append(' ', bouton);
+  }
+
+  zone.classList.add('visible');
+  programmer(avecAction ? DUREE_ANNONCE_ACTION_MS : DUREE_ANNONCE_MS);
 }
