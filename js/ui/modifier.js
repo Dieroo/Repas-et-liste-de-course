@@ -8,6 +8,8 @@ import { pictogramme } from './pictos.js';
 import { lireBrouillon, ecrireBrouillon, effacerBrouillon } from './brouillon.js';
 import { slug } from '../coeur/slug.js';
 import { APPAREILS, LIBELLES_TYPE, NOM_MAX, quantiteLisible } from '../coeur/plats.js';
+import { marqueursEffectifs } from '../coeur/vocabulaire.js';
+import { marqueursSurveilles } from '../coeur/regles.js';
 import {
   UNITES_EDITION,
   LIBELLES_UNITE,
@@ -15,9 +17,13 @@ import {
   LIBELLES_FORME,
   LIBELLES_ROLE,
   NATURES,
-  REPERES,
+  CASES_REPERES,
+  MARQUEURS_PREPARATION,
+  casesPour,
+  appliquerCase,
+  reperesProposes,
+  appliquerNature,
   natureProposee,
-  reperesDe,
   PORTIONS_MAX,
   FRIGO_JOURS_MAX,
   natureDe,
@@ -54,6 +60,18 @@ const NOMS_CHAMPS = {
 
 // Ordre des erreurs à l'écran (de haut en bas) : « N points à corriger » mène à la première.
 const ORDRE_ERREURS = ['nom', 'portionsBase', 'ingredients', 'cuisson', 'frigoJours', 'verifiee', 'recette'];
+
+// Cases « Repères » (coeur/edition.js › CASES_REPERES) par identifiant, et marqueurs qu'elles posent.
+const CASES = new Map(CASES_REPERES.map((definition) => [definition.id, definition]));
+const MARQUEURS_POSES = new Set(CASES_REPERES.flatMap((definition) => definition.pose));
+// Deux cases qui retirent les mêmes marqueurs (« Crue ou rosée » d'une viande, « Cru » d'un poisson) : une seule montrée.
+const signatureRetrait = (definition) => [...definition.retire].sort().join('|');
+
+/** Vrai si la case est cochée pour ces marqueurs : l'un de ceux qu'elle retire est porté, implications comprises. */
+function cocheSur(definition, marqueurs) {
+  const effectifs = marqueursEffectifs({ marqueurs });
+  return definition.retire.some((marqueur) => effectifs.has(marqueur));
+}
 
 function majuscule(texte) {
   const [premiere = '', ...reste] = Array.from(String(texte ?? ''));
@@ -440,8 +458,9 @@ export function creer(ctx) {
     const feuille = ouvrirFeuille(nouveau ? 'Nouvel ingrédient' : majuscule(existant.produit), (fermer) => {
       // Choix faits dans cette feuille ; sans choix, ils suivent l'ingrédient, puis le produit connu.
       const touches = { nature: null, forme: null, role: null };
-      // Repères (« Bouillon de viande »…) : null tant que rien n'est retiré, ils suivent alors le produit saisi.
-      let reperesTouches = null;
+      // Cases « Repères » touchées dans cette feuille : caseId → coche, de la plus ancienne à la plus récente. Gardées
+      // si le nom est corrigé ; oubliées si une suggestion est choisie (le produit connu reprend tout).
+      const touchees = new Map();
       let rayonTouche = false;
       let uniteTouchee = false;
       let suggestionChoisie = false;
@@ -461,7 +480,6 @@ export function creer(ctx) {
         autofocus: nouveau,
         oninput: () => {
           suggestionChoisie = false;
-          reperesTouches = null;
           masquerErreur('produit');
           majPrecisions();
         },
@@ -510,14 +528,17 @@ export function creer(ctx) {
       const blocNouveau = el('div', { class: 'bloc-nouveau-produit', hidden: true },
         el('p', { class: 'aide-forte' }, 'Nouveau produit\u00A0: dites-nous ce que c’est.'));
       const emplacementNature = el('div', {});
-      // Repères lisibles, avec « Retirer » : sous la question de la nature pour un produit jamais vu, sinon dans
-      // « Plus de précisions ».
-      const listeReperes = el('ul', { class: 'liste-reperes' });
-      const blocReperes = el('div', { class: 'bloc-reperes', hidden: true },
-        el('p', { class: 'etiquette-champ', id: 'ingredient-reperes' }, 'Repéré comme'),
-        listeReperes);
-      const emplacementReperes = el('div', {});
-      let cleReperes = '';
+      // « Repères » (« Au lait cru », « Crue ou rosée »…), dans « Plus de précisions » : une case par ligne, seulement
+      // celles qu'une règle active surveille pour cette nature, ou dont le repère est déjà là (coeur/edition.js ›
+      // casesPour) ; rien sans case. Les deux membres, aussi en aperçu « Repas et courses ».
+      const surveilles = courant.surveilles ?? marqueursSurveilles(courant.profils);
+      const noeudsCases = new Map(); // caseId → { noeud, input } : gardés d'un dessin à l'autre (focus conservé)
+      const listeCases = el('div', { class: 'cases-reperes' });
+      const groupeReperes = el('fieldset', { class: 'groupe-choix groupe-reperes', hidden: true },
+        el('legend', { class: 'etiquette-champ' }, 'Repères'),
+        listeCases);
+      let ordreCases = '';
+      let ouvertPour = null; // produit pour lequel « Plus de précisions » s'est ouvert sur un repère proposé
 
       const radiosForme = Object.entries(LIBELLES_FORME).map(([valeur, libelle]) => choixRadio('ingredient-forme', valeur, el('span', {}, libelle), {
         surChoix: () => { touches.forme = valeur; },
@@ -537,7 +558,7 @@ export function creer(ctx) {
         el('summary', {}, 'Plus de précisions'),
         el('div', { class: 'depliable-contenu' },
           emplacementNature,
-          emplacementReperes,
+          groupeReperes,
           groupeForme,
           groupeRole,
           el('label', { class: 'etiquette-champ', for: 'ingredient-rayon' }, 'Rayon du magasin'),
@@ -553,11 +574,16 @@ export function creer(ctx) {
         champ?.removeAttribute('aria-describedby');
       }
 
-      /** Ce que l'on sait du produit saisi : l'ingrédient lui-même (même nom), un produit connu, ou rien. */
+      /**
+       * Ce que l'on sait du produit saisi : l'ingrédient lui-même (même nom, `meme`), un produit connu, ou rien.
+       * → { etat: 'vide' | 'connu' | 'inconnu', ref, meme? }
+       */
       function reference() {
         const cle = slug(champProduit.value);
         if (!cle) return { etat: 'vide', ref: null };
-        if (existant && slug(existant.produit) === cle) return { etat: 'connu', ref: { ...existant, nature: natureDe(existant) } };
+        if (existant && slug(existant.produit) === cle) {
+          return { etat: 'connu', ref: { ...existant, nature: natureDe(existant) }, meme: true };
+        }
         const connu = produitConnu(catalogue, champProduit.value);
         return connu ? { etat: 'connu', ref: connu } : { etat: 'inconnu', ref: null };
       }
@@ -576,7 +602,7 @@ export function creer(ctx) {
         uniteTouchee = false;
         if (typeof element.qte === 'number' && !champQte.value.trim()) champQte.value = qteSaisie(element.qte);
         Object.assign(touches, { nature: null, forme: null, role: null });
-        reperesTouches = null;
+        touchees.clear();
         rayonTouche = false;
         suggestionChoisie = true;
         masquerErreur('produit');
@@ -595,43 +621,99 @@ export function creer(ctx) {
         listeSuggestions.hidden = !proposees.length;
       }
 
-      /** Nature et repère que le nom d'un produit jamais vu laisse attendre (« bouillon de volaille »), ou null. */
+      /** Nature et repères que le nom d'un produit jamais vu laisse attendre (« jambon cru »), ou null. */
       function proposition(etat) {
-        return etat === 'inconnu' ? natureProposee(champProduit.value, catalogue) : null;
+        return etat === 'inconnu' ? natureProposee(champProduit.value, catalogue, { surveilles }) : null;
       }
 
-      /** Repères affichés : ceux gardés après un « Retirer », sinon ceux du produit, sinon celui que son nom annonce. */
-      function reperesAffiches(etat, ref) {
-        if (reperesTouches) return reperesTouches;
-        if (ref) return reperesDe(ref);
-        const repere = proposition(etat)?.repere;
-        return repere ? [repere] : [];
+      /** Nature affichée : celle choisie ici, sinon celle de l'ingrédient ou du produit connu, sinon celle proposée. */
+      function natureAffichee(etat, ref) {
+        return touches.nature ?? ref?.nature ?? proposition(etat)?.nature ?? null;
       }
 
-      /** Une ligne par libellé (« Gélatine animale » couvre les deux marqueurs de gélatine), avec « Retirer ». */
-      function dessinerReperes(reperes) {
-        const libelles = new Set(reperes.map((marqueur) => REPERES[marqueur]).filter(Boolean));
-        const cle = [...libelles].join('|');
-        if (cle !== cleReperes) {
-          cleReperes = cle;
-          listeReperes.replaceChildren(...[...libelles].map((libelle) => el('li', { class: 'ligne-repere' },
-            el('span', {}, libelle),
-            el('button', {
-              class: 'bouton bouton-texte',
-              type: 'button',
-              'aria-label': `Retirer «\u00A0${libelle}\u00A0»`,
-              onclick: () => {
-                // Repères affichés au moment du toucher : le même libellé peut couvrir un autre marqueur
-                // qu'au dessin (« gélatine » puis « gélatine végétale »), la liste n'étant pas redessinée.
-                const { etat, ref } = reference();
-                reperesTouches = reperesAffiches(etat, ref).filter((m) => REPERES[m] !== libelle);
-                majPrecisions();
-                annoncer(`«\u00A0${libelle}\u00A0» retiré.`);
-                (listeReperes.querySelector('button') ?? champProduit).focus();
-              },
-            }, 'Retirer'))));
+      /**
+       * Cases « Repères » du produit saisi, pour la nature affichée. Marqueurs de départ : l'ingrédient même, ou le
+       * produit connu (sans ses repères de préparation), ou rien. S'y ajoutent, cochés d'avance, les repères que son
+       * nom annonce (coeur/edition.js › reperesProposes) : pour un produit jamais vu, et pour un produit connu ceux de
+       * préparation seulement (« jambon cru » → cru) ; jamais sur l'ingrédient même, qui montre ce qu'il porte. Puis
+       * les cases touchées ici. Une case touchée reste montrée (elle ne disparaît pas sous le doigt).
+       * `changements` : cases dont l'état diffère du départ ou de la proposition, seules transmises à ingredientSaisi.
+       * → { cases: [{ id, libelle, coche }], changements: [{ caseId, coche }], annonce }
+       */
+      function etatReperes() {
+        const { etat, ref, meme } = reference();
+        const nature = natureAffichee(etat, ref);
+        // Produit connu (pas l'ingrédient même) : ses repères de préparation ne suivent jamais, comme dans
+        // coeur/edition.js › ingredientSaisi ; sinon une case cochée ici ne serait pas enregistrée.
+        const portes = Array.isArray(ref?.marqueurs) ? ref.marqueurs : [];
+        const source = { marqueurs: etat === 'connu' && !meme ? portes.filter((m) => !MARQUEURS_PREPARATION.includes(m)) : portes };
+        const depart = (Object.hasOwn(NATURES, nature ?? '') ? appliquerNature(source, nature) : source).marqueurs ?? [];
+        let annonces = [];
+        if (etat === 'inconnu' || (etat === 'connu' && !meme)) {
+          annonces = (reperesProposes(champProduit.value, { surveilles }) ?? [])
+            .filter((marqueur) => MARQUEURS_POSES.has(marqueur)
+              && (etat === 'inconnu' || MARQUEURS_PREPARATION.includes(marqueur)));
         }
-        blocReperes.hidden = !libelles.size;
+        const proposes = [...new Set([...depart, ...annonces])];
+        let affiches = proposes;
+        for (const [caseId, coche] of touchees) affiches = appliquerCase(affiches, caseId, coche);
+
+        const montrees = new Set((casesPour({ marqueurs: affiches }, { surveilles }) ?? []).map((c) => c?.id));
+        for (const caseId of touchees.keys()) montrees.add(caseId);
+        // Cases sœurs (mêmes marqueurs retirés) aussi candidates : le choix ci-dessous garde la mieux placée.
+        const signatures = new Set(CASES_REPERES.filter((d) => montrees.has(d.id)).map(signatureRetrait));
+        let definitions = CASES_REPERES.filter((d) => montrees.has(d.id) || signatures.has(signatureRetrait(d)));
+        // Même marqueur sous deux natures (« cru ») : une seule case, celle de la nature affichée, sinon celle de la
+        // nature d'origine du produit, sinon la première ; une case touchée reste.
+        const natureCases = natureDe({ marqueurs: affiches });
+        const natureOrigine = natureDe(source);
+        const rang = (d) => (d.natures.includes(natureCases) ? 0 : d.natures.includes(natureOrigine) ? 1 : 2);
+        const gardee = new Map();
+        for (const d of definitions) {
+          const cle = signatureRetrait(d);
+          if (!gardee.has(cle) || rang(d) < rang(gardee.get(cle))) gardee.set(cle, d);
+        }
+        definitions = definitions.filter((d) => gardee.get(signatureRetrait(d)) === d || touchees.has(d.id));
+
+        const cases = definitions.map((d) => ({ id: d.id, libelle: d.libelle, coche: cocheSur(d, affiches) }));
+        const changements = definitions
+          .filter((d) => cocheSur(d, affiches) !== cocheSur(d, depart) || cocheSur(d, affiches) !== cocheSur(d, proposes))
+          .map((d) => ({ caseId: d.id, coche: cocheSur(d, affiches) }));
+        const annonce = definitions.some((d) => cocheSur(d, proposes) && !cocheSur(d, depart));
+        return { cases, changements, annonce };
+      }
+
+      /** Une case par ligne, dans l'ordre de CASES_REPERES ; nœuds gardés d'un dessin à l'autre. */
+      function caseRepere(caseId) {
+        if (!noeudsCases.has(caseId)) {
+          const input = el('input', {
+            type: 'checkbox',
+            onchange: () => {
+              // Le dernier toucher l'emporte : la case passe en fin d'ordre.
+              touchees.delete(caseId);
+              touchees.set(caseId, input.checked);
+              majPrecisions();
+            },
+          });
+          noeudsCases.set(caseId, {
+            input,
+            noeud: el('label', { class: 'case-repere' }, input, el('span', {}, CASES.get(caseId)?.libelle ?? '')),
+          });
+        }
+        return noeudsCases.get(caseId);
+      }
+
+      function dessinerCases(cases) {
+        const ordre = cases.map(({ id: caseId }) => caseId).join('|');
+        if (ordre !== ordreCases) {
+          ordreCases = ordre;
+          // Une case retirée puis remise dans la liste perdrait le focus : il lui est rendu.
+          const focus = listeCases.contains(document.activeElement) ? document.activeElement : null;
+          listeCases.replaceChildren(...cases.map(({ id: caseId }) => caseRepere(caseId).noeud));
+          if (focus?.isConnected && document.activeElement !== focus) focus.focus({ preventScroll: true });
+        }
+        for (const { id: caseId, coche } of cases) caseRepere(caseId).input.checked = coche;
+        groupeReperes.hidden = !cases.length;
       }
 
       /** Met à jour suggestions, nature, coupe, rôle et rayon affichés selon le produit saisi et les choix faits. */
@@ -646,7 +728,7 @@ export function creer(ctx) {
         if (nouveau && !uniteTouchee) choixUnite.value = UNITES_EDITION.includes(ref?.unite) ? ref.unite : 'g';
 
         // Produit jamais vu dont le nom parle de viande, de bouillon de viande… : sa nature arrive présélectionnée.
-        const nature = touches.nature ?? ref?.nature ?? proposition(etat)?.nature ?? null;
+        const nature = natureAffichee(etat, ref);
         for (const radio of radiosNature) radio.input.checked = radio.input.value === nature;
 
         // Produit jamais vu : la question de sa nature est posée en évidence (une fois pour toutes).
@@ -659,9 +741,16 @@ export function creer(ctx) {
           emplacementNature.append(groupeNature);
         }
         blocNouveau.hidden = !demander;
-        dessinerReperes(reperesAffiches(etat, ref));
-        const parentReperes = demander ? blocNouveau : emplacementReperes;
-        if (blocReperes.parentNode !== parentReperes) parentReperes.append(blocReperes);
+
+        // Repères : un repère que le nom annonce (« Fruits à coque entiers » pour « noix ») arrive coché ; « Plus de
+        // précisions » s'ouvre alors une fois pour ce produit, pour que la case se voie et reste modifiable.
+        const reperes = etatReperes();
+        dessinerCases(reperes.cases);
+        const cleProduit = slug(champProduit.value);
+        if (reperes.annonce && ouvertPour !== cleProduit) {
+          ouvertPour = cleProduit;
+          precisions.open = true;
+        }
 
         groupeForme.hidden = nature !== 'viande';
         groupeRole.hidden = nature !== 'legume';
@@ -696,6 +785,8 @@ export function creer(ctx) {
 
       function valider(evenement) {
         evenement.preventDefault();
+        // Seules les cases « Repères » changées sont transmises : un `cafe` ou un `gelatine_porc` non touché reste tel quel.
+        const { changements } = etatReperes();
         // Rayon affiché différent de celui de la fiche (absent ou inconnu) : « Valider » enregistre celui affiché.
         const inchange = !nouveau
           && champProduit.value === existant.produit
@@ -703,7 +794,7 @@ export function creer(ctx) {
           && choixUnite.value === existant.unite
           && choixRayon.value === existant.rayon
           && !rayonTouche && touches.nature === null && touches.forme === null && touches.role === null
-          && reperesTouches === null;
+          && !changements.length;
         if (inchange) {
           fermer();
           return;
@@ -716,8 +807,8 @@ export function creer(ctx) {
           nature: touches.nature ?? proposition(reference().etat)?.nature ?? '',
           forme: touches.forme ?? '',
           role: touches.role ?? '',
-          ...(reperesTouches ? { reperes: reperesTouches } : {}),
-        }, { catalogue, ingredients: saisie.ingredients, index });
+          reperes: changements,
+        }, { catalogue, ingredients: saisie.ingredients, index, surveilles });
         if (resultat.erreurs) {
           montrerErreurs(resultat.erreurs);
           return;

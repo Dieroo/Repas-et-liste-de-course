@@ -320,20 +320,50 @@ export function platsSansVersion(plats, profil, { demandes = [], envoyes = [], p
 // ——— Repères peut-être oubliés ———
 
 /**
- * Mots qui annoncent un repère, comparés en slug (mot entier, pluriel en s ou x accepté), dans l'ordre de lecture :
- * le premier qui convient l'emporte (« bouillon de bœuf » attend `bouillon_viande`, pas `viande`). Table enrichie en
- * T2c. `apres` : un de ces mots doit suivre (« fumet de poisson » n'est jamais douteux).
+ * Mots qui annoncent un repère, comparés en slug (mot entier, pluriel en s ou x accepté sur le dernier mot), lus dans
+ * l'ordre :
+ * - `groupe: 'nature'` (T2a) : ce que l'ingrédient est ; dans ce groupe, la première ligne qui convient l'emporte
+ *   (« bouillon de bœuf » attend `bouillon_viande`, pas `viande` ; « graisse de canard », `graisse_animale`) ;
+ * - les repères de précaution (T2c-2) se lisent chacun à part : « jambon cru » attend `viande` et `cru` ;
+ * - `apres` : un de ces mots doit suivre (« fumet de poisson » n'est jamais douteux) ;
+ * - `sauf` : des mots qui annulent la ligne, où qu'ils soient dans le nom (« noix de coco », « sauce soja »).
+ * Seulement des mots sans ambiguïté : avant T2d, un soupçon ne peut pas être déclaré vérifié. Aucun mot pour le lait cru
+ * (« reblochon au lait cru » d'une tartiflette ne porte pas le repère) ni pour l'alcool non cuit (un vin mijoté n'est
+ * pas `alcool_cru`) : T2d s'en charge. La sauce soja n'est jamais `soja`.
  */
 export const MOTS_DOUTEUX = [
-  { attendu: 'bouillon_viande', mots: ['bouillon', 'fond', 'fumet'], apres: ['boeuf', 'volaille', 'poulet', 'veau', 'viande'] },
-  { attendu: 'graisse_animale', mots: ['saindoux', 'suif', 'graisse de canard', 'graisse d oie'] },
-  { attendu: 'gelatine_animale', mots: ['gelatine'] },
   {
-    attendu: 'viande',
-    mots: ['lardon', 'jambon', 'poulet', 'boeuf', 'porc', 'veau', 'dinde', 'canard', 'agneau', 'saucisse', 'chorizo',
-      'bacon', 'merguez', 'escargot', 'grenouille'],
+    attendu: 'bouillon_viande', groupe: 'nature', mots: ['bouillon', 'fond', 'fumet'],
+    apres: ['boeuf', 'volaille', 'poulet', 'veau', 'viande'],
   },
+  { attendu: 'graisse_animale', groupe: 'nature', mots: ['saindoux', 'suif', 'graisse de canard', 'graisse d oie'] },
+  { attendu: 'gelatine_animale', groupe: 'nature', mots: ['gelatine'], sauf: ['vegetal', 'vegetale'] },
+  {
+    attendu: 'viande', groupe: 'nature',
+    mots: ['lardon', 'jambon', 'poulet', 'boeuf', 'porc', 'veau', 'dinde', 'canard', 'agneau', 'saucisse', 'chorizo',
+      'bacon', 'merguez', 'escargot', 'grenouille', 'saucisson', 'coppa', 'bresaola'],
+  },
+  {
+    attendu: 'cru',
+    mots: ['tartare', 'carpaccio', 'jambon cru', 'jambon de bayonne', 'jambon de parme', 'saucisson sec', 'coppa',
+      'bresaola', 'huitre', 'sushi', 'sashimi', 'ceviche', 'gravlax', 'tataki'],
+    sauf: ['sauce', 'fromage', 'fines herbes', 'riz', 'vinaigre'],
+  },
+  {
+    attendu: 'fruit_coque',
+    mots: ['noix', 'noisette', 'amande', 'cacahuete', 'pistache', 'cajou', 'pignon', 'pecan', 'macadamia'],
+    sauf: ['poudre', 'puree', 'pate', 'beurre', 'lait', 'huile', 'coco', 'muscade', 'saint jacques', 'petoncle', 'veau',
+      'jambon', 'agneau', 'pomme'],
+  },
+  { attendu: 'cafeine', mots: ['cafe', 'expresso', 'espresso', 'the', 'matcha', 'cola'] },
+  { attendu: 'miel', mots: ['miel'] },
+  { attendu: 'poisson_predateur', mots: ['espadon', 'requin', 'marlin'] },
+  // « Pousses » ou « germes de soja » : des haricots mungo.
+  { attendu: 'soja', mots: ['tofu', 'tempeh', 'soja', 'edamame', 'miso'], sauf: ['sauce', 'pousse', 'germe'] },
 ];
+
+// Ce qu'un repère `cru` doit accompagner pour avoir un effet (marqueurs effectifs).
+const CRUS_POSSIBLES = ['viande', 'poisson', 'fruits_de_mer'];
 
 /** Position du mot (ou de l'expression) dans la suite de mots, pluriel accepté ; -1 s'il n'y est pas. */
 function positionDe(mots, expression) {
@@ -349,33 +379,78 @@ function positionDe(mots, expression) {
   return -1;
 }
 
-/** Repère qu'annonce le nom d'un produit (« bouillon de volaille » → 'bouillon_viande'), ou null. */
-export function repereAttendu(produit) {
+/** Vrai si la ligne de MOTS_DOUTEUX convient à cette suite de mots. */
+function convient(entree, mots) {
+  if (textes(entree.sauf).some((sauf) => positionDe(mots, sauf) !== -1)) return false;
+  return entree.mots.some((mot) => {
+    const position = positionDe(mots, mot);
+    if (position === -1) return false;
+    if (!entree.apres) return true;
+    const suite = mots.slice(position + 1);
+    return entree.apres.some((apres) => positionDe(suite, apres) !== -1);
+  });
+}
+
+/**
+ * Repères qu'annonce le nom d'un produit, dans l'ordre de MOTS_DOUTEUX, sans doublon : « bouillon de volaille » →
+ * ['bouillon_viande'] ; « jambon cru » → ['viande', 'cru'] ; « noix de coco » → []. Peut contenir `viande` (une nature,
+ * pas une case « Repères »).
+ */
+export function reperesAttendus(produit) {
   const mots = slug(produit).split('-').filter(Boolean);
-  if (!mots.length) return null;
+  const attendus = [];
+  if (!mots.length) return attendus;
+  const groupes = new Set();
   for (const entree of MOTS_DOUTEUX) {
-    for (const mot of entree.mots) {
-      const position = positionDe(mots, mot);
-      if (position === -1) continue;
-      if (!entree.apres) return entree.attendu;
-      const suite = mots.slice(position + 1);
-      if (entree.apres.some((apres) => positionDe(suite, apres) !== -1)) return entree.attendu;
-    }
+    if ((entree.groupe && groupes.has(entree.groupe)) || attendus.includes(entree.attendu)) continue;
+    if (!convient(entree, mots)) continue;
+    attendus.push(entree.attendu);
+    if (entree.groupe) groupes.add(entree.groupe);
   }
+  return attendus;
+}
+
+/** `surveilles` lisible : un Set (Set ou liste reçus), ou null quand il est absent (alors tout compte). */
+function ensembleSurveille(surveilles) {
+  if (surveilles instanceof Set) return surveilles;
+  if (Array.isArray(surveilles)) return new Set(surveilles);
   return null;
 }
 
 /**
- * Ingrédients dont le nom annonce un repère qu'ils ne portent pas (« bouillon de volaille » sans `bouillon_viande`).
- * Ne change jamais le niveau : sert à la ligne « à vérifier » de la fiche.
- * → [{ produit, attendu }]
+ * Vrai si une règle surveille ce marqueur : lui-même, ou un marqueur qui l'implique (`gelatine_porc` →
+ * `gelatine_animale`, `cafe` → `cafeine`, un sous-type → `viande`). `surveilles` null : tout compte.
  */
-export function marqueursDouteux(plat) {
+function suivi(marqueur, surveilles) {
+  if (!surveilles || surveilles.has(marqueur)) return true;
+  for (const surveille of surveilles) if (marqueursEffectifs({ marqueurs: [surveille] }).has(marqueur)) return true;
+  return false;
+}
+
+/**
+ * Ingrédients dont le nom annonce un repère qu'ils ne portent pas (« bouillon de volaille » sans `bouillon_viande`,
+ * « jambon cru » sans `cru`), seulement pour les repères qu'une règle active surveille (`surveilles` : Set ou liste,
+ * regles.js › marqueursSurveilles ; absent, tous). `cru` n'est soupçonné que sur une viande, un poisson ou des fruits
+ * de mer (ailleurs, le repère serait sans effet) ; une viande annoncée compte aussi quand `cru` est surveillé et annoncé
+ * (« jambon cru » non marqué viande : la précaution ne pourrait pas agir). Ne change jamais le niveau : sert au bandeau
+ * « à vérifier » de la fiche. → [{ produit, attendu }], un élément par repère manquant, dans l'ordre des ingrédients.
+ */
+export function marqueursDouteux(plat, { surveilles = null } = {}) {
+  const suivis = ensembleSurveille(surveilles);
   const douteux = [];
   for (const ingredient of ingredientsDe(plat)) {
     if (typeof ingredient.produit !== 'string') continue;
-    const attendu = repereAttendu(ingredient.produit);
-    if (attendu && !marqueursEffectifs(ingredient).has(attendu)) douteux.push({ produit: reduire(ingredient.produit), attendu });
+    const attendus = reperesAttendus(ingredient.produit);
+    if (!attendus.length) continue;
+    const effectifs = marqueursEffectifs(ingredient);
+    const produit = reduire(ingredient.produit);
+    for (const attendu of attendus) {
+      if (effectifs.has(attendu)) continue;
+      if (attendu === 'cru' && !CRUS_POSSIBLES.some((m) => effectifs.has(m))) continue;
+      const surveille = suivi(attendu, suivis)
+        || (attendu === 'viande' && attendus.includes('cru') && suivi('cru', suivis));
+      if (surveille) douteux.push({ produit, attendu });
+    }
   }
   return douteux;
 }

@@ -9,12 +9,14 @@ import * as vocabulaire from '../js/coeur/vocabulaire.js';
 import * as paquet from '../js/coeur/paquet.js';
 import {
   TYPES_A_ADAPTER, marqueursEffectifs, declenche, evaluer, profilsContraints, aAdapterPour, bilanCompatibilite,
-  platsSansVersion, marqueursDouteux, MOTS_DOUTEUX, repereAttendu,
+  platsSansVersion, marqueursDouteux, MOTS_DOUTEUX, reperesAttendus,
 } from '../js/coeur/compatibilite.js';
 import { REGIMES, PRECISIONS, lireRegime, ecrireRegime, validerRegles, decrireRegles } from '../js/coeur/regles.js';
 import { fileDecouverte, completerFile, nombreANoter, suivant } from '../js/coeur/notes.js';
 import { FILTRES, filtresPour, filtreRetenu, filtrerPlats } from '../js/coeur/plats.js';
-import { ingredientSaisi, natureProposee, reperesDe, REPERES, preparerModification, normaliserPourEdition } from '../js/coeur/edition.js';
+import {
+  ingredientSaisi, natureProposee, casesPour, CASES_REPERES, preparerModification, normaliserPourEdition,
+} from '../js/coeur/edition.js';
 import {
   creerSauvegarde, lireSauvegarde, validerSauvegarde, preparerRestauration, appliquerConditions,
 } from '../js/coeur/sauvegarde.js';
@@ -386,8 +388,11 @@ test('marqueursDouteux : mots de viande, bouillons, gélatine, graisses ; fumet 
   ]);
   // Ne change jamais le niveau.
   assert.equal(niveau(plat('x', [ing('bouillon de volaille')])), 'ok');
-  assert.equal(repereAttendu('porcini'), null);
-  assert.equal(repereAttendu(''), null);
+  assert.deepEqual(reperesAttendus('porcini'), []);
+  assert.deepEqual(reperesAttendus(''), []);
+  // T2c-2 : plusieurs repères à la fois, mais un seul de la nature (« bouillon de bœuf » n'attend pas aussi `viande`).
+  assert.deepEqual(reperesAttendus('bouillon de bœuf'), ['bouillon_viande']);
+  assert.deepEqual(reperesAttendus('graisse de canard'), ['graisse_animale']);
   assert.ok(MOTS_DOUTEUX.every((e) => vocabulaire.VOCABULAIRES.marqueurs.includes(e.attendu)));
   assert.deepEqual(TYPES_A_ADAPTER, ['plat', 'accompagnement', 'dessert']);
 });
@@ -576,27 +581,33 @@ test('filtrerPlats : « Pour <Prénom> » (ok + adaptable, ⏳ exclus), « Versi
 // ——— « Modifier » : présélection de la nature ———
 
 test('natureProposee : Viande pour un mot de viande, Autre + repère pour bouillon, gélatine, graisse', () => {
-  assert.deepEqual(natureProposee('Escargots de Bourgogne'), { nature: 'viande' });
-  assert.deepEqual(natureProposee('bouillon de volaille'), { nature: 'autre', repere: 'bouillon_viande' });
-  assert.deepEqual(natureProposee('fond de veau'), { nature: 'autre', repere: 'bouillon_viande' });
-  assert.deepEqual(natureProposee('gélatine'), { nature: 'autre', repere: 'gelatine_animale' });
-  assert.deepEqual(natureProposee('saindoux'), { nature: 'autre', repere: 'graisse_animale' });
-  assert.deepEqual(natureProposee('graisse de canard'), { nature: 'autre', repere: 'graisse_animale' });
+  assert.deepEqual(natureProposee('Escargots de Bourgogne'), { nature: 'viande', reperes: [] });
+  assert.deepEqual(natureProposee('bouillon de volaille'), { nature: 'autre', reperes: ['bouillon_viande'] });
+  assert.deepEqual(natureProposee('fond de veau'), { nature: 'autre', reperes: ['bouillon_viande'] });
+  assert.deepEqual(natureProposee('gélatine'), { nature: 'autre', reperes: ['gelatine_animale'] });
+  assert.deepEqual(natureProposee('saindoux'), { nature: 'autre', reperes: ['graisse_animale'] });
+  assert.deepEqual(natureProposee('graisse de canard'), { nature: 'autre', reperes: ['graisse_animale'] });
+  // Avec les marqueurs surveillés du régime sans viande (T2c-2) : mêmes propositions.
+  const surveilles = new Set(SANS_VIANDE[0].marqueurs);
+  assert.deepEqual(natureProposee('bouillon de volaille', [], { surveilles }), { nature: 'autre', reperes: ['bouillon_viande'] });
   assert.equal(natureProposee('fumet de poisson'), null);
   assert.equal(natureProposee('courgette'), null);
   // Produit déjà connu : sa nature vient du catalogue, rien n'est présélectionné.
   assert.equal(natureProposee('bouillon de volaille', [{ produit: 'Bouillon de volaille', marqueurs: [] }]), null);
-  assert.deepEqual(REPERES.bouillon_viande, 'Bouillon de viande');
-  assert.deepEqual(REPERES.gelatine_animale, 'Gélatine animale');
-  assert.deepEqual(REPERES.graisse_animale, 'Graisse animale');
+  // Les repères de T2a sont devenus des cases (T2c-2).
+  const libelle = (id) => CASES_REPERES.find((c) => c.id === id)?.libelle;
+  assert.equal(libelle('bouillon_viande'), 'Bouillon de viande');
+  assert.equal(libelle('gelatine'), 'Gélatine animale');
+  assert.equal(libelle('graisse_animale'), 'Graisse animale');
 });
 
-test('ingredientSaisi : le repère d’un produit jamais vu est posé ; « Retirer » l’enlève ; toujours modifiable', () => {
+test('ingredientSaisi : le repère d’un produit jamais vu est posé ; décocher sa case l’enlève ; toujours modifiable', () => {
   const champs = { produit: 'Bouillon de volaille', qte: '50', unite: 'cl', nature: 'autre' };
   const { ingredient } = ingredientSaisi(champs);
   assert.deepEqual(ingredient.marqueurs, ['bouillon_viande']);
-  assert.deepEqual(reperesDe(ingredient), ['bouillon_viande']);
-  assert.deepEqual(ingredientSaisi({ ...champs, reperes: [] }).ingredient.marqueurs, []);
+  assert.deepEqual(casesPour(ingredient).filter((c) => c.coche).map((c) => c.id), ['bouillon_viande']);
+  const decoche = [{ caseId: 'bouillon_viande', coche: false }];
+  assert.deepEqual(ingredientSaisi({ ...champs, reperes: decoche }).ingredient.marqueurs, []);
   assert.deepEqual(ingredientSaisi({ ...champs, produit: 'saindoux', unite: 'g' }).ingredient.marqueurs, ['graisse_animale']);
   assert.deepEqual(ingredientSaisi({ ...champs, produit: 'gélatine', unite: 'g' }).ingredient.marqueurs, ['gelatine_animale']);
   // Viande présélectionnée puis choisie : forme « en morceaux », sans repère.
@@ -606,10 +617,11 @@ test('ingredientSaisi : le repère d’un produit jamais vu est posé ; « Retir
   // Produit connu : ses marqueurs, sans repère ajouté.
   const catalogue = [{ produit: 'bouillon de volaille', unite: 'cl', rayon: 'epicerie_salee', marqueurs: [] }];
   assert.deepEqual(ingredientSaisi({ produit: 'bouillon de volaille', qte: '50', unite: 'cl' }, { catalogue }).ingredient.marqueurs, []);
-  // Ingrédient modifié qui porte un repère : gardé, sauf « Retirer ».
+  // Ingrédient modifié qui porte un repère : gardé (aucune case touchée), sauf sa case décochée.
   const ingredients = [{ ...FOND_VOLAILLE, qte: 1 }];
   assert.deepEqual(ingredientSaisi({ produit: 'fond de volaille', qte: '2', unite: 'pc' }, { ingredients, index: 0 }).ingredient.marqueurs, ['bouillon_viande']);
-  assert.deepEqual(ingredientSaisi({ produit: 'fond de volaille', qte: '2', unite: 'pc', reperes: [] }, { ingredients, index: 0 }).ingredient.marqueurs, []);
+  assert.deepEqual(ingredientSaisi({ produit: 'fond de volaille', qte: '2', unite: 'pc', reperes: [] }, { ingredients, index: 0 }).ingredient.marqueurs, ['bouillon_viande']);
+  assert.deepEqual(ingredientSaisi({ produit: 'fond de volaille', qte: '2', unite: 'pc', reperes: decoche }, { ingredients, index: 0 }).ingredient.marqueurs, []);
 });
 
 test('Modifier : un bouillon de volaille ajouté rend le plat exclu pour un profil sans viande', () => {

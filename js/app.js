@@ -16,6 +16,7 @@ import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
 import { creerSauvegarde, dateDeSauvegarde } from './coeur/sauvegarde.js';
 import { evaluer, bilanCompatibilite } from './coeur/compatibilite.js';
 import { precautionsAge, profilsAvecAge, bilanPrecautions } from './coeur/age.js';
+import { marqueursSurveilles } from './coeur/regles.js';
 import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions } from './coeur/import-local.js';
 import { VERSION_INSTRUCTIONS } from './coeur/claude.js';
 import {
@@ -323,6 +324,17 @@ function profilsAvecAgeCourants() {
   return memoProfilsAvecAge.resultat;
 }
 
+// Marqueurs que surveille une règle active d'un profil (coeur/regles.js › marqueursSurveilles) : cases « Repères » de
+// « Modifier » et bandeau « à vérifier » de la fiche (T2c-2). Gardés tant que `etat.profils` est le même tableau.
+let memoSurveilles = { profils: null, resultat: new Set() };
+
+function surveillesCourants() {
+  if (memoSurveilles.profils !== etat.profils) {
+    memoSurveilles = { profils: etat.profils, resultat: marqueursSurveilles(etat.profils) };
+  }
+  return memoSurveilles.resultat;
+}
+
 /** Date du téléphone, au fuseau du téléphone : 'AAAA-MM-JJ' (âge de l'enfant, coeur/age.js). */
 function dateDuJour(maintenant = new Date()) {
   const deux = (n) => String(n).padStart(2, '0');
@@ -372,6 +384,8 @@ function instructionsAJour() {
  * `compat`) ; `profilsAvecAge`, profils qui ont une précaution d'âge active (ordre des profils) ;
  * `empreintePrecautions(profil)`, empreinte de ses `regles` et de sa `naissance`, à relever à l'ouverture de « 🧸 Ce que
  * <Enfant> mange » et à passer à `actions.enregistrerPrecautions`.
+ * Repères à la main (T2c-2) : `surveilles`, marqueurs que surveille une règle active d'un profil (Set, même objet tant
+ * que les profils ne changent pas).
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -399,6 +413,7 @@ function contexteCourant() {
     precautions,
     profilsAvecAge: profilsAvecAgeCourants(),
     empreintePrecautions: donnees.empreintePrecautions,
+    surveilles: surveillesCourants(),
     actions,
   };
 }
