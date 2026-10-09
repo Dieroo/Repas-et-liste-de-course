@@ -46,7 +46,9 @@ import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
 import {
   lireEnvoyes, noterEnvoyes, effacerEnvoyes, lireInstructionsCopiees, noterInstructionsCopiees,
+  lireRelectureEnCours, noterRelectureEnCours,
 } from './ui/envoyes.js';
+import { annonceRelecture, bilanRelecture, platsARelire } from './coeur/relecture.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -602,9 +604,14 @@ const actions = {
    */
   importer({ ecritures, demandesAClore }) {
     const aVersions = ecritures.some((ecriture) => ecriture.mode === 'versions');
+    const aRelectures = ecritures.some((ecriture) => ecriture.mode === 'precautions');
+    if (aRelectures && !navigator.onLine) {
+      return Promise.reject(Object.assign(new Error('Il faut être connecté pour enregistrer la relecture.'), { code: 'hors_ligne' }));
+    }
     if (aVersions && !navigator.onLine) {
       return Promise.reject(Object.assign(new Error('Il faut être connecté pour ajouter des versions.'), { code: 'hors_ligne' }));
     }
+    if (aRelectures) return importerRelecture(ecritures);
     // Noms lus avant l'envoi : un plat disparu entre-temps n'est plus dans la liste quand la réponse arrive.
     const nomsAvant = new Map(etat.plats.map((plat) => [plat.id, plat.nom]));
     const { envoi, versions } = donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email);
@@ -927,7 +934,53 @@ const actions = {
   noterEnvoyes(platIds) {
     noterEnvoyes(etat.utilisateur?.uid, platIds);
   },
+  /** Dernier lot de relecture des repères copié sur ce téléphone (deux jours) : [platId] (T2d). */
+  lireRelectureEnCours() {
+    return lireRelectureEnCours(etat.utilisateur?.uid);
+  },
+  /** Retient le lot de relecture copié pour Claude. Échec silencieux. */
+  noterRelectureEnCours(platIds) {
+    noterRelectureEnCours(etat.utilisateur?.uid, platIds);
+  },
 };
+
+/**
+ * Relecture des repères par Claude (T2d, écritures `mode: 'precautions'`, en ligne seulement : vérifié par l'appelant).
+ * Une transaction par plat (donnees.importer) ; l'affichage local suit tout de suite (coeur/import-local.js ›
+ * appliquerImport, seulement sur une fiche inchangée). Annonce « 10 recettes relues, 6 repères ajoutés, 1 enlevé.
+ * 32 restent à relire. » (seules les recettes marquées relues sont comptées ; celles dont les repères sont écrits sans
+ * la marque : « 1 reste à relire : « X ». »), puis une phrase par plat changé, disparu ou mis à la corbeille
+ * entre-temps (coeur/relecture.js › bilanRelecture, annonceRelecture).
+ * → promesse de { manquants: [nom], changes: [nom], corbeille: [nom] } ; rejetée avec `code: 'echec'`.
+ */
+function importerRelecture(ecritures) {
+  const nomsAvant = new Map(etat.plats.map((plat) => [plat.id, plat.nom]));
+  const nom = (id) => String(nomsAvant.get(id) ?? id);
+  const { precautions } = donnees.importer({ ecritures, demandesAClore: [] }, etat.utilisateur.email);
+  etat.plats = appliquerImport(etat.plats, ecritures);
+  const uid = etat.utilisateur.uid;
+  return precautions.then(({ manquants, corbeille, changes, ecrites }) => {
+    const resultat = { manquants: manquants.map(nom), changes: changes.map(nom), corbeille: corbeille.map(nom) };
+    if (etat.utilisateur?.uid !== uid) return resultat;
+    const bilan = bilanRelecture(ecritures, ecrites);
+    annoncer(annonceRelecture({
+      relues: bilan.relues.length,
+      ajoutes: bilan.ajoutes,
+      enleves: bilan.enleves,
+      aRelire: bilan.aRelire.map(nom),
+      restants: platsARelire(platsSepares().actifs).length,
+      incidents: [
+        ...resultat.changes.map((x) => ({ nom: x, cause: 'change' })),
+        ...resultat.manquants.map((x) => ({ nom: x, cause: 'supprime' })),
+        ...resultat.corbeille.map((x) => ({ nom: x, cause: 'corbeille' })),
+      ],
+    }));
+    return resultat;
+  }, (erreur) => {
+    annoncer('La relecture n’a pas pu être enregistrée. Réessayez.');
+    throw Object.assign(new Error('La relecture n’a pas pu être enregistrée.'), { code: 'echec', cause: erreur });
+  });
+}
 
 /**
  * Écrit l'adresse d'un profil par une transaction (`ecrire()` → promesse de { code, nom? }). Réussie : l'adresse est

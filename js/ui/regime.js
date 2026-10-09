@@ -16,6 +16,7 @@ import { texteSeverite } from './compat.js';
 import { REGIMES, PRECISIONS, lireRegime, ecrireRegime } from '../coeur/regles.js';
 import { bilanCompatibilite } from '../coeur/compatibilite.js';
 import { estEnfant } from '../coeur/profils.js';
+import { platsARelire } from '../coeur/relecture.js';
 import {
   ageEnMois, basculerPrecaution, bilanPrecautions, estRegleAge, lireAge, reglesSelonAge, texteAge, texteReste,
   validerNaissance,
@@ -209,9 +210,9 @@ export function creer(ctx) {
     'D’après les recommandations françaises, avec quelques prudences de l’app. Éteignez celles qui ne vous concernent pas.');
   const texteMedical = el('p', { class: 'aide' },
     'Une aide, pas un avis médical\u00A0: en cas de doute, demandez à son médecin.');
-  // Jusqu'à la relecture des recettes par Claude (T2d) : les recettes plus anciennes ne portent pas tous les repères.
-  const texteReperes = el('p', { class: 'aide' },
-    'Seuls les plats repérés sont signalés\u00A0: les recettes plus anciennes ne le sont pas encore toutes.');
+  // Recettes que Claude n'a pas encore relues (T2d, Réglages › « 🧸 Relire les recettes ») : leurs repères peuvent
+  // manquer. Phrase masquée quand tout est relu. Sans lien : le retour de cet écran mène déjà à Réglages.
+  const texteReperes = el('p', { class: 'aide' });
   const listePrecautions = el('ul', { class: 'liste-precautions' });
   const texteBilanAge = el('span', {});
   const bilanAge = el('p', { class: 'bilan-age', role: 'status' },
@@ -538,7 +539,12 @@ export function creer(ctx) {
     const avecLignes = entrees.length > 0;
     texteRecommandations.hidden = !avecLignes;
     texteMedical.hidden = !(avecLignes || date);
-    texteReperes.hidden = !avecLignes;
+    const aRelire = platsARelire(courant.plats ?? []).length;
+    const phraseReperes = aRelire > 1
+      ? `Seuls les plats repérés sont signalés\u00A0: ${aRelire}\u00A0recettes attendent encore la relecture de Claude, dans Réglages.`
+      : 'Seuls les plats repérés sont signalés\u00A0: 1\u00A0recette attend encore la relecture de Claude, dans Réglages.';
+    if (texteReperes.textContent !== phraseReperes) texteReperes.textContent = phraseReperes;
+    texteReperes.hidden = !avecLignes || !aRelire;
     majLignes(entrees);
 
     bilanAge.hidden = !avecLignes;

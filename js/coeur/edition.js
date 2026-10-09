@@ -3,7 +3,10 @@
 import { slug } from './slug.js';
 import { APPAREILS, NOM_MAX, statutDe, typeDe } from './plats.js';
 import { FORMAT, validerPaquet } from './paquet.js';
-import { VIANDES, VOCABULAIRES, marqueursEffectifs } from './vocabulaire.js';
+import {
+  CASES_REPERES, VIANDES, VOCABULAIRES, estRelue, marqueursEffectifs,
+} from './vocabulaire.js';
+import { reporterReperes } from './relecture.js';
 import { reperesAttendus } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
 
@@ -127,31 +130,8 @@ export function appliquerNature(ingredient, nature) {
 
 // ——— Repères (T2c-2) ———
 
-/**
- * Cases « Repères » de « Modifier » › un ingrédient › « Plus de précisions ». Cocher ajoute `pose` ; décocher retire
- * tout `retire` (« Café, thé, cola » enlève aussi l'ancien `cafe`, « Gélatine animale » aussi `gelatine_porc`).
- * `natures` : natures d'ingrédient (NATURES) sous lesquelles la case est proposée, si une règle la surveille. Libellés
- * de 26 caractères au plus. Remplace les repères de T2a (« Bouillon de viande », « Gélatine animale », « Graisse
- * animale » deviennent des cases).
- */
-export const CASES_REPERES = [
-  { id: 'cru_viande', libelle: 'Crue ou rosée', pose: ['cru'], retire: ['cru'], natures: ['viande'] },
-  { id: 'cru_poisson', libelle: 'Cru', pose: ['cru'], retire: ['cru'], natures: ['poisson'] },
-  { id: 'poisson_predateur', libelle: 'Espadon, requin, marlin', pose: ['poisson_predateur'], retire: ['poisson_predateur'], natures: ['poisson'] },
-  { id: 'lait_cru', libelle: 'Au lait cru', pose: ['lait_cru'], retire: ['lait_cru'], natures: ['autre'] },
-  { id: 'fruit_coque', libelle: 'Fruits à coque entiers', pose: ['fruit_coque'], retire: ['fruit_coque'], natures: ['autre'] },
-  { id: 'cafeine', libelle: 'Café, thé, cola', pose: ['cafeine'], retire: ['cafe', 'cafeine'], natures: ['autre'] },
-  { id: 'alcool_cru', libelle: 'Alcool non cuit', pose: ['alcool_cru'], retire: ['alcool_cru'], natures: ['autre'] },
-  { id: 'oeuf_cru', libelle: 'Œuf cru ou peu cuit', pose: ['oeuf_cru'], retire: ['oeuf_cru'], natures: ['autre'] },
-  { id: 'miel', libelle: 'Miel', pose: ['miel'], retire: ['miel'], natures: ['autre'] },
-  { id: 'soja', libelle: 'Soja', pose: ['soja'], retire: ['soja'], natures: ['autre'] },
-  { id: 'bouillon_viande', libelle: 'Bouillon de viande', pose: ['bouillon_viande'], retire: ['bouillon_viande'], natures: ['autre'] },
-  { id: 'gelatine', libelle: 'Gélatine animale', pose: ['gelatine_animale'], retire: ['gelatine_animale', 'gelatine_porc'], natures: ['autre'] },
-  { id: 'graisse_animale', libelle: 'Graisse animale', pose: ['graisse_animale'], retire: ['graisse_animale'], natures: ['autre', 'viande'] },
-];
-
-/** Marqueurs que les cases peuvent retirer (union des `retire`, dans l'ordre des cases) : repères relus par Claude en T2d. */
-export const MARQUEURS_PRECAUTION = [...new Set(CASES_REPERES.flatMap((c) => c.retire))];
+// Cases « Repères » et repères de précaution : déplacés dans vocabulaire.js (T2d), toujours importables d'ici.
+export { CASES_REPERES, MARQUEURS_PRECAUTION } from './vocabulaire.js';
 
 const CASES_PAR_ID = new Map(CASES_REPERES.map((c) => [c.id, c]));
 
@@ -329,6 +309,11 @@ export function catalogueProduits(plats) {
       rayon: plusFrequente(occurrences.map((o) => o.rayon).filter(Boolean)) ?? NATURES[nature].rayon,
       marqueurs: [...signature.marqueurs],
     };
+    // Lait cru (T2d) : sens prudent, le produit connu le porte dès qu'une seule occurrence le porte (un reblochon dont
+    // le repère a été enlevé dans une tartiflette cuite au four reste « au lait cru » ailleurs).
+    if (!element.marqueurs.includes('lait_cru') && occurrences.some((o) => o.marqueurs.includes('lait_cru'))) {
+      element.marqueurs.push('lait_cru');
+    }
     if (signature.forme) element.forme = signature.forme;
     if (signature.role) element.role = signature.role;
     const qte = plusFrequente(occurrences.filter((o) => o.unite === unite && o.qte !== undefined).map((o) => o.qte));
@@ -634,9 +619,12 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
     }
     champs.portionsBase = portions;
   }
-  if (ecrireIngredients) champs.ingredients = copier(ingredientsSaisis);
+  // Repères de précaution posés ailleurs depuis l'ouverture (relecture par Claude, autre téléphone) : gardés (T2d).
+  if (ecrireIngredients) {
+    champs.ingredients = reporterReperes(base?.ingredients, ingredientsSaisis, Array.isArray(plat.ingredients) ? plat.ingredients : []);
+  }
   // Ingrédients tels qu'ils seront enregistrés : ceux de la saisie s'ils sont écrits, sinon ceux de la fiche.
-  const ingredients = ecrireIngredients ? ingredientsSaisis : (Array.isArray(plat.ingredients) ? plat.ingredients : []);
+  const ingredients = ecrireIngredients ? champs.ingredients : (Array.isArray(plat.ingredients) ? plat.ingredients : []);
   if (!ingredients.length && !enAttente) erreur('ingredients', 'Ajoutez au moins un ingrédient.');
 
   if (touche('verifiee') && saisie.verifiee && !ingredients.length) {
@@ -678,6 +666,25 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
   }
 
   if (touche('emporter') && saisie.emporter !== undefined) champs.emporter = saisie.emporter;
+
+  // Recette relue par Claude (T2d) : elle revient à relire si un produit nouveau apparaît (ingrédient ajouté ou
+  // renommé) ou si l'appareil de cuisson principal change. Jamais pour une quantité, une unité, les portions, les
+  // étapes, la durée, la nature ni une case « Repères » : décisions humaines, qui priment. La marque est effacée même
+  // si la fiche lue ici n'est pas relue : une modification faite hors ligne part plus tard, peut-être après une
+  // relecture enregistrée ailleurs, qui jugeait l'ancienne recette (effacer un champ absent ne fait rien).
+  {
+    const connus = new Set((Array.isArray(plat.ingredients) ? plat.ingredients : []).filter(estObjet).map((i) => slug(i.produit)));
+    const produitNouveau = ecrireIngredients && ingredients.some((i) => estObjet(i) && !connus.has(slug(i.produit)));
+    const appareilPrincipal = (cuisson) => {
+      const liste = Array.isArray(cuisson) ? cuisson : [];
+      return liste[indexCuissonPrincipale(liste)]?.appareil ?? null;
+    };
+    let appareilChange = false;
+    if (touche('cuisson')) {
+      appareilChange = appareilPrincipal(champs.cuisson ?? []) !== appareilPrincipal(plat.cuisson);
+    }
+    if (produitNouveau || appareilChange) supprimer.push('reperesRelus');
+  }
 
   const ouverte = (d) => d?.id === `${plat.id}__recette` && d?.statut === 'ouverte';
   if (recetteRecue && Array.isArray(demandes) && demandes.some(ouverte)) {

@@ -1,6 +1,7 @@
 // Ajout de recettes et de versions (CLAUDE.md §8, T2b) : ce que l'app affiche tout de suite sur ce téléphone, avant
 // la copie de Firestore, et l'annonce qui suit l'enregistrement des versions. Logique pure : ni DOM ni Firebase.
 import { fusionnerVariantes } from './paquet.js';
+import { VERSION_REPERES, appliquerReperes, empreinteRelecture } from './relecture.js';
 
 const estObjet = (valeur) => valeur !== null && typeof valeur === 'object' && !Array.isArray(valeur);
 
@@ -12,12 +13,17 @@ const estObjet = (valeur) => valeur !== null && typeof valeur === 'object' && !A
  *   ignorée, **jamais** de plat créé ;
  * - écriture complète `{ id, donnees, effacerModification? }` (chemin T1b, `donnees.variantes` déjà fusionnée) :
  *   champs reçus posés sur le plat, ou nouveau plat ajouté à la fin ; `effacerModification` retire la marque
- *   « modifiée à la main » (`modifieeLe`, `modifieePar`).
+ *   « modifiée à la main » (`modifieeLe`, `modifieePar`) ; `effacerRelue` retire la marque « relue par Claude »
+ *   (`reperesRelus`, T2d) ;
+ * - écriture de relecture `{ id, mode: 'precautions', ajouts, retraits, marquerRelue, empreinte }` (T2d) : repères
+ *   appliqués (coeur/relecture.js › appliquerReperes) et marque posée, seulement si l'empreinte de relecture du plat
+ *   du téléphone est encore celle de l'écriture ; plat absent : ignorée, **jamais** de plat créé.
  */
 export function appliquerImport(plats, ecritures) {
   const liste = Array.isArray(plats) ? plats : [];
   const versions = new Map();
   const completes = new Map();
+  const relectures = new Map();
   for (const ecriture of Array.isArray(ecritures) ? ecritures : []) {
     if (!estObjet(ecriture) || typeof ecriture.id !== 'string') continue;
     if (ecriture.mode === 'versions') {
@@ -28,7 +34,9 @@ export function appliquerImport(plats, ecritures) {
         variantes: fusionnerVariantes(deja.variantes, Array.isArray(ecriture.variantes) ? ecriture.variantes : []),
         attendus,
       });
-    } else if (estObjet(ecriture.donnees)) {
+    } else if (ecriture.mode === 'precautions') {
+      relectures.set(ecriture.id, ecriture);
+    } else if (ecriture.mode === undefined && estObjet(ecriture.donnees)) {
       completes.set(ecriture.id, ecriture);
     }
   }
@@ -43,6 +51,12 @@ export function appliquerImport(plats, ecritures) {
         delete maj.modifieeLe;
         delete maj.modifieePar;
       }
+      if (complete.effacerRelue) delete maj.reperesRelus;
+    }
+    const relecture = relectures.get(plat.id);
+    if (relecture && empreinteRelecture(maj) === relecture.empreinte) {
+      maj = { ...maj, ingredients: appliquerReperes(maj.ingredients, relecture) };
+      if (relecture.marquerRelue) maj.reperesRelus = VERSION_REPERES;
     }
     if (versions.has(plat.id)) {
       const { variantes, attendus } = versions.get(plat.id);

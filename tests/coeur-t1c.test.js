@@ -794,15 +794,16 @@ test('preparerModification : seuls les champs touchés sont écrits', () => {
     [(s) => { s.emporter = true; }, { emporter: true }],
     [(s) => { s.verifiee = true; }, { statutRecette: 'validee' }],
     [(s) => { s.etapes = ['  Faire   revenir. ', '', 'Servir.']; }, { etapes: ['Faire revenir.', 'Servir.'] }],
-    [(s) => { s.cuisson = changerCuissonPrincipale(s.cuisson, { appareil: 'plaque', dureeMin: 20 }); }, { cuisson: [{ appareil: 'plaque', dureeMin: 20 }] }],
+    // Autre appareil principal : la marque « relue par Claude » (T2d) est effacée, même absente de la fiche lue ici.
+    [(s) => { s.cuisson = changerCuissonPrincipale(s.cuisson, { appareil: 'plaque', dureeMin: 20 }); }, { cuisson: [{ appareil: 'plaque', dureeMin: 20 }] }, ['reperesRelus']],
     [(s) => { s.ingredients[0].qte = 500; }, { portionsBase: 6, ingredients: [{ ...RISOTTO.ingredients[0], qte: 500 }, ...RISOTTO.ingredients.slice(1)] }],
   ];
-  for (const [changer, attendu] of cas) {
+  for (const [changer, attendu, supprimes = []] of cas) {
     const { base, saisie } = modifier(RISOTTO, changer);
     const r = preparerModification(base, saisie, RISOTTO, contexte);
     assert.deepEqual(r.erreurs, [], JSON.stringify(attendu));
     assert.deepEqual(r.champs, attendu);
-    assert.deepEqual(r.supprimer, []);
+    assert.deepEqual(r.supprimer, supprimes);
     assert.equal(r.rien, false);
     sansUndefined(r);
   }
@@ -959,7 +960,8 @@ test('preparerModification : toutes les étapes retirées → champ supprimé ; 
   const r = preparerModification(base, saisie, RISOTTO, contexte);
   assert.deepEqual(r.erreurs, []);
   assert.deepEqual(r.champs, {});
-  assert.deepEqual(r.supprimer, ['etapes', 'cuisson']);
+  // Plus de cuisson : autre appareil principal, la marque « relue par Claude » (T2d) est effacée.
+  assert.deepEqual(r.supprimer, ['etapes', 'cuisson', 'reperesRelus']);
   assert.equal(r.rien, false);
   const vide = modifier(RISOTTO, (s) => { s.etapes = []; });
   assert.deepEqual(preparerModification(vide.base, vide.saisie, RISOTTO, contexte).supprimer, ['etapes']);

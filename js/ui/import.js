@@ -10,15 +10,21 @@ import {
 import { texteCorrectionPourClaude } from '../coeur/claude.js';
 import { FICHIER_MAX } from '../coeur/sauvegarde.js';
 import { estDansCorbeille } from '../coeur/corbeille.js';
+import {
+  cleQuandMeme, ecrituresRelecture, effetsSurLesVersions, phrasesApercuRelecture,
+} from '../coeur/relecture.js';
 
 // Claude refuse une demande écrite pour d'autres instructions que les siennes (docs/projet-claude.md §0) : mêmes
 // messages pour un collage et pour un fichier.
 const MESSAGES_ALIGNEMENT = {
+  // Lot de relecture des repères (T2d) écrit avec d'autres instructions : jamais enregistrable.
+  relecture: 'Cette relecture ne vient pas des instructions actuelles. Recopiez-les depuis Réglages › Projet Claude, puis redemandez ce lot.',
   instructions: 'Claude signale que ses instructions ne sont plus à jour. Recopiez-les depuis Réglages › Projet Claude, puis renvoyez la demande dans une nouvelle conversation.',
   app: 'Claude signale que votre app n’est pas à jour. Fermez puis rouvrez l’app, puis recopiez la demande.',
 };
 
 const TITRES_ALIGNEMENT = {
+  relecture: 'Instructions à mettre à jour',
   instructions: 'Instructions à mettre à jour',
   app: 'App à mettre à jour',
 };
@@ -89,6 +95,20 @@ const CHOIX = [
 ];
 
 const MESSAGE_HORS_LIGNE_VERSIONS = 'Il faut être connecté pour ajouter des versions.';
+const MESSAGE_HORS_LIGNE_RELECTURE = 'Il faut être connecté pour enregistrer la relecture.';
+
+// Relecture des repères (T2d) : plats de la réponse qui ne sont pas repris, et pourquoi.
+const RAISONS_NON_REPRISES = {
+  inconnu: 'pas dans vos plats',
+  corbeille: 'dans la corbeille',
+  attente: 'recette à ajouter ⏳',
+};
+
+/** « A, B et C » ; « A, B et 4 autres » au-delà de trois noms. */
+function listeNoms(noms) {
+  if (noms.length > 3) return `${noms.slice(0, 2).join(', ')} et ${noms.length - 2}\u00A0autres`;
+  return noms.length > 1 ? `${noms.slice(0, -1).join(', ')} et ${noms.at(-1)}` : noms.join('');
+}
 
 const MESSAGE_COPIE = 'Copié. Collez-le dans votre projet Claude, puis collez ici sa nouvelle réponse.';
 // Aperçu prêt avec des versions à corriger : un nouveau collage remplacerait l'aperçu, et les autres versions du lot,
@@ -120,11 +140,18 @@ function avertissementModification(modifieeA) {
 export function compterEcritures(ecritures) {
   let recettes = 0;
   let versions = 0;
+  let relectures = 0;
   for (const ecriture of ecritures ?? []) {
     if (ecriture?.mode === 'versions') versions += Array.isArray(ecriture.variantes) ? ecriture.variantes.length : 0;
+    else if (ecriture?.mode === 'precautions') relectures += 1;
     else recettes += 1;
   }
-  return { recettes, versions };
+  return { recettes, versions, relectures };
+}
+
+/** Bouton d'un lot de relecture : « Enregistrer les 10 relectures », « Enregistrer la relecture ». */
+export function libelleEnregistrerRelecture(relectures) {
+  return relectures > 1 ? `Enregistrer les ${relectures}\u00A0relectures` : 'Enregistrer la relecture';
 }
 
 /**
@@ -154,6 +181,10 @@ export function creer(ctx) {
   let decoches = new Set(); // plats décochés dans l'aperçu : rien ne s'écrit pour eux
   let choix = {}; // { platId: 'version' | 'remplacer' } choisi dans l'aperçu
   let messageEnvoi = ''; // refus d'enregistrer (hors ligne, versions)
+  // Relecture des repères (T2d) : { clé de la case (relecture.js › cleChangement, avec l'identifiant du plat): coché }
+  // changé par la personne (un ajout est coché par défaut, un retrait décoché), et plats à marquer relus « quand même ».
+  let cases = {};
+  let quandMeme = new Set();
   let copieFaite = false;
   let enregistre = false;
   let focaliserResultat = false;
@@ -219,9 +250,12 @@ export function creer(ctx) {
     return cible ? tousLesPlats().find((plat) => plat.id === cible) ?? null : null;
   }
 
+  // Ouvert depuis Réglages (carte « 🧸 Relire les recettes », « Ajouter des recettes ») : le retour y ramène.
+  const depuisReglages = () => !cible && courant.routePrecedente === 'reglages';
+
   function revenir(evenement) {
     // Venu de cet écran-là : retour dans l'historique, pour que le geste retour d'Android reste naturel.
-    const attendu = cible ? 'plat' : 'plats';
+    const attendu = cible ? 'plat' : depuisReglages() ? 'reglages' : 'plats';
     if (courant.routePrecedente === attendu && history.length > 1) {
       evenement.preventDefault();
       history.back();
@@ -233,8 +267,16 @@ export function creer(ctx) {
     sousTitre.textContent = plat
       ? `Recette de «\u00A0${plat.nom}\u00A0»`
       : 'Collez la réponse de votre projet Claude.';
-    retour.href = plat ? `#/plat/${encodeURIComponent(plat.id)}` : '#/plats';
-    retour.querySelector('.retour-texte').textContent = plat ? plat.nom : 'Plats';
+    if (plat) {
+      retour.href = `#/plat/${encodeURIComponent(plat.id)}`;
+      retour.querySelector('.retour-texte').textContent = plat.nom;
+    } else if (depuisReglages()) {
+      retour.href = '#/reglages';
+      retour.querySelector('.retour-texte').textContent = 'Réglages';
+    } else {
+      retour.href = '#/plats';
+      retour.querySelector('.retour-texte').textContent = 'Plats';
+    }
   }
 
   async function collerDepuisPressePapiers() {
@@ -279,7 +321,25 @@ export function creer(ctx) {
   function oublierChoix() {
     decoches = new Set();
     choix = {};
+    cases = {};
+    quandMeme = new Set();
     messageEnvoi = '';
+  }
+
+  /**
+   * Choix d'un lot de relecture, au format de coeur/relecture.js › ecrituresRelecture. Les clés des cases portent
+   * l'identifiant du plat : le même produit dans deux recettes (un œuf cru dans deux desserts) a deux cases
+   * indépendantes.
+   */
+  function choixRelecture() {
+    const resultat = { ...cases };
+    for (const platId of quandMeme) resultat[cleQuandMeme(platId)] = true;
+    return resultat;
+  }
+
+  /** Écritures d'un lot de relecture selon les cases : seules celles qui écrivent quelque chose (repère ou marque). */
+  function preparerRelecture(prepares) {
+    return { ...prepares, ecritures: ecrituresRelecture(prepares, choixRelecture()), demandesAClore: [] };
   }
 
   function effacer() {
@@ -314,10 +374,11 @@ export function creer(ctx) {
     majEntete();
     noteHorsLigne.hidden = navigator.onLine;
     const etat = calculer();
-    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, messageEnvoi, navigator.onLine]);
+    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, cases, [...quandMeme], messageEnvoi, navigator.onLine]);
     if (nouvelleSignature === signature) return;
     signature = nouvelleSignature;
-    preparation = etat.type === 'pret' ? filtrerPreparation(etat.preparation, decoches) : null;
+    if (etat.type !== 'pret') preparation = null;
+    else preparation = etat.relecture ? preparerRelecture(etat.preparation) : filtrerPreparation(etat.preparation, decoches);
 
     // Un texte collé, lisible ou non, disparaît de l'écran : il contient des mots techniques (§4).
     const traite = etat.type !== 'rien' && !(etat.type === 'illisible' && etat.code === 'vide');
@@ -355,20 +416,38 @@ export function creer(ctx) {
     // Sans les plats et les demandes, un plat déjà présent passerait pour nouveau : on attend leur chargement.
     // Sans les profils, une version ne peut pas être jugée.
     if (!courant.platsCharges || !courant.demandesChargees || !courant.profilsCharges) return { type: 'chargement' };
+    // Lot de relecture des repères (T2d) d'une autre version des instructions : jamais enregistrable.
+    const relecture = Boolean(validation.relecture);
+    if (relecture && controlerInstructions(extrait.paquets)) return { type: 'illisible', code: 'relecture' };
     const prepares = preparerImport(validation.plats.map((plat) => plat.donnees), {
       plats: tousLesPlats(),
       demandes: courant.demandes,
       cible,
       profils: courant.profils,
       choix,
+      // Dernier lot de relecture copié sur ce téléphone : des recettes entières rendues à sa place sont une erreur.
+      relectureEnCours: courant.actions?.lireRelectureEnCours?.() ?? [],
     });
     // Plats gardés sans leurs erreurs (ils n'en ont pas) : la correction pour Claude sait si le lot était de versions.
     if (prepares.erreurs.length) {
-      return { type: 'erreurs', validation: { ...validation, plats: validation.plats.map((plat) => ({ ...plat, erreurs: [] })), erreurs: prepares.erreurs } };
+      // Recettes entières rendues à la place d'une relecture (T2d) : la correction redemande des relectures seules,
+      // et ne cite pas parmi « les autres plats du lot » ceux qu'elle redemande déjà.
+      const fautifs = new Set(prepares.relecture
+        ? prepares.erreurs.map((e) => /^plats\[(\d+)\]/.exec(e.pourClaude ?? '')?.[1]).filter(Boolean).map(Number)
+        : []);
+      return {
+        type: 'erreurs',
+        validation: {
+          ...validation,
+          plats: validation.plats.filter((plat) => !fautifs.has(plat.index)).map((plat) => ({ ...plat, erreurs: [] })),
+          erreurs: prepares.erreurs,
+          ...(prepares.relecture ? { relecture: true } : {}),
+        },
+      };
     }
     // Réponse écrite avec d'autres instructions que celles de l'app : prévenu, sans bloquer (message seul).
     const instructions = controlerInstructions(extrait.paquets)?.message ?? null;
-    return { type: 'pret', validation, preparation: prepares, instructions };
+    return { type: 'pret', validation, preparation: prepares, instructions, relecture };
   }
 
   function titreResultat(texteTitre) {
@@ -406,7 +485,7 @@ export function creer(ctx) {
         return [el('section', { class: 'carte resultat-erreur' },
           titreResultat(titres[etat.code] ?? titres.aucune),
           el('p', { role: 'alert' }, messages[etat.code] ?? messages.aucune),
-          etat.code === 'instructions'
+          etat.code === 'instructions' || etat.code === 'relecture'
             ? el('a', { class: 'bouton bouton-principal bouton-plein', href: '#/reglages', 'data-action': 'reglages' },
               'Ouvrir Réglages')
             : null,
@@ -445,7 +524,7 @@ export function creer(ctx) {
         )];
       }
       default:
-        return [renduPret(etat)];
+        return [etat.relecture ? renduRelecture(etat) : renduPret(etat)];
     }
   }
 
@@ -592,6 +671,13 @@ export function creer(ctx) {
               }, version.libelle)))
               : null,
             el('p', { class: 'texte-doux' }, detailDuPlat(element)),
+            // Recette remplacée : les repères de précaution de la fiche sont gardés (T2d), et le texte le dit.
+            element.statut === 'remplace' && element.reperesGardes && garde
+              ? el('p', { class: 'texte-doux' }, element.reperesGardes)
+              : null,
+            element.statut === 'remplace' && element.reperesPerdus && garde
+              ? el('p', { class: 'texte-doux' }, element.reperesPerdus)
+              : null,
             element.choix && !nonReprise ? choixDuPlat(element) : null,
             avertissements.length
               ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
@@ -622,7 +708,180 @@ export function creer(ctx) {
     );
   }
 
+  /** Coché ou non : choix de la personne, sinon ajout coché et retrait décoché. Une case par plat et par repère. */
+  const estCochee = (cle, parDefaut) => (Object.hasOwn(cases, cle) ? cases[cle] : parDefaut);
+
+  /** Une case de repère de la relecture (libellé entier cliquable, raison de Claude et suite reliées). */
+  function caseRepere(changement, type) {
+    const { cle } = changement;
+    const idCase = `repere-${cle}`.replace(/[^\w-]/g, '_');
+    const cochee = estCochee(cle, type === 'ajout');
+    const pourquoi = String(changement.pourquoi ?? '').trim()
+      || (type === 'retrait' ? '(sans raison donnée)' : '');
+    const idPourquoi = `${idCase}-pourquoi`;
+    const libelle = type === 'ajout'
+      ? `«\u00A0${changement.produit}\u00A0»\u00A0: ${changement.libelle}`
+      : `Enlever «\u00A0${changement.libelle}\u00A0» de «\u00A0${changement.produit}\u00A0»`;
+    let suite = null;
+    if (type === 'ajout' && !cochee) suite = 'Ne sera pas ajouté.';
+    if (type === 'retrait' && cochee) suite = 'Sera enlevé.';
+    const idSuite = `${idCase}-suite`;
+    const decrite = [pourquoi ? idPourquoi : null, suite ? idSuite : null].filter(Boolean).join(' ');
+    return el('li', { class: 'repere-relecture' },
+      el('label', { class: 'case-repere-relecture', for: idCase },
+        el('input', {
+          type: 'checkbox',
+          id: idCase,
+          'data-action': idCase,
+          checked: cochee,
+          'aria-describedby': decrite || null,
+          onchange: (evenement) => {
+            cases = { ...cases, [cle]: evenement.target.checked };
+            messageEnvoi = '';
+            dessiner();
+          },
+        }),
+        el('span', {}, libelle)),
+      pourquoi ? el('p', { class: 'texte-doux repere-pourquoi', id: idPourquoi }, pourquoi) : null,
+      suite ? el('p', { class: 'texte-doux repere-suite', id: idSuite }, suite) : null);
+  }
+
+  /**
+   * Lignes 🌿 d'un plat relu : profils qui ont un régime pour qui le plat, avec les repères cochés, aurait besoin
+   * d'une version (coeur/relecture.js › effetsSurLesVersions). Calcul pur, refait à chaque case.
+   */
+  function effetsVersions(plat, ajoutsCoches, retraitsCoches) {
+    if (!plat || !ajoutsCoches.length || !courant.profilsCharges) return [];
+    return effetsSurLesVersions(plat, { ajouts: ajoutsCoches, retraits: retraitsCoches }, courant.profils ?? []);
+  }
+
+  /** Aperçu d'un lot de relecture des repères (T2d) : une case par repère, puis ce qui ne change pas ou n'est pas repris. */
+  function renduRelecture({ validation, preparation: prepares, instructions }) {
+    const elements = prepares.elements ?? [];
+    const relues = elements.filter((element) => element.statut === 'relecture');
+    const dejaRelues = elements.filter((element) => element.statut === 'dejaRelue');
+    const nonReprises = elements.filter((element) => RAISONS_NON_REPRISES[element.statut]);
+    const ajoutsDe = (element) => element.ajouts ?? [];
+    const retraitsDe = (element) => element.retraits ?? [];
+    const totalAjouts = relues.reduce((total, element) => total + ajoutsDe(element).length, 0);
+    const totalRetraits = relues.reduce((total, element) => total + retraitsDe(element).length, 0);
+    // Avertissements de coeur/paquet.js : produit introuvable, nature à corriger, recette changée depuis la demande,
+    // « Cette recette restera à relire. ».
+    const avertissementsDe = (element) => element.avertissements ?? [];
+    const avecQuelqueChose = (element) => ajoutsDe(element).length || retraitsDe(element).length
+      || avertissementsDe(element).length || (element.infos ?? []).length || !element.marquerRelue;
+    const changeantes = relues.filter(avecQuelqueChose);
+    const sansChangement = relues.filter((element) => !avecQuelqueChose(element));
+    const comptes = compterEcritures(preparation?.ecritures);
+    const horsLigne = !navigator.onLine;
+    const vues = relues.length + dejaRelues.length;
+    const avertissementsGeneraux = [
+      instructions,
+      ...[...(validation.avertissements ?? []), ...(prepares.avertissements ?? [])].map((a) => a.message),
+    ].filter(Boolean);
+
+    const blocDuPlat = (element) => {
+      const plat = tousLesPlats().find((p) => p.id === element.id) ?? null;
+      const ajoutsCoches = ajoutsDe(element).filter((ajout) => estCochee(ajout.cle, true));
+      const retraitsCoches = retraitsDe(element).filter((retrait) => estCochee(retrait.cle, false));
+      const avertissements = avertissementsDe(element);
+      const idQuandMeme = `relue-${element.id}`.replace(/[^\w-]/g, '_');
+      return el('li', { class: 'apercu-plat apercu-relecture' },
+        el('div', { class: 'apercu-corps' },
+          el('h3', { class: 'apercu-nom' }, element.nom),
+          ajoutsDe(element).length || retraitsDe(element).length
+            ? el('ul', { class: 'liste-reperes-relecture' },
+              ajoutsDe(element).map((ajout) => caseRepere(ajout, 'ajout')),
+              retraitsDe(element).map((retrait) => caseRepere(retrait, 'retrait')))
+            : null,
+          effetsVersions(plat, ajoutsCoches, retraitsCoches).map((effet) => el('p', { class: 'compat-version' },
+            el('span', { 'aria-hidden': 'true' }, '🌿\u00A0'), effet.texte.replace(/^🌿\s*/u, ''))),
+          avertissements.length
+            ? el('ul', { class: 'liste-avertissements' }, avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
+            : null,
+          (element.infos ?? []).map((info) => el('p', { class: 'texte-doux' },
+            el('span', { 'aria-hidden': 'true' }, 'ℹ️\u00A0'), info)),
+          element.marquerRelue
+            ? null
+            : el('label', { class: 'case-repere-relecture', for: idQuandMeme },
+              el('input', {
+                type: 'checkbox',
+                id: idQuandMeme,
+                'data-action': idQuandMeme,
+                checked: quandMeme.has(element.id),
+                onchange: (evenement) => {
+                  quandMeme = new Set(quandMeme);
+                  if (evenement.target.checked) quandMeme.add(element.id);
+                  else quandMeme.delete(element.id);
+                  messageEnvoi = '';
+                  dessiner();
+                },
+              }),
+              el('span', {}, 'La marquer relue quand même')),
+        ));
+    };
+
+    const phrases = phrasesApercuRelecture(totalAjouts, totalRetraits);
+    const rienAEcrire = !relues.length;
+    return el('section', { class: 'carte resultat-pret' },
+      titreResultat(vues > 1 ? `${vues}\u00A0recettes relues` : vues ? '1\u00A0recette relue' : 'Aucune recette reprise'),
+      avertissementsGeneraux.length
+        ? el('ul', { class: 'liste-avertissements' }, avertissementsGeneraux.map((m) => el('li', {}, `⚠️ ${m}`)))
+        : null,
+      phrases.map((phrase) => el('p', {}, phrase)),
+      changeantes.length ? el('ul', { class: 'liste-apercu' }, changeantes.map(blocDuPlat)) : null,
+      sansChangement.length
+        ? el('p', { class: 'texte-doux' }, `Rien à changer\u00A0: ${listeNoms(sansChangement.map((element) => element.nom))}.`)
+        : null,
+      dejaRelues.length
+        ? el('p', { class: 'texte-doux' }, `Déjà relues\u00A0: ${listeNoms(dejaRelues.map((element) => element.nom))}.`,
+          dejaRelues.some((element) => element.propose) ? ' Pour changer un repère\u00A0: Modifier.' : '')
+        : null,
+      nonReprises.length
+        ? el('p', { class: 'texte-doux' }, `Pas reprises\u00A0: ${nonReprises.map((element) => `«\u00A0${element.nom}\u00A0» (${RAISONS_NON_REPRISES[element.statut]})`).join(', ')}.`)
+        : null,
+      messageEnvoi ? el('p', { class: 'message-erreur', role: 'alert' }, messageEnvoi) : null,
+      rienAEcrire
+        ? el('p', { role: 'status' }, dejaRelues.length
+          ? 'Ces recettes sont déjà relues\u00A0: rien à enregistrer.'
+          : 'Rien à enregistrer.')
+        : el('p', { class: 'aide' }, 'Seuls les repères changent\u00A0: quantités, étapes et versions restent telles quelles.'),
+      rienAEcrire
+        ? null
+        : el('button', {
+          class: 'bouton bouton-principal bouton-plein',
+          type: 'button',
+          'data-action': 'enregistrer',
+          disabled: !comptes.relectures || horsLigne,
+          onclick: enregistrer,
+        }, comptes.relectures ? libelleEnregistrerRelecture(comptes.relectures) : 'Rien de coché'),
+      !rienAEcrire && horsLigne ? el('p', { class: 'aide' }, MESSAGE_HORS_LIGNE_RELECTURE) : null,
+    );
+  }
+
+  /** Lot de relecture : en ligne seulement ; l'annonce suit les transactions (actions.importer), puis Réglages. */
+  function enregistrerRelecture() {
+    if (!navigator.onLine) {
+      messageEnvoi = MESSAGE_HORS_LIGNE_RELECTURE;
+      dessiner();
+      annoncer(MESSAGE_HORS_LIGNE_RELECTURE);
+      return;
+    }
+    enregistre = true;
+    Promise.resolve(courant.actions.importer(preparation)).catch((erreur) => {
+      if (erreur?.code === 'hors_ligne') annoncer(MESSAGE_HORS_LIGNE_RELECTURE);
+    });
+    // Le lot suivant attend dans Réglages : retour dans l'historique si l'on en vient (geste retour naturel), sinon
+    // cet écran est remplacé.
+    if (depuisReglages() && history.length > 1) history.back();
+    else location.replace('#/reglages');
+  }
+
   function enregistrer() {
+    if (preparation?.ecritures?.some((ecriture) => ecriture.mode === 'precautions')) {
+      if (!enregistre) enregistrerRelecture();
+      return;
+    }
     if (!preparation || enregistre || (!preparation.ecritures.length && !preparation.demandesAClore.length)) return;
     const { ecritures } = preparation;
     const comptes = compterEcritures(ecritures);

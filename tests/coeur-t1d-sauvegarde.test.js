@@ -836,6 +836,7 @@ test('résumé : comptes exacts', () => {
     versionsRemises: [], // T2b : les versions du fichier sont déjà sur les fiches
     naissancesRemises: [], // T2c : aucun profil du fichier n'a de date de naissance
     precautionsARemettre: [],
+    reperesGardes: [], // T2d : aucune recette reprise
   });
   assert.equal(r.recettesDifferentes.length, 1);
   assert.equal(r.rien, false);

@@ -6,7 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { STYLES, VOCABULAIRES } from '../js/coeur/vocabulaire.js';
 import { CHAMPS_PLAT, FORMAT, validerPaquet, extrairePaquet, controlerInstructions } from '../js/coeur/paquet.js';
 import {
-  VERSION_INSTRUCTIONS, texteDemandeIdees, texteDemandeRecette, texteDemandeVariantes, texteCorrectionPourClaude,
+  VERSION_INSTRUCTIONS, texteDemandeIdees, texteDemandePrecautions, texteDemandeRecette, texteDemandeVariantes,
+  texteCorrectionPourClaude,
 } from '../js/coeur/claude.js';
 import { ecrireRegime } from '../js/coeur/regles.js';
 import { slug } from '../js/coeur/slug.js';
@@ -53,12 +54,13 @@ test('les en-têtes des demandes produites par l’app figurent dans les instruc
     texteDemandeVariantes([plat], profils[0]).split('\n')[0],
     texteCorrectionPourClaude({ erreur: 'aucune' }).split('\n')[0],
     texteDemandeIdees({ profils }).split('\n')[0],
+    texteDemandePrecautions([plat]).split('\n')[0],
   ];
-  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1']);
+  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1', 'DEMANDE-PRECAUTIONS paquet@1']);
   for (const enTete of enTetes) assert.ok(doc.includes(`\`${enTete}\``), `« ${enTete} » absent`);
   // Chaque code DEMANDE-… cité est connu.
   const cites = new Set(doc.match(/DEMANDE-[A-Z]+/g));
-  assert.deepEqual([...cites].sort(), ['DEMANDE-IDEES', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
+  assert.deepEqual([...cites].sort(), ['DEMANDE-IDEES', 'DEMANDE-PRECAUTIONS', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
 });
 
 test('les exemples de demandes sont ceux que l’app copie', () => {
@@ -70,7 +72,8 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
     {
       id: 'carbonade-flamande', nom: 'Carbonade flamande', portionsBase: 4, ingredients: [
         ing('bœuf à braiser', 800, 'g', ['viande', 'boeuf'], { forme: 'morceaux' }),
-        ing('bière brune', 25, 'cl', ['alcool_cru']),
+        // Mijote plus de deux heures : ni `alcool_cru` ni autre repère (section 3, version 5).
+        ing('bière brune', 25, 'cl'),
         ing('oignon jaune', 2, 'pc', ['legume'], { role: 'incorpore' }),
         ing('pain d\'épices', 2, 'tranche'),
         ing('moutarde', 1, 'cs'),

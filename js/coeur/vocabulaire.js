@@ -41,6 +41,45 @@ export const VIANDES = ['viande', ...SOUS_TYPES_VIANDE];
  */
 export const IMPLICATIONS = { gelatine_porc: ['gelatine_animale'], cafe: ['cafeine'], poisson_predateur: ['poisson'] };
 
+// ——— Repères de précaution (T2c-2, T2d) ———
+
+/**
+ * Cases « Repères » de « Modifier » › un ingrédient › « Plus de précisions ». Cocher ajoute `pose` ; décocher retire
+ * tout `retire` (« Café, thé, cola » enlève aussi l'ancien `cafe`, « Gélatine animale » aussi `gelatine_porc`).
+ * `natures` : natures d'ingrédient (edition.js › NATURES) sous lesquelles la case est proposée, si une règle la
+ * surveille. Libellés de 26 caractères au plus. Déplacé ici depuis edition.js (T2d) pour que relecture.js, claude.js
+ * et compatibilite.js s'en servent sans cycle ; edition.js les réexporte.
+ */
+export const CASES_REPERES = [
+  { id: 'cru_viande', libelle: 'Crue ou rosée', pose: ['cru'], retire: ['cru'], natures: ['viande'] },
+  { id: 'cru_poisson', libelle: 'Cru', pose: ['cru'], retire: ['cru'], natures: ['poisson'] },
+  { id: 'poisson_predateur', libelle: 'Espadon, requin, marlin', pose: ['poisson_predateur'], retire: ['poisson_predateur'], natures: ['poisson'] },
+  { id: 'lait_cru', libelle: 'Au lait cru', pose: ['lait_cru'], retire: ['lait_cru'], natures: ['autre'] },
+  { id: 'fruit_coque', libelle: 'Fruits à coque entiers', pose: ['fruit_coque'], retire: ['fruit_coque'], natures: ['autre'] },
+  { id: 'cafeine', libelle: 'Café, thé, cola', pose: ['cafeine'], retire: ['cafe', 'cafeine'], natures: ['autre'] },
+  { id: 'alcool_cru', libelle: 'Alcool non cuit', pose: ['alcool_cru'], retire: ['alcool_cru'], natures: ['autre'] },
+  { id: 'oeuf_cru', libelle: 'Œuf cru ou peu cuit', pose: ['oeuf_cru'], retire: ['oeuf_cru'], natures: ['autre'] },
+  { id: 'miel', libelle: 'Miel', pose: ['miel'], retire: ['miel'], natures: ['autre'] },
+  { id: 'soja', libelle: 'Soja', pose: ['soja'], retire: ['soja'], natures: ['autre'] },
+  { id: 'bouillon_viande', libelle: 'Bouillon de viande', pose: ['bouillon_viande'], retire: ['bouillon_viande'], natures: ['autre'] },
+  { id: 'gelatine', libelle: 'Gélatine animale', pose: ['gelatine_animale'], retire: ['gelatine_animale', 'gelatine_porc'], natures: ['autre'] },
+  { id: 'graisse_animale', libelle: 'Graisse animale', pose: ['graisse_animale'], retire: ['graisse_animale'], natures: ['autre', 'viande'] },
+];
+
+/** Marqueurs que les cases peuvent retirer (union des `retire`, dans l'ordre des cases) : repères relus par Claude (T2d). */
+export const MARQUEURS_PRECAUTION = [...new Set(CASES_REPERES.flatMap((c) => c.retire))];
+
+/**
+ * Version des repères relus (`plats/{id}.reperesRelus`, T2d) : une recette marquée d'un entier inférieur, ou sans
+ * marque, est à relire. Passe à 2 si de nouveaux repères de précaution s'ajoutent un jour.
+ */
+export const VERSION_REPERES = 1;
+
+/** Vrai si Claude a relu les repères de précaution de la recette (marque posée par l'app, T2d). */
+export function estRelue(plat) {
+  return Number.isInteger(plat?.reperesRelus) && plat.reperesRelus >= VERSION_REPERES;
+}
+
 // Ce qu'un repère `cru` doit accompagner pour avoir un effet (marqueurs effectifs).
 const CRUS_POSSIBLES = ['viande', 'poisson', 'fruits_de_mer'];
 
@@ -197,4 +236,26 @@ export function validerIngredient(brut, { position, champQte, signaler, inconnu,
 
   if (Object.keys(brut).some((cle) => !CHAMPS_INGREDIENT.includes(cle))) inconnu();
   return valide ? ingredient : null;
+}
+
+// Mots affichés des repères sans case « Repères » (natures et familles d'ingrédients) : jamais le code brut à l'écran.
+const LIBELLES_MARQUEURS = {
+  viande: 'viande', boeuf: 'bœuf', porc: 'porc', volaille: 'volaille', agneau: 'agneau', charcuterie: 'charcuterie',
+  poisson: 'poisson', fruits_de_mer: 'fruits de mer', oeuf: 'œuf', laitier: 'laitier', legume: 'légume', feculent: 'féculent',
+};
+
+/**
+ * Libellé d'un repère, en minuscules : pour un repère de précaution, celui de la case de « Modifier » (« au lait cru »,
+ * « café, thé, cola » pour `cafe` comme pour `cafeine`, « gélatine animale » pour `gelatine_porc` aussi ; `cru` :
+ * « crue ou rosée » sur une viande, « cru » ailleurs) ; pour un autre repère, son mot (« légume », « œuf », « fruits de
+ * mer ») ; un code inconnu, sans tiret bas.
+ */
+export function libelleRepere(marqueur, ingredient = null) {
+  if (marqueur === 'cru') {
+    return marqueursEffectifs(ingredient).has('viande') ? 'crue ou rosée' : 'cru';
+  }
+  const definition = CASES_REPERES.find((d) => d.pose.includes(marqueur))
+    ?? CASES_REPERES.find((d) => d.retire.includes(marqueur));
+  if (definition) return definition.libelle.toLocaleLowerCase('fr-FR');
+  return Object.hasOwn(LIBELLES_MARQUEURS, marqueur ?? '') ? LIBELLES_MARQUEURS[marqueur] : String(marqueur ?? '').replace(/_/g, ' ');
 }
