@@ -111,7 +111,12 @@ function accentsAccordes(a, b) {
 /** Vrai si la saisie, seule, peut vouloir dire plusieurs choses (« pâte », « pâté », « pate ») : la question reste. */
 export function estAmbigu(nom) {
   const mots = motsAccentues(nom);
-  return mots.length === 1 && AMBIGUS_SEULS.has(mots[0]);
+  if (mots.length !== 1) return false;
+  if (AMBIGUS_SEULS.has(mots[0])) return true;
+  // Toute autre écriture accentuée de « pate » ou « pates » (« paté », « patè », « pâtè »…) : ni les pâtes
+  // (« pâtes », « pates », seules admises), ni une forme sûre ; la question reste.
+  const lettres = mots[0].normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return (lettres === 'pate' || lettres === 'pates') && mots[0] !== 'pâtes' && mots[0] !== 'pates';
 }
 
 /** Vrai si un mot (motsCompares) porte un accent : « pâte », ou « pates » lu comme des pâtes ; pas « the ». */
@@ -135,17 +140,37 @@ function accordFoyer(nom, produit) {
 }
 
 /**
- * Écart d'accents d'un nom proposé avec la saisie (suggestions) : vrai si un mot homographe déjà tapé en entier et
- * accentué (« pâté », « pâtés », « pates » lu comme des pâtes) est écrit avec d'autres accents dans le nom proposé
- * (« pâtes », « pâte brisée » pour « pâté »). Le nom proposé passe alors après ceux qui s'accordent.
+ * Vrai si chaque lettre accentuée du mot tapé se retrouve, à la même place, dans le mot proposé : la saisie a
+ * seulement oublié des accents (« paté » pour « pâté », « pâte » ou « pate » pour rien), sans en contredire aucun
+ * (« paté » contredit « pâte » : é contre e).
+ */
+function accentsInclus(tape, propose) {
+  const a = [...tape.normalize('NFC')];
+  const b = [...propose.normalize('NFC')];
+  const sansAccent = (lettre) => lettre.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return a.every((lettre, i) => lettre === sansAccent(lettre) || lettre === b[i]);
+}
+
+/**
+ * Écart d'accents d'un nom proposé avec la saisie (suggestions), pour un mot homographe déjà tapé en entier et
+ * accentué (« pâté », « paté », « pâtés », « pates » lu comme des pâtes) :
+ * - 0 : mêmes accents, ou rien à comparer ;
+ * - 1 : autres accents, mais aucun de ceux tapés n'est contredit (« pâté de campagne » pour « paté ») ;
+ * - 2 : un accent tapé est contredit (« pâtes », « pâte brisée » pour « pâté » ou « paté »).
+ * À rang égal, le nom proposé passe après ceux dont l'écart est plus petit.
  */
 function ecartAccents(saisie, forme) {
   const cles = cleProduit(saisie).split('-');
-  if (!cles.some((mot) => HOMOGRAPHES.has(mot))) return false;
+  if (!cles.some((mot) => HOMOGRAPHES.has(mot))) return 0;
   const motsA = motsCompares(saisie);
   const motsB = motsCompares(forme);
-  return cles.some((mot, i) => HOMOGRAPHES.has(mot) && i < motsB.length && accentue(motsA[i]) && accentue(motsB[i])
-    && motsA[i] !== motsB[i]);
+  let ecart = 0;
+  cles.forEach((mot, i) => {
+    if (!HOMOGRAPHES.has(mot) || i >= motsB.length || !accentue(motsA[i]) || !accentue(motsB[i])) return;
+    if (motsA[i] === motsB[i]) return;
+    ecart = Math.max(ecart, accentsInclus(motsA[i], motsB[i]) ? 1 : 2);
+  });
+  return ecart;
 }
 
 // ——— Produits du foyer ———
@@ -348,8 +373,9 @@ function debutSansPluriel(cherche) {
  *   (foyer seulement : jamais pour les produits courants).
  * Les mots terminés se comparent sans pluriel (« pommes de t » → pomme de terre) ; le dernier mot est un début tel que
  * tapé, ou un mot entier sans son pluriel (« cerneaux » → cerneau de noix ; « pois » ne propose pas « poire »).
- * `ecart` (0 ou 1) : un mot homographe tapé avec ses accents est écrit avec d'autres accents dans le nom (« pâtes » ou
- * « pâte brisée » pour « pâté ») ; à rang égal, ce nom passe après les autres. `mots` : nombre de mots de la forme
+ * `ecart` (0, 1 ou 2, ecartAccents) : un mot homographe tapé avec ses accents est écrit avec d'autres accents dans le
+ * nom ; à rang égal, le nom dont les accents contredisent la saisie (« pâtes » ou « pâte brisée » pour « pâté » ou
+ * « paté ») passe après celui qui ne fait que les compléter (« pâté de campagne » pour « paté »). `mots` : nombre de mots de la forme
  * trouvée (à rang égal, le nom le plus court d'abord : la première suggestion ne bouge pas quand on finit le mot,
  * « pât » puis « pâtes »). Pour les produits courants, le nom courant et les autres écritures sont cherchés, et la
  * meilleure compte. La saisie est préparée une fois : `chercheur(saisie)` rend la fonction de rang (null pour une
@@ -367,7 +393,7 @@ export function chercheur(saisie) {
     if (!calculs.has(forme)) {
       calculs.set(forme, homographe ? {
         foyer: accordFoyer(saisie, forme), courant: !ambigu && accentsAccordes(saisie, forme), ecart: ecartAccents(saisie, forme),
-      } : { foyer: true, courant: !ambigu, ecart: false });
+      } : { foyer: true, courant: !ambigu, ecart: 0 });
     }
     return calculs.get(forme);
   };
@@ -384,7 +410,7 @@ export function chercheur(saisie) {
         || forme.cle.includes(`-${cle}-`)) rang = 2;
       else if (!courant && forme.slug.includes(cherche)) rang = 3;
       if (rang < 0) continue;
-      const ecart = homographe && accentsDe(forme.forme).ecart ? 1 : 0;
+      const ecart = homographe ? accentsDe(forme.forme).ecart : 0;
       const trouve = { rang, ecart, mots: forme.mots };
       const ecartAuMeilleur = meilleur ? rang - meilleur.rang || ecart - meilleur.ecart || forme.mots - meilleur.mots : -1;
       if (ecartAuMeilleur < 0) meilleur = trouve;
