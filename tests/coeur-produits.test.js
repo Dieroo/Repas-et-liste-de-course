@@ -132,7 +132,7 @@ test('homographes : la table des formes accentuées admises (pâtes, pates, pât
     assert.deepEqual(lu(nom), pates, nom);
   }
   // Seuls : la question reste, avec une aide.
-  for (const nom of ['pâte', 'Pâte', 'pâté', 'PÂTÉ', 'pate', 'pâtés', ' pâte. ']) {
+  for (const nom of ['pâte', 'Pâte', 'pâté', 'PÂTÉ', 'pate', 'pâtés', ' pâte. ', 'paté', 'Paté', 'patés', 'patè', 'pâtè']) {
     assert.deepEqual(reconnaitre(nom), { ambigu: true }, nom);
     assert.equal(estAmbigu(nom), true, nom);
   }
@@ -435,12 +435,18 @@ test('suggestions : accents des homographes et mot entier au pluriel près', () 
   const tout = catalogueAvecDictionnaire([]);
   const noms = (saisie, catalogue = tout) => suggestions(catalogue, saisie).map((e) => e.produit);
   // « pâté » ou « pâtés » (la question s'affiche) : un pâté d'abord, jamais « pâtes » comme nom exact.
-  for (const saisie of ['pâté', 'pâtés', 'Pâtés']) {
+  // Même avec un accent oublié (« paté », « patés », casse quelconque) : l'accent tapé désigne le pâté.
+  for (const saisie of ['pâté', 'pâtés', 'Pâtés', 'paté', 'Paté', 'PATÉ', 'patés']) {
     assert.equal(noms(saisie)[0], 'pâté de campagne', saisie);
     assert.ok(noms(saisie).indexOf('pâté en croûte') < noms(saisie).indexOf('pâtes'), saisie);
   }
   const pates = tout.find((e) => e.produit === 'pâtes');
-  assert.deepEqual(rangSuggestion(pates, 'pâtés'), { rang: 1, ecart: 1, mots: 1 });
+  const pate = tout.find((e) => e.produit === 'pâté de campagne');
+  // Écart 2 : un accent tapé est contredit ; 1 : des accents seulement oubliés ; 0 : mêmes accents.
+  assert.deepEqual(rangSuggestion(pates, 'pâtés'), { rang: 1, ecart: 2, mots: 1 });
+  assert.deepEqual(rangSuggestion(pates, 'paté'), { rang: 1, ecart: 2, mots: 1 });
+  assert.equal(rangSuggestion(pate, 'paté').ecart, 1);
+  assert.equal(rangSuggestion(pate, 'pâté').ecart, 0);
   assert.deepEqual(rangSuggestion(pates, 'pates'), { rang: 0, ecart: 0, mots: 1 });
   assert.deepEqual(rangSuggestion(pates, 'pâtes'), { rang: 0, ecart: 0, mots: 1 });
   // « pâte », « pate » : les pâtes et les pâtes à tarte d'abord ; la première ne bouge pas en finissant le mot.
