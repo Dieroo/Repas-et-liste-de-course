@@ -642,6 +642,13 @@ function creerCarteNotifications(ctx) {
   };
 }
 
+let versNotifications = false;
+
+/** Appelé par le lien « 🔔 Être prévenu sur votre téléphone › » de Demandes : la prochaine ouverture de Réglages va à la carte « 🔔 Notifications ». */
+export function ouvrirSurNotifications() {
+  versNotifications = true;
+}
+
 export function creer(ctx) {
   let courant = ctx;
   const carteProjetClaude = creerCarteProjetClaude(ctx);
@@ -650,7 +657,9 @@ export function creer(ctx) {
   // Venu du lien « 🔔 Être prévenu sur votre téléphone › » de l'écran Demandes : une seule fois, la carte « 🔔
   // Notifications » défile en haut et son titre reçoit le focus. Après l'image suivante : `monter` a déjà remis le
   // défilement et le focus de la zone.
-  if (ctx.routePrecedente === 'demandes') {
+  const depuisLien = versNotifications;
+  versNotifications = false;
+  if (depuisLien && ctx.routePrecedente === 'demandes') {
     requestAnimationFrame(() => {
       const { titre } = carteNotifications;
       if (!titre.isConnected) return;

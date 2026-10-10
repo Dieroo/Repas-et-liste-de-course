@@ -3251,7 +3251,8 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
 /* Sous le texte du plat (vignette de 56 px, marges de la carte) ; 48 px de haut. */
 .ligne-demande .bouton-retirer-demande {
   align-self: flex-start;
-  margin: -6px 0 6px 64px;
+  margin: -6px 0 6px min(64px, 12vw);
+  white-space: nowrap;
 }
 
 /* Titre rejoint par le focus (ligne retirée, plus rien à traiter), sans contour. */

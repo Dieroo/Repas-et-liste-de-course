@@ -8,6 +8,7 @@
 // qui disparaît pendant qu'elle a le focus le passe au lien de la ligne suivante, sinon de la précédente, sinon au
 // titre (ou à « Aucune demande »).
 import { el, etatVide } from './dom.js';
+import { ouvrirSurNotifications } from './reglages.js';
 import { copier } from './presse-papiers.js';
 import { vignetteDuPlat } from './plats.js';
 import { nomDe } from './compat.js';
@@ -76,7 +77,9 @@ export function creer(ctx) {
 
   const titre = el('h1', { tabindex: '-1' }, 'Demandes');
   const sousTitre = el('p', { class: 'sous-titre', hidden: true });
-  const lienNotifications = el('a', { class: 'lien-fiche lien-notifications', href: '#/reglages', hidden: true },
+  const lienNotifications = el('a', {
+    class: 'lien-fiche lien-notifications', href: '#/reglages', hidden: true, onclick: () => ouvrirSurNotifications(),
+  },
     el('span', { 'aria-hidden': 'true' }, '🔔\u00A0'), 'Être prévenu sur votre téléphone ›');
   const contenu = el('div', { class: 'contenu-demandes' });
 

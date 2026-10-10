@@ -519,7 +519,9 @@ const actions = {
     if (demanderRecette) {
       const demande = demandeDeRecette(resultat.plat.id, email);
       insererDemande(demande);
-      prevenirDemande(demande.id, 'recette', resultat.plat, envoi);
+      const jeton = Symbol(demande.id);
+      jetonsDemandes.set(demande.id, jeton);
+      prevenirDemande(demande.id, 'recette', resultat.plat, envoi, jeton);
     }
     annoncer(demanderRecette
       ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée.`
@@ -1031,7 +1033,9 @@ const actions = {
     ecrire(envoi, echec);
     verrousDemandes.set(preparation.id, Date.now());
     insererDemande(preparation);
-    prevenirDemande(preparation.id, preparation.donnees.type, plat, envoi);
+    const jeton = Symbol(preparation.id);
+    jetonsDemandes.set(preparation.id, jeton);
+    prevenirDemande(preparation.id, preparation.donnees.type, plat, envoi, jeton);
     rendre();
     annoncer('C’est demandé.', {
       action: { libelle: 'Annuler', faire: () => annulerDemande(preparation.id, apresAnnulation) },
@@ -1171,6 +1175,8 @@ const MESSAGE_SUJET_EXISTE = 'Les notifications étaient déjà activées sur un
 
 // Demandes touchées récemment sur ce téléphone : identifiant → heure du toucher (actions.demander).
 const verrousDemandes = new Map();
+/** Jeton du dernier geste par demande : un rappel de notification d'un geste annulé ou remplacé ne part jamais. */
+const jetonsDemandes = new Map();
 // Transaction du sujet ntfy en cours (double toucher sur « Activer », « Arrêter » ou « Annuler »).
 let sujetEnCours = false;
 // Notifications qui attendent la copie confirmée par le serveur (apresConfirmation) : { rappel, minuteur }.
@@ -1262,8 +1268,8 @@ function changerStatutDemande(id, statut) {
 /**
  * « Annuler » de « C’est demandé. » (vue « Repas et courses », appelée seulement par l'annonce) : retire la demande
  * qu'elle vient de créer, encore ouverte et créée par la personne connectée ; redessine, puis `apresAnnulation()`. Une
- * notification déjà partie n'est pas rattrapée ; une notification en attente (hors ligne) ne partira pas : la demande
- * n'est plus ouverte quand elle est examinée.
+ * notification déjà partie n'est pas rattrapée ; une notification en attente (hors ligne) ne partira jamais, même si
+ * la demande est rouverte ensuite (jeton du geste retiré : `jetonsDemandes`).
  */
 function annulerDemande(id, apresAnnulation) {
   if (!etat.utilisateur || roleCourant() === 'gestionnaire') return;
@@ -1279,6 +1285,7 @@ function annulerDemande(id, apresAnnulation) {
   }
   ecrire(envoi, echec);
   verrousDemandes.delete(id);
+  jetonsDemandes.delete(id);
   changerStatutDemande(id, 'traitee');
   rendre();
   if (typeof apresAnnulation === 'function') apresAnnulation();
@@ -1292,7 +1299,7 @@ function lienApp(ancre) {
 /**
  * Prévient le gestionnaire d'une demande créée sur ce téléphone (`envoi` : promesse du lot qui l'écrit), au plus deux
  * envois, sans rien écrire dans Firestore (CLAUDE.md §7 ; plan T2e §5.3, §5.4). Chaque tentative relit tout au moment
- * où elle part : même compte connecté, sujet valide, demande encore ouverte et utile, nom du plat actuel.
+ * où elle part : même geste (`jeton`, ni annulé ni remplacé), même compte connecté, sujet valide, demande encore ouverte et utile, nom du plat actuel.
  * - En ligne : envoi tout de suite, sans attendre l'accusé du serveur. Seulement si ce premier envoi n'a pas trouvé de
  *   réseau, une seconde et dernière tentative à l'accusé du serveur (un 429, un 4xx ou un 5xx ne sont pas retentés).
  * - Hors ligne : une seule tentative, à l'accusé du serveur.
@@ -1301,12 +1308,12 @@ function lienApp(ancre) {
  * aucune notification (l'échec est déjà annoncé). Rien n'est accroché à l'événement `online` ; app fermée avant
  * l'accusé : notification perdue (la demande, elle, part et s'affiche).
  */
-function prevenirDemande(id, type, plat, envoi) {
+function prevenirDemande(id, type, plat, envoi, jeton) {
   const uid = etat.utilisateur?.uid;
   const platId = plat?.id;
   if (!uid || typeof platId !== 'string') return;
   const tenter = () => {
-    if (etat.utilisateur?.uid !== uid) return Promise.resolve(null);
+    if (etat.utilisateur?.uid !== uid || jetonsDemandes.get(id) !== jeton) return Promise.resolve(null);
     const sujet = sujetCourant();
     if (!sujetValide(sujet)) return Promise.resolve(null);
     const { actifs } = platsSepares();
@@ -1372,6 +1379,7 @@ function oublierRappels() {
   for (const { minuteur } of rappelsConfirmation) clearTimeout(minuteur);
   rappelsConfirmation = [];
   verrousDemandes.clear();
+  jetonsDemandes.clear();
 }
 
 /**
