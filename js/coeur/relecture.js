@@ -3,7 +3,7 @@
 // qu'une modification en cours est enregistrée. Logique pure : ni DOM ni Firebase.
 // Une relecture ne touche qu'aux marqueurs de précaution (MARQUEURS_PRECAUTION) : jamais aux quantités, unités, noms,
 // étapes ni versions. N'importe ni paquet.js, ni claude.js, ni edition.js (qui l'importent) : pas de cycle.
-import { slug } from './slug.js';
+import { cleProduit, slug } from './slug.js';
 import {
   CASES_REPERES, IMPLICATIONS, MARQUEURS_PRECAUTION, VERSION_REPERES, VOCABULAIRES, code, estObjet, estRelue, liste,
   libelleRepere, marqueursEffectifs, texte,
@@ -46,19 +46,14 @@ function propre(valeur) {
 
 // ——— Même produit ———
 
-/** Mots d'un produit, chacun sans `s` ni `x` final (« pommes de terre » → pomme, de, terre ; « œufs » → oeuf). */
-function motsSinguliers(produit) {
-  return slug(produit).split('-').filter(Boolean).map((mot) => (mot.length > 2 ? mot.replace(/[sx]$/, '') : mot));
-}
-
 /**
- * Vrai si deux noms désignent le même produit : comparés en slug (casse, accents, tirets ignorés), un `s` ou un `x`
- * final toléré sur chaque mot, dans les deux sens (« pommes de terre » = « pomme de terre », « œufs » = « oeuf »).
+ * Vrai si deux noms désignent le même produit : même clé (slug.js › cleProduit : casse, accents, tirets ignorés, un
+ * `s` ou un `x` final toléré sur chaque mot, dans les deux sens : « pommes de terre » = « pomme de terre », « œufs » =
+ * « oeuf »).
  */
 export function memeProduit(a, b) {
-  const motsA = motsSinguliers(a);
-  const motsB = motsSinguliers(b);
-  return motsA.length > 0 && motsA.length === motsB.length && motsA.every((mot, i) => mot === motsB[i]);
+  const cle = cleProduit(a);
+  return cle !== '' && cle === cleProduit(b);
 }
 
 // ——— Plats à relire ———

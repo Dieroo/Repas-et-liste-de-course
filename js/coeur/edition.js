@@ -1,14 +1,19 @@
 // Écran « Modifier » une recette : libellés, nature d'un ingrédient, cases « Repères » (T2c-2), catalogue des produits
-// connus, saisie d'un ingrédient, comparaison et préparation de l'enregistrement. Logique pure : ni DOM ni Firebase.
+// connus (ceux du foyer, puis les produits courants, T3-0), saisie d'un ingrédient, comparaison et préparation de
+// l'enregistrement. Logique pure : ni DOM ni Firebase.
 import { slug } from './slug.js';
 import { APPAREILS, NOM_MAX, statutDe, typeDe } from './plats.js';
 import { FORMAT, validerPaquet } from './paquet.js';
 import {
-  CASES_REPERES, VIANDES, VOCABULAIRES, estRelue, marqueursEffectifs,
+  CASES_REPERES, MARQUEURS_PRECAUTION, VIANDES, VOCABULAIRES, estRelue, marqueursEffectifs,
 } from './vocabulaire.js';
 import { reporterReperes } from './relecture.js';
 import { reperesAttendus } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
+import {
+  chercheur, connuDuFoyer, elementsDuDictionnaire, formesDe, motDeNature, motDeRepere, natureDe,
+  reconnaitre as reconnaitreProduit,
+} from './produits.js';
 
 // ——— Libellés (ordre d'affichage = ordre des clés) ———
 
@@ -102,14 +107,9 @@ function copier(valeur) {
 
 // ——— Nature d'un ingrédient ———
 
-/** 'viande' | 'poisson' | 'legume' | 'autre', d'après les marqueurs. */
-export function natureDe(ingredient) {
-  const marqueurs = Array.isArray(ingredient?.marqueurs) ? ingredient.marqueurs : [];
-  if (marqueurs.some((m) => VIANDES.includes(m))) return 'viande';
-  if (marqueurs.some((m) => POISSONS.includes(m))) return 'poisson';
-  if (marqueurs.includes('legume')) return 'legume';
-  return 'autre';
-}
+// 'viande' | 'poisson' | 'legume' | 'autre', d'après les marqueurs : déplacé dans produits.js (T3-0), toujours
+// importable d'ici.
+export { natureDe };
 
 /**
  * Nouvel ingrédient de la nature choisie. Seuls les marqueurs de nature sont remplacés (laitier, féculent, œuf…
@@ -233,12 +233,14 @@ function natureAnnoncee(attendus) {
  *   noix, du café, du miel, du tofu ; null si le nom ne dit pas ce que c'est, « tartare de saumon ») et `reperes`
  *   proposés cochés (reperesProposes, filtrés par `surveilles`) ;
  * - produit connu du catalogue : sa nature vient du catalogue (`nature: null`) ; seuls ses repères de préparation sont
- *   proposés (« jambon cru » → cru).
+ *   proposés (« jambon cru » → cru), sauf pour un produit du foyer trouvé par une autre écriture (voir produitDuNom).
+ * `dictionnaire` (T3-0) : un produit courant reconnu (produits.js › reconnaitre) compte comme connu.
  * → { nature, reperes } ou null (rien à proposer).
  */
-export function natureProposee(produit, catalogue = [], { surveilles = null } = {}) {
-  if (produitConnu(catalogue, produit)) {
-    const reperes = reperesProposes(produit, { surveilles, connu: true });
+export function natureProposee(produit, catalogue = [], { surveilles = null, dictionnaire = false } = {}) {
+  const { connu, nomConnu } = produitDuNom(produit, catalogue, dictionnaire);
+  if (connu) {
+    const reperes = reperesProposes(produit, { surveilles, connu: nomConnu });
     return reperes.length ? { nature: null, reperes } : null;
   }
   const nature = natureAnnoncee(reperesAttendus(produit));
@@ -326,32 +328,100 @@ export function catalogueProduits(plats) {
   return catalogue;
 }
 
+const memoireAvecDictionnaire = new WeakMap();
+
 /**
- * Suggestions pour la saisie (casse et accents ignorés) : d'abord le nom exact, puis les noms qui commencent par
- * la saisie, puis ceux dont un mot commence par la saisie, puis ceux qui la contiennent.
+ * Catalogue des suggestions de « Modifier » (T3-0) : celui du foyer (catalogueProduits), puis les produits courants
+ * (produits.js, triés par nom) dont ni le nom ni une autre écriture ne sont connus du foyer (produits.js ›
+ * connuDuFoyer : même slug, ou même cleProduit hors homographes). Un produit du foyer n'y est jamais en double et
+ * l'emporte en bloc. Éléments des produits courants : `origine: 'dictionnaire'`, `id`, `nomCourant`, `alias`, sans
+ * quantité. Seulement pour `suggestions` : la reconnaissance part du catalogue du foyer seul. Même tableau `plats` →
+ * même résultat (identité), sans recalcul.
  */
-export function suggestions(catalogue, saisie, { max = 4 } = {}) {
-  const cherche = slug(saisie);
-  if (!cherche || !Array.isArray(catalogue)) return [];
-  const rangs = [];
-  for (const element of catalogue) {
-    const nom = slug(element?.produit);
-    let rang = -1;
-    if (nom === cherche) rang = 0;
-    else if (nom.startsWith(cherche)) rang = 1;
-    else if (nom.includes(`-${cherche}`)) rang = 2;
-    else if (nom.includes(cherche)) rang = 3;
-    if (rang >= 0) rangs.push({ element, rang });
-  }
-  // Tri stable : l'ordre du catalogue (alphabétique) est gardé à rang égal.
-  return rangs.sort((a, b) => a.rang - b.rang).slice(0, Math.max(0, max)).map((r) => r.element);
+export function catalogueAvecDictionnaire(plats) {
+  if (Array.isArray(plats) && memoireAvecDictionnaire.has(plats)) return memoireAvecDictionnaire.get(plats);
+  const foyer = catalogueProduits(plats);
+  const courants = elementsDuDictionnaire()
+    .filter((element) => !formesDe(element).some((forme) => connuDuFoyer(forme, foyer)));
+  const catalogue = [...foyer, ...courants];
+  if (Array.isArray(plats)) memoireAvecDictionnaire.set(plats, catalogue);
+  return catalogue;
 }
 
-/** Élément du catalogue pour ce produit (casse et accents ignorés), ou null. */
-export function produitConnu(catalogue, produit) {
+/**
+ * Suggestions pour la saisie (casse et accents ignorés) : d'abord le nom exact (au pluriel près), puis les noms qui
+ * commencent par la saisie, puis ceux dont un mot commence par la saisie, puis ceux qui la contiennent (produits du
+ * foyer seulement). Les produits courants (catalogueAvecDictionnaire) sont cherchés par leur nom et leurs autres
+ * écritures (« steak h » → « bœuf haché ») et rendus sous leur nom courant (« oignons » → « oignon jaune » d'abord).
+ * À rang égal : un nom dont les accents s'accordent avec la saisie (« pâté de campagne » avant « pâtes » pour « pâté »,
+ * produits.js › chercheur), puis le foyer avant les produits courants ; parmi ceux-ci, la forme trouvée la plus courte
+ * en mots (la première suggestion ne bouge pas entre « pât » et « pâtes »), puis l'ordre du catalogue (alphabétique) ;
+ * parmi ceux du foyer, l'ordre du catalogue.
+ */
+export function suggestions(catalogue, saisie, { max = 4 } = {}) {
+  const rangDe = chercheur(saisie);
+  if (!rangDe || !Array.isArray(catalogue)) return [];
+  const trouves = [];
+  catalogue.forEach((element, position) => {
+    const rang = rangDe(element);
+    if (!rang) return;
+    const courant = element.origine === 'dictionnaire';
+    trouves.push({ element, position, rang: rang.rang, ecart: rang.ecart, courant: Number(courant), mots: courant ? rang.mots : 0 });
+  });
+  return trouves.sort((a, b) => a.rang - b.rang || a.ecart - b.ecart || a.courant - b.courant || a.mots - b.mots
+    || a.position - b.position)
+    .slice(0, Math.max(0, max)).map((r) => r.element);
+}
+
+/**
+ * Élément du catalogue pour ce produit (casse et accents ignorés), ou null. `reconnaitre` (T3-0) : par produits.js ›
+ * reconnaitre (foyer exact, foyer au pluriel près, puis produits courants ; élément avec `origine`) ; null pour un nom
+ * ambigu (« pâte » seul). Sans l'option, slug exact, comme avant.
+ */
+export function produitConnu(catalogue, produit, { reconnaitre = false } = {}) {
+  if (reconnaitre) return reconnaitreProduit(produit, { catalogue })?.element ?? null;
   const cherche = slug(produit);
   if (!cherche || !Array.isArray(catalogue)) return null;
   return catalogue.find((element) => slug(element?.produit) === cherche) ?? null;
+}
+
+/**
+ * Produit connu pour ce nom (produitConnu, option `reconnaitre` selon `dictionnaire`) et `nomConnu` : vrai si les
+ * repères que le nom annonce sont déjà décidés par ce produit (seuls ceux de préparation sont alors reproposés, voir
+ * reperesProposes). Faux pour un produit du foyer trouvé par une autre écriture (produits.js › reconnaitre,
+ * `autreEcriture` : pluriel, autre nom du même produit courant) : « noix », quand le foyer n'a qu'un « cerneau de
+ * noix » sans repère, garde `fruit_coque`, comme s'il était jamais vu (plus prudent tout de suite).
+ * → { connu: element | null, nomConnu }
+ */
+function produitDuNom(produit, catalogue, dictionnaire) {
+  if (!dictionnaire) {
+    const connu = produitConnu(catalogue, produit);
+    return { connu, nomConnu: Boolean(connu) };
+  }
+  const trouve = reconnaitreProduit(produit, { catalogue });
+  const connu = trouve?.element ?? null;
+  return { connu, nomConnu: Boolean(connu) && !trouve.autreEcriture };
+}
+
+/**
+ * Ligne « ✓ Produit connu » sous le nom d'un nouvel ingrédient reconnu par les produits courants (T3-0) : le mot de sa
+ * nature (produits.js › motDeNature ; absent pour un autre produit), son rayon, puis ses repères de précaution, en mots
+ * courts et sans virgule (produits.js › motDeRepere : « caféine », « fruits à coque »), réunis par « et », « à
+ * vérifier » (« ✓ Produit connu : produit laitier · Fromages · au lait cru, à vérifier »). Jamais « dictionnaire » ni
+ * « catalogue ».
+ */
+export function texteProduitConnu(element) {
+  const marqueurs = marqueursDe(element?.marqueurs);
+  const mot = motDeNature(marqueurs);
+  const morceaux = [mot ? `✓ Produit connu\u00A0: ${mot}` : '✓ Produit connu'];
+  if (Object.hasOwn(LIBELLES_RAYON, element?.rayon ?? '')) morceaux.push(LIBELLES_RAYON[element.rayon]);
+  const reperes = [...new Set(marqueurs.filter((m) => MARQUEURS_PRECAUTION.includes(m))
+    .map((m) => motDeRepere(m, marqueurs)).filter(Boolean))];
+  if (reperes.length) {
+    const liste = reperes.length > 1 ? `${reperes.slice(0, -1).join(', ')} et ${reperes[reperes.length - 1]}` : reperes[0];
+    morceaux.push(`${liste}, à vérifier`);
+  }
+  return morceaux.join('\u00A0· ');
 }
 
 // ——— Saisie d'un ingrédient (feuille) ———
@@ -370,14 +440,17 @@ function quantite(valeur) {
  * l'ingrédient modifié (même produit), sinon ceux du produit connu (sans ses repères de préparation), sinon aucun ;
  * la nature choisie appliquée ; puis les repères que le nom annonce (reperesProposes, filtrés par `surveilles`) : tous
  * pour un produit jamais vu, ceux de préparation pour un produit connu, aucun pour l'ingrédient modifié (il montre ce
- * qu'il porte). `source` : base retenue, null pour un produit jamais vu sans nature choisie.
+ * qu'il porte). `source` : base retenue, null pour un produit jamais vu sans nature choisie. `dictionnaire` (T3-0) : un
+ * produit courant reconnu est un produit connu comme un autre (ses repères de précaution suivent, ceux de préparation
+ * restent proposés d'après le nom : « jambon cru » → cru) ; un produit du foyer trouvé par une autre écriture garde
+ * tous les repères que le nom annonce (produitDuNom).
  * → { source, marqueurs, proposes }
  */
-function depart(produit, { catalogue, liste, index, choisie, surveilles }) {
+function depart(produit, { catalogue, liste, index, choisie, surveilles, dictionnaire }) {
   const cle = slug(produit);
   const modifie = Number.isInteger(index) && estObjet(liste[index]) && slug(liste[index].produit) === cle
     ? liste[index] : null;
-  const connu = modifie ? null : produitConnu(catalogue, produit);
+  const { connu, nomConnu } = modifie ? { connu: null, nomConnu: false } : produitDuNom(produit, catalogue, dictionnaire);
   // Produit connu (pas l'ingrédient modifié) : ses repères de préparation ne suivent jamais.
   const base = modifie ?? (connu ? { ...connu, marqueurs: (Array.isArray(connu.marqueurs) ? connu.marqueurs : [])
     .filter((m) => !MARQUEURS_PREPARATION.includes(m)) } : null);
@@ -385,7 +458,7 @@ function depart(produit, { catalogue, liste, index, choisie, surveilles }) {
   if (choisie) source = appliquerNature(base ?? { marqueurs: [] }, choisie);
   else if (base) source = copier(base);
   const marqueurs = marqueursDe(source?.marqueurs).filter((m) => VOCABULAIRES.marqueurs.includes(m));
-  const proposes = modifie ? [] : reperesProposes(produit, { surveilles, connu: Boolean(connu) });
+  const proposes = modifie ? [] : reperesProposes(produit, { surveilles, connu: nomConnu });
   const effectifs = marqueursEffectifs({ marqueurs });
   for (const marqueur of proposes) if (!effectifs.has(marqueur) && !marqueurs.includes(marqueur)) marqueurs.push(marqueur);
   return { source, marqueurs, proposes };
@@ -396,12 +469,14 @@ function depart(produit, { catalogue, liste, index, choisie, surveilles }) {
  * part, voir `depart`) : de quoi dessiner les cases (casesPour) sans écart avec ce qui sera enregistré.
  * `champs` : { produit, nature? } ; options comme ingredientSaisi. → { marqueurs, proposes } ou null (nom vide).
  */
-export function marqueursDeDepart(champs, { catalogue = [], ingredients = [], index = null, surveilles = null } = {}) {
+export function marqueursDeDepart(champs, {
+  catalogue = [], ingredients = [], index = null, surveilles = null, dictionnaire = false,
+} = {}) {
   const produit = reduire(champs?.produit).toLocaleLowerCase('fr-FR');
   if (!slug(produit)) return null;
   const choisie = Object.hasOwn(NATURES, champs?.nature ?? '') ? champs.nature : null;
   const { marqueurs, proposes } = depart(produit, {
-    catalogue, liste: Array.isArray(ingredients) ? ingredients : [], index, choisie, surveilles,
+    catalogue, liste: Array.isArray(ingredients) ? ingredients : [], index, choisie, surveilles, dictionnaire,
   });
   return { marqueurs, proposes };
 }
@@ -421,9 +496,13 @@ function changementsDe(reperes) {
  * `depart` : produit jamais vu, ou repères de préparation d'un produit connu, filtrés par `surveilles`).
  * `ingredients` : ceux de la recette en cours ; `index` : position de l'ingrédient modifié (null pour un ajout) ;
  * `surveilles` : marqueurs que surveille une règle active (regles.js › marqueursSurveilles ; absent, tous).
+ * `dictionnaire` (T3-0) : un produit courant reconnu (produits.js › reconnaitre) compte comme un produit connu ; le nom
+ * tapé est gardé tel quel, jamais de quantité préremplie, aucun champ de plus dans l'ingrédient.
  * → { ingredient } ou { erreurs: { produit?, qte?, unite?, nature? } }
  */
-export function ingredientSaisi(champs, { catalogue = [], ingredients = [], index = null, surveilles = null } = {}) {
+export function ingredientSaisi(champs, {
+  catalogue = [], ingredients = [], index = null, surveilles = null, dictionnaire = false,
+} = {}) {
   const erreurs = {};
   const produit = reduire(champs?.produit).toLocaleLowerCase('fr-FR');
   const cle = slug(produit);
@@ -445,7 +524,7 @@ export function ingredientSaisi(champs, { catalogue = [], ingredients = [], inde
   const choisie = Object.hasOwn(NATURES, champs?.nature ?? '') ? champs.nature : null;
   let debut = null;
   if (!erreurs.produit) {
-    debut = depart(produit, { catalogue, liste, index, choisie, surveilles });
+    debut = depart(produit, { catalogue, liste, index, choisie, surveilles, dictionnaire });
     if (!debut.source) erreurs.nature = 'Choisissez\u00A0: viande, poisson, légume ou autre.';
   }
   if (Object.keys(erreurs).length) return { erreurs };

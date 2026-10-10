@@ -2262,6 +2262,37 @@ select.champ {
 
 .aide-forte { font-weight: 600; }
 
+/* Ligne « ✓ Produit connu : féculent · Épicerie salée [Changer] » d'un ingrédient reconnu parmi les produits courants.
+   Nouvel ingrédient : sous les suggestions, hauteur réservée (trois lignes) même vide, pour que rien ne bouge
+   pendant la frappe ; seul « Changer » est masqué. Ingrédient de la recette : vide, la ligne ne prend pas de place. */
+.ligne-connu {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* Trois lignes de texte réservées (taille du texte comprise) : à 360 px, un produit avec un repère de précaution
+     (« · au lait cru, à vérifier ») en prend trois. */
+  min-height: max(48px, calc(3 * 1.35 * 0.875rem));
+}
+
+.ligne-connu-texte {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.bouton.bouton-changer {
+  flex: none;
+  /* Marges réduites : la place gagnée va au texte (trois lignes au plus, texte agrandi compris). */
+  padding: 0 6px;
+  color: var(--accent);
+}
+
+.ligne-connu-vide .bouton-changer { visibility: hidden; }
+
+.ligne-connu-repliable.ligne-connu-vide { min-height: 0; }
+
+.ligne-connu-repliable.ligne-connu-vide .bouton-changer { display: none; }
+
 /* « Plus de précisions » : repliées par défaut. */
 .depliable summary {
   display: flex;
@@ -3290,20 +3321,6 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
 .etapes-ntfy > li > p:first-child::before {
   content: counter(etape-ntfy) ". ";
   font-weight: 600;
-}
-
-/* « Si rien ne s’ouvre : [Copier le sujet], puis dans ntfy… » : le bouton dans la phrase, 48 px de haut, collé à la
-   virgule qui le suit. */
-.etape-copier { line-height: 1.6; }
-
-.etape-copier .insecable { white-space: nowrap; }
-
-.bouton.bouton-copier-sujet {
-  min-height: 48px;
-  margin: 4px 0;
-  padding: 0 14px;
-  vertical-align: middle;
-  font-size: 0.9375rem;
 }
 
 /* Le sujet en entier, police à chasse fixe du système, coupé où il faut. */
