@@ -17,8 +17,11 @@ export function estDansCorbeille(plat) {
   return estObjet(plat) && estObjet(plat.corbeille);
 }
 
-/** Date tirée d'une Date, d'un horodatage Firestore (`toDate()` ou `{ seconds }`) ou d'un texte ISO ; null sinon. */
-function versDate(valeur) {
+/**
+ * Date tirée d'une Date, d'un horodatage Firestore (`toDate()` ou `{ seconds }`) ou d'un texte ISO ; null sinon.
+ * Exportée pour coeur/demandes.js (T2e).
+ */
+export function versDate(valeur) {
   let date = null;
   if (valeur instanceof Date) date = valeur;
   else if (estObjet(valeur) && typeof valeur.toDate === 'function') {
@@ -104,8 +107,11 @@ export function demandesDesPlats(platIds, demandes) {
   return resultat;
 }
 
-/** « 9 octobre », « 1er mars » ; l'année s'ajoute si elle n'est pas celle de `maintenant`. Date locale. */
-function jourLisible(date, maintenant) {
+/**
+ * « 9 octobre », « 1er mars » ; l'année s'ajoute si elle n'est pas celle de `maintenant`. Date locale. Exportée pour
+ * coeur/demandes.js (T2e).
+ */
+export function jourLisible(date, maintenant) {
   const jour = date.getDate() === 1 ? '1er' : String(date.getDate());
   const annee = date.getFullYear() === maintenant.getFullYear() ? '' : ` ${date.getFullYear()}`;
   return `${jour} ${MOIS[date.getMonth()]}${annee}`;

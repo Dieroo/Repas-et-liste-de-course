@@ -1,5 +1,9 @@
 // Fiche d'un plat : photo, statut, ingrédients, étapes, cuisson, conservation ; en bas, « Mettre à la corbeille ».
 // Un plat de la corbeille (fiche ouverte par un lien) se lit sans rien pouvoir y changer : seul « Remettre » agit.
+// Demandes (T2e) : dans la vue « Repas et courses », « 📬 Demander ma version » (ou « … pour <Prénom> ») sous une
+// version à créer ou à revoir, et « 📬 Demander la recette » sur un plat ⏳ ; une fois demandée, la phrase « 📬 Demandée
+// aujourd’hui. … » prend la place du bouton. Le gestionnaire (hors aperçu) lit « 📬 Demandée par <Prénom> le … », et
+// « Demander à Claude » vise d'abord la version demandée.
 import { el, pastille, annoncer } from './dom.js';
 import { choisirImage, preparerPhoto } from './photo.js';
 import { copier } from './presse-papiers.js';
@@ -15,6 +19,7 @@ import { stylesAttendus, marqueursSurveilles } from '../coeur/regles.js';
 import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 import { estDansCorbeille, platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
+import { dateDemande, etatDemande, texteDemandee } from '../coeur/demandes.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -291,14 +296,42 @@ function carteDouteux(plat, surveilles) {
     el('a', { class: 'lien-fiche', href: `#/modifier/${encodeURIComponent(plat.id)}` }, 'Modifier ›'));
 }
 
+/** Vrai pour un profil à qui aucune version ne convient encore (à créer ou à revoir) : sa version peut se demander. */
+const versionAFaire = (etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir';
+
 /**
- * Profil dont une version manque, dans l'ordre des profils : à créer ou à revoir d'abord, sinon à compléter (une
+ * Profil dont une version manque, dans l'ordre des profils : à créer ou à revoir et demandé d'abord (`demandes` :
+ * identifiants des profils dont la demande est ouverte et utile), puis à créer ou à revoir, sinon à compléter (une
  * version convient, il en manque d'un style attendu). → état de etatsCompat, ou null.
  */
-function versionAttendue(etats) {
-  return etats.find((etat) => etat.cas === 'aCreer' || etat.cas === 'aRevoir')
+function versionAttendue(etats, demandes = new Set()) {
+  return etats.find((etat) => versionAFaire(etat) && demandes.has(etat.profil.id))
+    ?? etats.find(versionAFaire)
     ?? etats.find((etat) => etat.cas === 'aCompleter')
     ?? null;
+}
+
+// Suites de la phrase « 📬 Demandée… » : une version (sauf hors ligne, avant le serveur : la phrase dit alors que la
+// demande partira au retour du réseau), la recette d'un plat ⏳ (toujours).
+const SUITE_VERSION = ' Elle apparaîtra ici dès qu’elle sera prête.';
+const SUITE_RECETTE = ' Vous pouvez aussi l’écrire vous-même.';
+// Clé du bloc « 📬 Demander la recette » ; celle d'une version est `profil:<id>`.
+const CLE_RECETTE = 'recette';
+
+/**
+ * Phrase « 📬 Demandée… » d'une demande ouverte (coeur/demandes.js › texteDemandee), suite comprise. `pourVersion` :
+ * « Elle apparaîtra ici dès qu’elle sera prête. » ; sinon « Vous pouvez aussi l’écrire vous-même. ».
+ */
+function phraseDemandee(demande, { pourVersion, horsLigne }) {
+  const base = texteDemandee(demande, { horsLigne });
+  if (!pourVersion) return `${base}${SUITE_RECETTE}`;
+  return dateDemande(demande).enAttente && horsLigne ? base : `${base}${SUITE_VERSION}`;
+}
+
+/** Ligne « 📬 Demandée par Adulte B le 9 octobre. » (gestionnaire) : qui a demandé, et quand ; jamais une adresse. */
+function ligneDemandee(demande, { profils, moi }) {
+  return el('p', { class: 'demande-etat' }, el('span', { 'aria-hidden': 'true' }, '📬\u00A0'),
+    texteDemandee(demande, { profils, moi, avecAuteur: true, horsLigne: !navigator.onLine }));
 }
 
 /**
@@ -387,15 +420,77 @@ export function creer(ctx) {
   const platCourant = () => (courant.tousLesPlats ?? courant.plats).find((plat) => plat.id === id);
   const aUnePhoto = (plat) => Boolean(plat?.vignette || photo?.image);
 
+  // « 📬 Demander ma version » / « 📬 Demander la recette » (vue « Repas et courses ») : un bloc par profil (clé
+  // `profil:<id>`) et un pour la recette (CLE_RECETTE), créé au premier besoin et gardé d'un rendu à l'autre (le focus
+  // reste sur le bouton ou sur la phrase). Après le toucher, la phrase « 📬 Demandée… » prend la place du bouton et
+  // reçoit le focus ; « Annuler » (annonce de l'app) remet le bouton et lui rend le focus.
+  const blocsDemande = new Map(); // clé → { noeud, bouton, libelle, phrase, texte }
+
+  function blocDemande(cle) {
+    let bloc = blocsDemande.get(cle);
+    if (bloc) return bloc;
+    const libelle = el('span', {});
+    const bouton = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', onclick: () => demander(cle) },
+      el('span', { 'aria-hidden': 'true' }, '📬'), libelle);
+    const texte = el('span', {});
+    const phrase = el('p', { class: 'demande-etat', tabindex: '-1' }, el('span', { 'aria-hidden': 'true' }, '📬\u00A0'), texte);
+    bloc = { noeud: el('div', { class: 'bloc-demande' }, bouton, phrase), bouton, libelle, phrase, texte };
+    blocsDemande.set(cle, bloc);
+    return bloc;
+  }
+
+  /** Textes du bloc, réécrits seulement s'ils changent (le lecteur d'écran ne relit pas une phrase inchangée). */
+  function ecrireBloc(bloc, { libelle = null, phrase = null }) {
+    if (libelle !== null && bloc.libelle.textContent !== libelle) bloc.libelle.textContent = libelle;
+    if (phrase !== null && bloc.texte.textContent !== phrase) bloc.texte.textContent = phrase;
+    bloc.bouton.hidden = libelle === null;
+    bloc.phrase.hidden = phrase === null;
+  }
+
+  /**
+   * « 📬 Demander… » : l'app écrit la demande, l'affiche tout de suite et redessine la fiche (la phrase remplace le
+   * bouton), puis annonce « C’est demandé. » avec « Annuler ». Rien n'est attendu.
+   */
+  function demander(cle) {
+    const bloc = blocsDemande.get(cle);
+    if (!bloc || typeof courant.actions?.demander !== 'function') return;
+    courant.actions.demander({
+      platId: id,
+      profilId: cle === CLE_RECETTE ? null : cle.slice('profil:'.length),
+      apresAnnulation: () => {
+        if (bloc.bouton.isConnected && !bloc.bouton.hidden) bloc.bouton.focus();
+      },
+    });
+    if (bloc.phrase.isConnected && !bloc.phrase.hidden) bloc.phrase.focus();
+  }
+
+  const optionsDemande = () => ({ demandes: courant.demandes ?? [], evaluer: courant.compat });
+
+  /**
+   * Demande de version de chaque profil à qui aucune version ne convient (coeur/demandes.js › etatDemande), une fois
+   * les demandes chargées : Map profilId → null | { possible, id } | { ouverte }.
+   */
+  function situationsDemande(plat, etats) {
+    if (!courant.demandesChargees || estDansCorbeille(plat)) return new Map();
+    return new Map(etats.filter(versionAFaire)
+      .map((etat) => [etat.profil.id, etatDemande(plat, etat.profil, optionsDemande())]));
+  }
+
+  /** Identifiants des profils dont la demande de version est ouverte et utile. */
+  const profilsDemandeurs = (situations) => new Set([...situations]
+    .filter(([, situation]) => situation?.ouverte)
+    .map(([profilId]) => profilId));
+
   /**
    * Texte copié par « Demander à Claude » : plat ⏳ → la recette, avec les versions des profils qui ont des règles ;
-   * plat dont une version manque pour un profil (versionAttendue) → ses versions seules (celles « à faire » : à
-   * créer, à revoir ou à compléter) ; sinon → une nouvelle recette, comme en T1b (avec les versions des profils qui
-   * ont des règles).
+   * plat dont une version manque pour un profil (versionAttendue : le profil qui l'a demandée d'abord) → ses versions
+   * seules (celles « à faire » : à créer, à revoir ou à compléter) ; sinon → une nouvelle recette, comme en T1b (avec
+   * les versions des profils qui ont des règles).
    */
   function demandeDuPlat(plat) {
     if (statutDe(plat) !== 'attente') {
-      const manque = versionAttendue(etatsCompat(plat, courant));
+      const etats = etatsCompat(plat, courant);
+      const manque = versionAttendue(etats, profilsDemandeurs(situationsDemande(plat, etats)));
       if (manque) return texteDemandeVariantes([plat], manque.profil);
     }
     return texteDemandeRecette(plat, { profils: courant.profils ?? [] });
@@ -526,8 +621,66 @@ export function creer(ctx) {
     // de la corbeille : toutes ses versions dans la simple liste « Versions », sans rien à demander.
     const etats = jete ? [] : etatsCompat(plat, courant);
     const versionsMontrees = new Set(etats.filter((e) => e.cas !== 'aCreer').map((e) => e.profil.id));
-    // Première version qui manque : le bouton unique « Demander à Claude » la demande (demandeDuPlat).
-    const versionManquante = gestionnaire && statut !== 'attente' ? versionAttendue(etats) : null;
+    // Demandes (T2e), une fois chargées : celle de chaque version à créer ou à revoir, et celle de la recette (⏳).
+    const situations = situationsDemande(plat, etats);
+    const situationRecette = courant.demandesChargees && !jete && statut === 'attente'
+      ? etatDemande(plat, null, optionsDemande())
+      : null;
+    // Première version qui manque (celle d'un profil qui l'a demandée d'abord) : le bouton unique « Demander à Claude »
+    // la demande (demandeDuPlat).
+    const versionManquante = gestionnaire && statut !== 'attente' ? versionAttendue(etats, profilsDemandeurs(situations)) : null;
+    const horsLigne = !navigator.onLine;
+    const auteurs = { profils: courant.profils ?? [], moi: courant.utilisateur?.email ?? courant.moi };
+
+    /**
+     * Sous une version à créer ou à revoir : vue « Repas et courses », le bouton « 📬 Demander ma version » ou la
+     * phrase « 📬 Demandée… » (bloc gardé) ; gestionnaire, la ligne « 📬 Demandée par … » d'une demande ouverte.
+     */
+    const demandeDeVersion = (etat) => {
+      const situation = situations.get(etat.profil.id);
+      if (!situation) return null;
+      if (gestionnaire) return situation.ouverte ? ligneDemandee(situation.ouverte, auteurs) : null;
+      const bloc = blocDemande(`profil:${etat.profil.id}`);
+      if (situation.ouverte) {
+        ecrireBloc(bloc, { phrase: phraseDemandee(situation.ouverte, { pourVersion: true, horsLigne }) });
+      } else {
+        const vous = estVous(etat.profil, { moi: courant.moi, role: courant.role });
+        ecrireBloc(bloc, { libelle: vous ? 'Demander ma version' : `Demander une version pour ${nomDe(etat.profil)}` });
+      }
+      return bloc.noeud;
+    };
+
+    /**
+     * Carte ⏳ « Recette à ajouter » : le gestionnaire la demande à Claude (avec « 📬 Demandée par … » si elle a été
+     * demandée) ; dans la vue « Repas et courses », « 📬 Demandée… » ou « 📬 Demander la recette ».
+     */
+    const carteRecetteAAjouter = () => {
+      let textes;
+      let bouton = null;
+      if (gestionnaire) {
+        textes = [
+          el('p', {}, 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'),
+          situationRecette?.ouverte ? ligneDemandee(situationRecette.ouverte, auteurs) : null,
+        ];
+      } else if (situationRecette?.ouverte) {
+        const bloc = blocDemande(CLE_RECETTE);
+        ecrireBloc(bloc, { phrase: phraseDemandee(situationRecette.ouverte, { pourVersion: false, horsLigne }) });
+        textes = [bloc.phrase];
+      } else if (situationRecette?.possible) {
+        const bloc = blocDemande(CLE_RECETTE);
+        ecrireBloc(bloc, { libelle: 'Demander la recette' });
+        textes = [el('p', {}, 'Vous pouvez la demander, ou l’écrire vous-même.')];
+        bouton = bloc.bouton;
+      } else {
+        // Demandes encore en chargement, ou rien à demander.
+        textes = [el('p', {}, 'Vous pouvez l’écrire vous-même.')];
+      }
+      return el('section', { class: 'carte' },
+        el('div', { class: 'carte-ligne' },
+          pastille('⏳', 'ocre'),
+          el('div', { class: 'carte-texte' }, el('h2', {}, 'Recette à ajouter'), ...textes)),
+        gestionnaire ? actionsRecette : bouton);
+    };
     const ingredients = plat.ingredients ?? [];
     const etapes = plat.etapes ?? [];
     const cuissons = plat.cuisson ?? [];
@@ -542,7 +695,9 @@ export function creer(ctx) {
     // Mise à jour des notes d'abord : si ses lignes sont reconstruites, l'élément qui reprend le focus est le nouveau.
     if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
-    const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud]
+    const blocs = [...blocsDemande.values()];
+    const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud,
+      ...blocs.flatMap((bloc) => [bloc.bouton, bloc.phrase])]
       .some((n) => n.contains(document.activeElement))
       ? document.activeElement
       : null;
@@ -579,8 +734,9 @@ export function creer(ctx) {
       jete ? carteJete : brouillon ? carteReprise : lienModifier,
 
       // Version qui manque (gestionnaire) : « Demander à Claude » se place sous la première, et demande sa version.
+      // Avant lui, la demande de la version (« 📬 Demander ma version », « 📬 Demandée… »).
       ...etats.map((etat) => sectionVersion(etat, plat, { moi: courant.moi, role: courant.role },
-        etat === versionManquante ? actionsRecette : null)),
+        [demandeDeVersion(etat), etat === versionManquante ? actionsRecette : null])),
 
       // « 🧸 Pour <Enfant> » : précautions selon l'âge, après les versions ; gardée sur un plat de la corbeille, à titre
       // d'information (le lien mène à l'écran de l'enfant, rien ne change sur le plat).
@@ -589,18 +745,7 @@ export function creer(ctx) {
       // Ingrédient dont le nom annonce un repère qu'une règle surveille (« jambon cru » sans le repère cru) : gestionnaire.
       gestionnaire && statut !== 'attente' ? carteDouteux(plat, courant.surveilles ?? marqueursSurveilles(courant.profils)) : null,
 
-      statut === 'attente' && !jete
-        ? el('section', { class: 'carte' },
-          el('div', { class: 'carte-ligne' },
-            pastille('⏳', 'ocre'),
-            el('div', { class: 'carte-texte' },
-              el('h2', {}, 'Recette à ajouter'),
-              el('p', {}, gestionnaire
-                ? 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'
-                : 'Elle a été demandée. Vous pouvez aussi l’écrire vous-même.'),
-            )),
-          gestionnaire ? actionsRecette : null)
-        : null,
+      statut === 'attente' && !jete ? carteRecetteAAjouter() : null,
 
       // Absente tant qu'aucun profil n'existe ; aussi pour un plat ⏳ (le nom suffit pour donner un avis).
       (courant.profils ?? []).length && !jete ? notes.noeud : null,
@@ -647,8 +792,15 @@ export function creer(ctx) {
       sansPreneur ? carteSansPreneur.noeud : null,
       !jete && !sansPreneur ? boutonCorbeille : null,
     ].filter(Boolean));
-    if (focusGarde?.isConnected) {
+    // Un bloc de demande montre le bouton ou la phrase : si l'un a laissé sa place à l'autre (demande faite, annulée,
+    // ou close ailleurs), le focus passe à l'autre.
+    const visible = (noeud) => noeud.isConnected && !noeud.hidden;
+    const blocFocus = focusGarde ? blocs.find((bloc) => bloc.bouton === focusGarde || bloc.phrase === focusGarde) : null;
+    if (focusGarde && visible(focusGarde)) {
       if (document.activeElement !== focusGarde) focusGarde.focus({ preventScroll: true });
+    } else if (blocFocus) {
+      const autre = focusGarde === blocFocus.bouton ? blocFocus.phrase : blocFocus.bouton;
+      if (visible(autre)) autre.focus({ preventScroll: true });
     } else if (focusGarde === boutonCorbeille || focusGarde === carteSansPreneur.bouton) {
       // La carte « Personne n'en veut » a remplacé le bouton discret (ou l'inverse) : le focus passe à l'autre.
       const autre = focusGarde === boutonCorbeille ? carteSansPreneur.bouton : boutonCorbeille;
@@ -666,17 +818,19 @@ export function creer(ctx) {
   toutDessiner();
   fichesOuvertes.add(majBoutonsPhoto);
 
+  // Venue de l'écran Demandes (gestionnaire) : le lien retour y ramène ; sinon, à la liste des plats.
+  const origine = ctx.routePrecedente === 'demandes' && ctx.role === 'gestionnaire' ? 'demandes' : 'plats';
   const retour = el('a', {
     class: 'retour',
-    href: '#/plats',
+    href: `#/${origine}`,
     onclick: (evenement) => {
-      // Venu de la liste : on y revient dans l'historique, pour que le geste retour d'Android reste naturel.
-      if (courant.routePrecedente === 'plats' && history.length > 1) {
+      // Venu de cet écran-là : on y revient dans l'historique, pour que le geste retour d'Android reste naturel.
+      if (courant.routePrecedente === origine && history.length > 1) {
         evenement.preventDefault();
         history.back();
       }
     },
-  }, el('span', { 'aria-hidden': 'true' }, '‹'), 'Plats');
+  }, el('span', { 'aria-hidden': 'true' }, '‹'), origine === 'demandes' ? 'Demandes' : 'Plats');
 
   return {
     noeud: el('div', { class: 'vue fiche' }, retour, figure, actionsPhoto, contenu),

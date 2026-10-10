@@ -490,7 +490,8 @@ function ouvrirAjout(ctx, { ouvrirCorbeille = null } = {}) {
     },
     el('label', { class: 'etiquette-champ', for: 'nom-du-plat' }, 'Nom du plat'),
     entree,
-    el('p', { class: 'aide' }, ctx.roleReel === 'gestionnaire'
+    // Rôle affiché (T2e) : en aperçu « Repas et courses », la recette est demandée comme pour l'autre membre.
+    el('p', { class: 'aide' }, ctx.role === 'gestionnaire'
       ? 'Il apparaîtra avec ⏳ jusqu’à l’ajout de sa recette.'
       : 'Il apparaîtra avec ⏳\u00A0: la recette sera demandée.'),
     erreur,

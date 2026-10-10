@@ -3184,3 +3184,143 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
    « Idées de plats ». Un prénom long passe à la ligne. */
 .carte-anniversaire h2,
 .carte-anniversaire p { overflow-wrap: anywhere; }
+
+/* ——— Demandes (T2e) ——— */
+
+/* Fiche, vue « Repas et courses » : « 📬 Demander ma version » ou, à sa place, la phrase « 📬 Demandée… ». */
+.bloc-demande {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* « 📬 Demandée aujourd’hui. Elle apparaîtra ici dès qu’elle sera prête. » (aussi « Demandée par … », gestionnaire) :
+   texte sur bleu doux, 12,1:1 (clair) et 11,6:1 (sombre). Dans la carte ⏳, la même allure que dans une version. */
+.demande-etat,
+.carte-texte .demande-etat {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--bleu-doux);
+  color: var(--texte);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.section-version .demande-etat { margin: 0; }
+
+/* Semaine : carte « 📬 2 demandes à traiter » (gestionnaire), sous la carte 🧸🎂 ; les noms passent à la ligne. */
+.carte-demandes h2,
+.carte-demandes p { overflow-wrap: anywhere; }
+
+/* Écran Demandes : sections « Recettes à ajouter » et « Versions pour <Prénom> ». */
+.contenu-demandes {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.groupe-demandes h2 { overflow-wrap: anywhere; }
+
+.lien-notifications { margin-top: -8px; }
+
+.liste-demandes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Une demande : le plat (lien vers sa fiche) puis « Retirer la demande », dans une même carte. */
+.ligne-demande {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+}
+
+.ligne-demande .carte-plat {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Sous le texte du plat (vignette de 56 px, marges de la carte) ; 48 px de haut. */
+.ligne-demande .bouton-retirer-demande {
+  align-self: flex-start;
+  margin: -6px 0 6px min(64px, 12vw);
+  white-space: nowrap;
+}
+
+/* Titre rejoint par le focus (ligne retirée, plus rien à traiter), sans contour. */
+.demandes .etat-vide h2:focus { outline: none; }
+
+/* ——— Réglages : carte « 🔔 Notifications » (T2e) ——— */
+
+.carte-notifications { gap: 10px; }
+
+.carte-notifications p { margin: 0; }
+
+/* Titre rejoint depuis l'écran Demandes : il défile sous l'en-tête collant, sans contour. */
+.carte-notifications h2 { scroll-margin-top: calc(80px + env(safe-area-inset-top)); }
+
+.carte-notifications h2:focus { outline: none; }
+
+/* Étapes numérotées par un compteur : une étape cachée (sans sujet, ou avec) ne compte pas. */
+.etapes-ntfy {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: etape-ntfy;
+}
+
+.etapes-ntfy > li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  counter-increment: etape-ntfy;
+}
+
+.etapes-ntfy > li > p:first-child::before {
+  content: counter(etape-ntfy) ". ";
+  font-weight: 600;
+}
+
+/* « Si rien ne s’ouvre : [Copier le sujet], puis dans ntfy… » : le bouton dans la phrase, 48 px de haut, collé à la
+   virgule qui le suit. */
+.etape-copier { line-height: 1.6; }
+
+.etape-copier .insecable { white-space: nowrap; }
+
+.bouton.bouton-copier-sujet {
+  min-height: 48px;
+  margin: 4px 0;
+  padding: 0 14px;
+  vertical-align: middle;
+  font-size: 0.9375rem;
+}
+
+/* Le sujet en entier, police à chasse fixe du système, coupé où il faut. */
+.sujet-ntfy {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--fond);
+  color: var(--texte);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.bloc-sujet {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bouton-arreter-ntfy { align-self: flex-start; padding: 0 4px; }

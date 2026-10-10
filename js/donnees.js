@@ -18,6 +18,7 @@ import { cheminNote, noteValide } from './coeur/notes.js';
 import { estDansCorbeille } from './coeur/corbeille.js';
 import { empreinteRelecture, appliquerReperes } from './coeur/relecture.js';
 import { VERSION_REPERES } from './coeur/vocabulaire.js';
+import { lireIdDemande } from './coeur/demandes.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -132,7 +133,8 @@ function trace(auteur) {
 /**
  * Ajoute un plat par son nom ({ id, nom } : statut ⏳ par défaut). Écriture fusionnée : si l'autre téléphone a
  * créé ce plat entre-temps, sa recette, ses notes et sa photo restent intactes.
- * Si l'auteur n'est pas le gestionnaire, crée aussi la demande de recette.
+ * `demanderRecette` (rôle effectif « Repas et courses », aperçu compris : décidé par l'app) : crée aussi la demande de
+ * recette, `set` sans fusion (une demande traitée du même identifiant se rouvre entière).
  */
 export function ajouterPlat(plat, auteur, { demanderRecette }) {
   const lot = writeBatch(db);
@@ -141,6 +143,55 @@ export function ajouterPlat(plat, auteur, { demanderRecette }) {
     const demande = demandeDeRecette(plat.id, auteur);
     lot.set(doc(db, 'demandes', demande.id), { ...demande.donnees, creeLe: serverTimestamp() });
   }
+  return lot.commit();
+}
+
+// ——— Demandes (T2e) ———
+
+/** Identifiant de demande lisible (coeur/demandes.js › lireIdDemande), sinon une erreur avant tout envoi. */
+function referenceDemande(id) {
+  if (!lireIdDemande(id)) throw new Error('Identifiant de demande refusé.');
+  return doc(db, 'demandes', id);
+}
+
+/**
+ * « 📬 Demander » (vue « Repas et courses ») : demande préparée par coeur/demandes.js › preparerDemande
+ * ({ id, donnees }). Lot, `set` sans fusion : une demande traitée ou retirée se rouvre entière (nouveau `creeLe`, plus
+ * de `traiteeLe`) ; `creeLe` du serveur. Pas de transaction : une demande doit pouvoir naître hors ligne, elle part
+ * alors au retour du réseau. Lève une erreur avant tout envoi si l'identifiant est illisible ou si les champs ne sont
+ * pas une table sans valeur indéfinie.
+ * → promesse de l'envoi (ne pas l'attendre pour mettre l'écran à jour).
+ */
+export function creerDemande({ id, donnees } = {}) {
+  const reference = referenceDemande(id);
+  if (!donnees || typeof donnees !== 'object' || Array.isArray(donnees) || contientIndefini(donnees)) {
+    throw new Error('Demande refusée : une table sans valeur indéfinie est attendue.');
+  }
+  const lot = writeBatch(db);
+  lot.set(reference, { ...donnees, creeLe: serverTimestamp() });
+  return lot.commit();
+}
+
+/**
+ * « Retirer la demande » (gestionnaire, écran Demandes) et « Annuler » juste après « 📬 Demander » (vue « Repas et
+ * courses ») : `update` de `statut: 'traitee'` et `traiteeLe` (serveur), comme une clôture. Une demande supprimée
+ * entre-temps n'est jamais recréée (refus `not-found`). Hors ligne : part plus tard. → promesse de l'envoi.
+ */
+export function retirerDemande(id) {
+  const reference = referenceDemande(id);
+  const lot = writeBatch(db);
+  lot.update(reference, { statut: 'traitee', traiteeLe: serverTimestamp() });
+  return lot.commit();
+}
+
+/**
+ * « Annuler » un retrait (gestionnaire) : `update` de `statut: 'ouverte'`, `traiteeLe` effacé ; `creeLe` et l'auteur
+ * gardés. Hors ligne : part plus tard. → promesse de l'envoi.
+ */
+export function remettreDemande(id) {
+  const reference = referenceDemande(id);
+  const lot = writeBatch(db);
+  lot.update(reference, { statut: 'ouverte', traiteeLe: deleteField() });
   return lot.commit();
 }
 
@@ -714,10 +765,6 @@ export async function viderCorbeille(platIds, demandesAClore = []) {
 }
 
 /**
- * Date de la dernière sauvegarde (date du téléphone, lisible tout de suite, contrairement à un serverTimestamp() en
- * attente). À n'appeler qu'en ligne. → promesse de l'envoi.
- */
-/**
  * Version des instructions du projet Claude copiée par le gestionnaire (Réglages), partagée par ses appareils : une
  * copie faite sur l'ordinateur éteint aussi le rappel du téléphone.
  */
@@ -727,8 +774,45 @@ export function noterInstructionsCopiees(version) {
   return lot.commit();
 }
 
+/**
+ * Date de la dernière sauvegarde (date du téléphone, lisible tout de suite, contrairement à un serverTimestamp() en
+ * attente). À n'appeler qu'en ligne. → promesse de l'envoi.
+ */
 export function marquerSauvegarde(date) {
   const lot = writeBatch(db);
   lot.update(doc(db, 'reglages', 'foyer'), { derniereSauvegarde: date });
   return lot.commit();
+}
+
+// ——— Notifications (T2e) ———
+
+/** Sujet ntfy lu dans `reglages/foyer` ; absent, null ou vide → null (aucun sujet). */
+function sujetLu(reglages) {
+  const sujet = reglages?.notifications?.ntfySujet;
+  return sujet === undefined || sujet === null || sujet === '' ? null : sujet;
+}
+
+/**
+ * Sujet ntfy du foyer (« Activer les notifications », « Arrêter les notifications » et son « Annuler », gestionnaire),
+ * par une transaction sur `reglages/foyer` (modèle devenirGestionnaire) : relit `notifications.ntfySujet` (absent ou
+ * vide → null) ; s'il vaut toujours `attendu` (le sujet que la carte montrait, null : aucun), écrit `nouveau` par
+ * `update` du chemin pointé (null → deleteField()) ; sinon n'écrit rien : un sujet créé ou changé sur un autre appareil
+ * n'est jamais écrasé. Demande du réseau : une transaction hors ligne est refusée au lieu d'être mise en file (l'app
+ * vérifie le réseau avant d'appeler). Lève une erreur avant tout envoi si `nouveau` n'est ni null ni un texte non vide.
+ * → promesse de { ecrit: true } | { ecrit: false, actuel } (sujet trouvé, null si aucun) ; rejetée si la transaction
+ *   échoue (réseau…).
+ */
+export function remplacerSujet(attendu, nouveau) {
+  if (nouveau !== null && (typeof nouveau !== 'string' || !nouveau)) {
+    throw new Error('Sujet refusé : un texte non vide, ou null pour l’effacer.');
+  }
+  const voulu = attendu === undefined || attendu === '' ? null : attendu;
+  const reference = doc(db, 'reglages', 'foyer');
+  return runTransaction(db, async (transaction) => {
+    const lu = await transaction.get(reference);
+    const actuel = sujetLu(lu.exists() ? lu.data() : null);
+    if (actuel !== voulu) return { ecrit: false, actuel };
+    transaction.update(reference, { 'notifications.ntfySujet': nouveau === null ? deleteField() : nouveau });
+    return { ecrit: true };
+  });
 }
