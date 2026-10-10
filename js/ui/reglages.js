@@ -423,8 +423,9 @@ function sujetDes(ctx) {
 /**
  * Carte « 🔔 Notifications » (T2e, gestionnaire, sous « 🧸 Relire les recettes ») : pas à pas, installer l'app gratuite
  * ntfy, « Activer les notifications » (l'app crée le sujet du foyer, par transaction, en ligne seulement), « S’abonner
- * dans ntfy › » d'un toucher (ou « Copier le sujet »), « Envoyer un essai ». Trois états : sans sujet ; sujet valide ;
- * sujet présent mais invalide (changé dans la console : « arrêtez puis réactivez »). Nœuds gardés d'un rendu à l'autre.
+ * dans ntfy › » d'un toucher (ou « 📋 Copier le sujet », sur sa propre ligne), « Envoyer un essai ». Trois états :
+ * sans sujet ; sujet valide ; sujet présent mais invalide (changé dans la console : « arrêtez puis réactivez »). Nœuds
+ * gardés d'un rendu à l'autre.
  * Les deux premiers états n'ont pas les mêmes boutons, d'où des cibles de focus fixées : « S’abonner dans ntfy › » après
  * « Activer » (ou un sujet remis par « Annuler », ou trouvé sur un autre appareil), « Activer les notifications » après
  * « Arrêter » ; pendant une transaction, le bouton touché garde le focus (aria-busy), et le garde après un refus ou un
@@ -451,8 +452,9 @@ function creerCarteNotifications(ctx) {
   const boutonActiver = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'button', onclick: activer },
     'Activer les notifications');
   const lienAbonner = el('a', { class: 'bouton bouton-principal bouton-plein', href: '#/reglages' }, 'S’abonner dans ntfy ›');
-  const boutonCopier = el('button', { class: 'bouton bouton-secondaire bouton-copier-sujet', type: 'button', onclick: copierSujet },
-    'Copier le sujet');
+  // « 📋 Copier le sujet » : sur sa propre ligne, pleine largeur, quand le lien ntfy:// n'ouvre rien.
+  const boutonCopier = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', onclick: copierSujet },
+    el('span', { 'aria-hidden': 'true' }, '📋'), 'Copier le sujet');
   const messageCopie = el('p', { class: 'aide', role: 'status', hidden: true });
   const boutonEssai = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', onclick: essayer },
     'Envoyer un essai');
@@ -467,10 +469,11 @@ function creerCarteNotifications(ctx) {
   const etapeAbonner = el('li', {},
     el('p', {}, 'Abonnez ntfy à votre sujet\u00A0:'),
     lienAbonner,
-    el('p', { class: 'aide etape-copier' },
-      'Si rien ne s’ouvre\u00A0: ', el('span', { class: 'insecable' }, boutonCopier, ', puis'),
-      ' dans ntfy touchez «\u00A0+\u00A0», collez-le dans «\u00A0Nom de sujet\u00A0» et touchez «\u00A0Abonner\u00A0».'),
-    messageCopie);
+    el('p', { class: 'aide' }, 'Si rien ne s’ouvre, copiez le sujet\u00A0:'),
+    boutonCopier,
+    messageCopie,
+    el('p', { class: 'aide' },
+      'puis, dans ntfy, touchez «\u00A0+\u00A0», collez-le dans «\u00A0Nom de sujet\u00A0» et touchez «\u00A0Abonner\u00A0».'));
   const etapeEssai = el('li', {}, el('p', {}, 'Vérifiez\u00A0:'), boutonEssai, resultatEssai);
   const blocSujet = el('div', { class: 'bloc-sujet' },
     el('p', {}, 'Votre sujet\u00A0: ', sujetAffiche),

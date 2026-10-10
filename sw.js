@@ -9,7 +9,7 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = '72d3991256aa';
+const VERSION = '926c9a482a8d';
 const VERSION_SDK = '12.19.0';
 // Date de publication affichée dans le panneau du profil (« Version du … ») : à changer à chaque mise en ligne.
 const PUBLIEE = '2026-10-10';
@@ -28,6 +28,8 @@ const FICHIERS_APP = [
   './js/coeur/roles.js',
   './js/coeur/slug.js',
   './js/coeur/vocabulaire.js',
+  './js/coeur/dictionnaire.js',
+  './js/coeur/produits.js',
   './js/coeur/plats.js',
   './js/coeur/profils.js',
   './js/coeur/photo.js',

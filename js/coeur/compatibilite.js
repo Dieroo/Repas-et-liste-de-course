@@ -346,9 +346,12 @@ export const MOTS_DOUTEUX = [
       'bacon', 'merguez', 'escargot', 'grenouille', 'saucisson', 'coppa', 'bresaola'],
   },
   {
+    // Charcuterie crue ou sèche (T3-0) : chorizo, rosette, serrano, pancetta, viande des Grisons, lonzo ; un produit
+    // courant connu ne reçoit d'après son nom que ses repères de préparation (edition.js › reperesProposes).
     attendu: 'cru',
     mots: ['tartare', 'carpaccio', 'jambon cru', 'jambon de bayonne', 'jambon de parme', 'saucisson sec', 'coppa',
-      'bresaola', 'huitre', 'sushi', 'sashimi', 'ceviche', 'gravlax', 'tataki'],
+      'bresaola', 'chorizo', 'rosette', 'serrano', 'pancetta', 'grisons', 'lonzo', 'huitre', 'sushi', 'sashimi',
+      'ceviche', 'gravlax', 'tataki'],
     sauf: ['sauce', 'fromage', 'fines herbes', 'riz', 'vinaigre'],
   },
   {
@@ -367,14 +370,20 @@ export const MOTS_DOUTEUX = [
 // Ce qu'un repère `cru` doit accompagner pour avoir un effet (marqueurs effectifs).
 const CRUS_POSSIBLES = ['viande', 'poisson', 'fruits_de_mer'];
 
-/** Position du mot (ou de l'expression) dans la suite de mots, pluriel accepté ; -1 s'il n'y est pas. */
+/** Mot sans son pluriel, comme slug.js › cleProduit : plus de 2 lettres, « s » ou « x » final retiré. */
+const sansPluriel = (mot) => (mot.length > 2 ? mot.replace(/[sx]$/, '') : mot);
+
+/**
+ * Position du mot (ou de l'expression) dans la suite de mots, au pluriel près sur chaque mot (« jambons crus »,
+ * « saucissons secs », « viande de grison ») ; -1 s'il n'y est pas.
+ */
 function positionDe(mots, expression) {
   const cherches = slug(expression).split('-').filter(Boolean);
   const dernier = cherches.length - 1;
   for (let i = 0; i + dernier < mots.length; i += 1) {
     const ok = cherches.every((mot, k) => {
       const lu = mots[i + k];
-      return lu === mot || (k === dernier && (lu === `${mot}s` || lu === `${mot}x`));
+      return lu === mot || lu === `${mot}s` || lu === `${mot}x` || sansPluriel(lu) === sansPluriel(mot);
     });
     if (ok) return i;
   }

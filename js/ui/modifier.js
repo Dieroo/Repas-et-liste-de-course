@@ -6,10 +6,11 @@ import { el, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { pictogramme } from './pictos.js';
 import { lireBrouillon, ecrireBrouillon, effacerBrouillon } from './brouillon.js';
-import { slug } from '../coeur/slug.js';
+import { motsAccentues, slug } from '../coeur/slug.js';
 import { APPAREILS, LIBELLES_TYPE, NOM_MAX, quantiteLisible } from '../coeur/plats.js';
 import { marqueursEffectifs } from '../coeur/vocabulaire.js';
 import { marqueursSurveilles } from '../coeur/regles.js';
+import { reconnaitre } from '../coeur/produits.js';
 import {
   UNITES_EDITION,
   LIBELLES_UNITE,
@@ -28,8 +29,9 @@ import {
   FRIGO_JOURS_MAX,
   natureDe,
   catalogueProduits,
+  catalogueAvecDictionnaire,
   suggestions,
-  produitConnu,
+  texteProduitConnu,
   ingredientSaisi,
   normaliserPourEdition,
   egalProfonde,
@@ -78,11 +80,37 @@ function majuscule(texte) {
   return premiere.toLocaleUpperCase('fr-FR') + reste.join('');
 }
 
+/**
+ * Vrai si ces marqueurs portent un repère de précaution dont une case « Repères » est surveillée par une règle active
+ * (`surveilles`, Set) : « Plus de précisions » s'ouvre alors une fois sur un produit courant reconnu (« reblochon »).
+ */
+function precautionSurveillee(marqueurs, surveilles) {
+  const effectifs = marqueursEffectifs({ marqueurs });
+  return CASES_REPERES.some((definition) => definition.retire.some((marqueur) => effectifs.has(marqueur))
+    && [...definition.pose, ...definition.retire].some((marqueur) => surveilles?.has?.(marqueur)));
+}
+
 function accord(nombre, singulier, pluriel) {
   return `${nombre}\u00A0${nombre > 1 ? pluriel : singulier}`;
 }
 
 const reduire = (texte) => String(texte ?? '').replace(/\s+/g, ' ').trim();
+
+// Question « C'est… ? » en évidence, dans la feuille d'un ingrédient.
+const TEXTE_NOUVEAU_PRODUIT = 'Nouveau produit\u00A0: dites-nous ce que c’est.';
+
+/**
+ * Aide d'un nom qui peut vouloir dire plusieurs choses (« pâte », « pâté » seuls), avec le mot tapé, en minuscules et
+ * sans ponctuation, puis une majuscule : « pâte. » → « Pâte », « PÂTÉS » → « Pâtés ».
+ */
+function texteAmbigu(nom) {
+  const mot = majuscule(motsAccentues(nom)[0] ?? reduire(nom).toLocaleLowerCase('fr-FR'));
+  return `«\u00A0${mot}\u00A0» peut vouloir dire plusieurs choses\u00A0: `
+    + 'précisez (pâte brisée, pâté de campagne…) ou dites ce que c’est.';
+}
+
+/** Produit jamais vu, ou nom ambigu (traité de même : nature et repères devinés d'après le nom, question posée). */
+const jamaisVu = (etat) => etat === 'inconnu' || etat === 'ambigu';
 
 /** Quantité affichée dans le champ : « 0,5 » ; '' si absente. */
 const qteSaisie = (qte) => (typeof qte === 'number' && Number.isFinite(qte) ? String(qte).replace('.', ',') : '');
@@ -451,7 +479,11 @@ export function creer(ctx) {
     if (feuilleOuverte || termine) return;
     const existant = index === null ? null : saisie.ingredients[index];
     const nouveau = !existant;
-    const catalogue = catalogueProduits(courant.plats);
+    // Produits du foyer (ingrédients de ses recettes) : reconnaissance, nature, repères et enregistrement, puis les
+    // produits courants (coeur/produits.js › reconnaitre, option `dictionnaire`). Le catalogue avec les produits
+    // courants ne sert qu'aux suggestions : le foyer passe d'abord, et un nom se reconnaît toujours à partir du foyer.
+    const foyer = catalogueProduits(courant.plats);
+    const catalogueSuggestions = catalogueAvecDictionnaire(courant.plats);
     const declencheur = nouveau ? boutonAjouterIngredient : ligneIngredient(index);
     let focusApres = () => declencheur;
 
@@ -513,6 +545,16 @@ export function creer(ctx) {
       // Suggestions (nouvel ingrédient) : produits déjà connus, sauf ceux déjà dans la recette.
       const listeSuggestions = el('div', { class: 'suggestions', hidden: true });
       const statutSuggestions = el('p', { class: 'visuellement-masque', role: 'status' });
+      // Ligne « ✓ Produit connu : féculent · Épicerie salée [Changer] » : nom reconnu par les produits courants (ni
+      // l'ingrédient même, ni un produit du foyer, qui reste silencieux). Sous les suggestions, à hauteur réservée (trois
+      // lignes de texte) pour un nouvel ingrédient : rien ne bouge sous le doigt pendant la frappe. Le texte reste dans
+      // l'arbre d'accessibilité (vide quand rien n'est reconnu) ; seul « Changer » est masqué.
+      const texteConnu = el('p', { class: 'aide ligne-connu-texte', id: 'ingredient-connu', role: 'status' });
+      const boutonChanger = el('button', {
+        class: 'bouton bouton-texte bouton-changer', type: 'button', 'aria-describedby': 'ingredient-connu', onclick: changer,
+      }, 'Changer');
+      const ligneConnu = el('div', { class: `ligne-connu ligne-connu-vide${nouveau ? '' : ' ligne-connu-repliable'}` },
+        texteConnu, boutonChanger);
 
       const radiosNature = Object.entries(NATURES).map(([valeur, { libelle }]) => choixRadio('ingredient-nature', valeur, el('span', {}, libelle), {
         decrit: erreurs.nature.id,
@@ -525,8 +567,9 @@ export function creer(ctx) {
       const groupeNature = el('fieldset', { class: 'groupe-choix', 'aria-describedby': erreurs.nature.id },
         el('legend', { class: 'etiquette-champ' }, 'C’est…'),
         el('div', { class: 'choix-ligne' }, radiosNature.map((r) => r.noeud)));
-      const blocNouveau = el('div', { class: 'bloc-nouveau-produit', hidden: true },
-        el('p', { class: 'aide-forte' }, 'Nouveau produit\u00A0: dites-nous ce que c’est.'));
+      // Question en évidence : produit jamais vu, ou nom qui peut vouloir dire plusieurs choses (« pâte » seul).
+      const introNouveau = el('p', { class: 'aide-forte' }, TEXTE_NOUVEAU_PRODUIT);
+      const blocNouveau = el('div', { class: 'bloc-nouveau-produit', hidden: true }, introNouveau);
       const emplacementNature = el('div', {});
       // « Repères » (« Au lait cru », « Crue ou rosée »…), dans « Plus de précisions » : une case par ligne, seulement
       // celles qu'une règle active surveille pour cette nature, ou dont le repère est déjà là (coeur/edition.js ›
@@ -552,7 +595,8 @@ export function creer(ctx) {
       const groupeRole = el('fieldset', { class: 'groupe-choix', hidden: true },
         el('legend', { class: 'etiquette-champ' }, 'Dans le plat, ce légume est…'),
         el('div', { class: 'choix-ligne' }, radiosRole.map((r) => r.noeud)));
-      const choixRayon = el('select', { class: 'champ', id: 'ingredient-rayon', onchange: () => { rayonTouche = true; } },
+      // Rayon choisi : la ligne « ✓ Produit connu » le reprend (elle dit ce qui sera enregistré).
+      const choixRayon = el('select', { class: 'champ', id: 'ingredient-rayon', onchange: () => { rayonTouche = true; majPrecisions(); } },
         Object.entries(LIBELLES_RAYON).map(([valeur, libelle]) => el('option', { value: valeur }, libelle)));
       const precisions = el('details', { class: 'depliable' },
         el('summary', {}, 'Plus de précisions'),
@@ -574,9 +618,20 @@ export function creer(ctx) {
         champ?.removeAttribute('aria-describedby');
       }
 
+      /** « Changer » : « Plus de précisions » s'ouvre et le focus va sur la première réponse de « C'est… ». */
+      function changer() {
+        precisions.open = true;
+        radiosNature[0].input.focus();
+      }
+
       /**
-       * Ce que l'on sait du produit saisi : l'ingrédient lui-même (même nom, `meme`), un produit connu, ou rien.
-       * → { etat: 'vide' | 'connu' | 'inconnu', ref, meme? }
+       * Ce que l'on sait du produit saisi : l'ingrédient lui-même (même nom, `meme`), un produit du foyer ou un produit
+       * courant (coeur/produits.js › reconnaitre ; `origine` : 'foyer' ou 'dictionnaire'), un nom qui peut vouloir dire
+       * plusieurs choses (« pâte », « pâté » seuls : `ambigu`, traité comme un produit jamais vu), ou rien.
+       * `autreEcriture` : produit du foyer trouvé par une autre écriture (pluriel, autre nom du même produit courant) ;
+       * tous les repères que le nom annonce restent alors proposés, et `ajoutes` sont les repères de précaution que le
+       * produit courant lui ajoute (coeur/produits.js › reconnaitre).
+       * → { etat: 'vide' | 'connu' | 'ambigu' | 'inconnu', ref, meme?, origine?, autreEcriture?, ajoutes? }
        */
       function reference() {
         const cle = slug(champProduit.value);
@@ -584,14 +639,19 @@ export function creer(ctx) {
         if (existant && slug(existant.produit) === cle) {
           return { etat: 'connu', ref: { ...existant, nature: natureDe(existant) }, meme: true };
         }
-        const connu = produitConnu(catalogue, champProduit.value);
-        return connu ? { etat: 'connu', ref: connu } : { etat: 'inconnu', ref: null };
+        const trouve = reconnaitre(champProduit.value, { catalogue: foyer });
+        if (trouve?.ambigu) return { etat: 'ambigu', ref: null };
+        if (!trouve) return { etat: 'inconnu', ref: null };
+        return {
+          etat: 'connu', ref: trouve.element, origine: trouve.origine,
+          autreEcriture: Boolean(trouve.autreEcriture), ajoutes: trouve.ajoutes ?? [],
+        };
       }
 
       function proposer() {
         if (!nouveau || suggestionChoisie) return [];
         const dejaLa = new Set(saisie.ingredients.map((ingredient) => slug(ingredient?.produit)));
-        return suggestions(catalogue, champProduit.value, { max: 4 + dejaLa.size })
+        return suggestions(catalogueSuggestions, champProduit.value, { max: 4 + dejaLa.size })
           .filter((element) => !dejaLa.has(slug(element.produit)))
           .slice(0, 4);
       }
@@ -623,7 +683,7 @@ export function creer(ctx) {
 
       /** Nature et repères que le nom d'un produit jamais vu laisse attendre (« jambon cru »), ou null. */
       function proposition(etat) {
-        return etat === 'inconnu' ? natureProposee(champProduit.value, catalogue, { surveilles }) : null;
+        return jamaisVu(etat) ? natureProposee(champProduit.value, foyer, { surveilles, dictionnaire: true }) : null;
       }
 
       /** Nature affichée : celle choisie ici, sinon celle de l'ingrédient ou du produit connu, sinon celle proposée. */
@@ -638,10 +698,11 @@ export function creer(ctx) {
        * préparation seulement (« jambon cru » → cru) ; jamais sur l'ingrédient même, qui montre ce qu'il porte. Puis
        * les cases touchées ici. Une case touchée reste montrée (elle ne disparaît pas sous le doigt).
        * `changements` : cases dont l'état diffère du départ ou de la proposition, seules transmises à ingredientSaisi.
-       * → { cases: [{ id, libelle, coche }], changements: [{ caseId, coche }], annonce }
+       * `marqueurs` : ceux affichés (départ, proposition, cases touchées), pour la ligne « ✓ Produit connu ».
+       * → { cases: [{ id, libelle, coche }], changements: [{ caseId, coche }], annonce, marqueurs }
        */
       function etatReperes() {
-        const { etat, ref, meme } = reference();
+        const { etat, ref, meme, autreEcriture } = reference();
         const nature = natureAffichee(etat, ref);
         // Produit connu (pas l'ingrédient même) : ses repères de préparation ne suivent jamais, comme dans
         // coeur/edition.js › ingredientSaisi ; sinon une case cochée ici ne serait pas enregistrée.
@@ -649,10 +710,12 @@ export function creer(ctx) {
         const source = { marqueurs: etat === 'connu' && !meme ? portes.filter((m) => !MARQUEURS_PREPARATION.includes(m)) : portes };
         const depart = (Object.hasOwn(NATURES, nature ?? '') ? appliquerNature(source, nature) : source).marqueurs ?? [];
         let annonces = [];
-        if (etat === 'inconnu' || (etat === 'connu' && !meme)) {
+        if (jamaisVu(etat) || (etat === 'connu' && !meme)) {
+          // Produit connu sous ce nom : seuls ses repères de préparation ; trouvé par une autre écriture : tous ceux
+          // que le nom annonce, comme pour un produit jamais vu (coeur/edition.js › ingredientSaisi, même règle).
           annonces = (reperesProposes(champProduit.value, { surveilles }) ?? [])
             .filter((marqueur) => MARQUEURS_POSES.has(marqueur)
-              && (etat === 'inconnu' || MARQUEURS_PREPARATION.includes(marqueur)));
+              && (jamaisVu(etat) || autreEcriture || MARQUEURS_PREPARATION.includes(marqueur)));
         }
         const proposes = [...new Set([...depart, ...annonces])];
         let affiches = proposes;
@@ -680,7 +743,7 @@ export function creer(ctx) {
           .filter((d) => cocheSur(d, affiches) !== cocheSur(d, depart) || cocheSur(d, affiches) !== cocheSur(d, proposes))
           .map((d) => ({ caseId: d.id, coche: cocheSur(d, affiches) }));
         const annonce = definitions.some((d) => cocheSur(d, proposes) && !cocheSur(d, depart));
-        return { cases, changements, annonce };
+        return { cases, changements, annonce, marqueurs: affiches };
       }
 
       /** Une case par ligne, dans l'ordre de CASES_REPERES ; nœuds gardés d'un dessin à l'autre. */
@@ -718,7 +781,9 @@ export function creer(ctx) {
 
       /** Met à jour suggestions, nature, coupe, rôle et rayon affichés selon le produit saisi et les choix faits. */
       function majPrecisions() {
-        const { etat, ref } = reference();
+        const { etat, ref, meme, origine, autreEcriture, ajoutes } = reference();
+        // Nom reconnu par les produits courants : ligne « ✓ Produit connu » (voir plus bas).
+        const courantReconnu = etat === 'connu' && !meme && origine === 'dictionnaire';
         const proposees = proposer();
         dessinerSuggestions(proposees);
         const texteStatut = proposees.length ? accord(proposees.length, 'suggestion', 'suggestions') : '';
@@ -731,9 +796,12 @@ export function creer(ctx) {
         const nature = natureAffichee(etat, ref);
         for (const radio of radiosNature) radio.input.checked = radio.input.value === nature;
 
-        // Produit jamais vu : la question de sa nature est posée en évidence (une fois pour toutes).
-        const inconnu = etat === 'inconnu';
-        const demander = inconnu && (!proposees.length || touches.nature !== null || natureDemandee);
+        // Produit jamais vu : la question de sa nature est posée en évidence (une fois pour toutes). Nom qui peut vouloir
+        // dire plusieurs choses (« pâte » seul) : tout de suite, précédée d'une aide.
+        const ambigu = etat === 'ambigu';
+        const demander = ambigu || (etat === 'inconnu' && (!proposees.length || touches.nature !== null || natureDemandee));
+        const intro = ambigu ? texteAmbigu(champProduit.value) : TEXTE_NOUVEAU_PRODUIT;
+        if (introNouveau.textContent !== intro) introNouveau.textContent = intro;
         if (demander && groupeNature.parentNode !== blocNouveau) {
           blocNouveau.append(groupeNature);
           if (!nouveau) precisions.open = true;
@@ -742,12 +810,16 @@ export function creer(ctx) {
         }
         blocNouveau.hidden = !demander;
 
-        // Repères : un repère que le nom annonce (« Fruits à coque entiers » pour « noix ») arrive coché ; « Plus de
-        // précisions » s'ouvre alors une fois pour ce produit, pour que la case se voie et reste modifiable.
+        // Repères : un repère que le nom annonce (« Fruits à coque entiers » pour « noix »), ou un repère de précaution
+        // qu'une règle surveille sur un produit courant reconnu (« Au lait cru » pour « reblochon »), ou que le produit
+        // courant ajoute à un produit du foyer trouvé par une autre écriture (« reblochons »), arrive coché ;
+        // « Plus de précisions » s'ouvre alors une fois pour ce produit, pour que la case se voie et reste modifiable.
         const reperes = etatReperes();
         dessinerCases(reperes.cases);
         const cleProduit = slug(champProduit.value);
-        if (reperes.annonce && ouvertPour !== cleProduit) {
+        const annonce = reperes.annonce || (courantReconnu && precautionSurveillee(ref?.marqueurs, surveilles))
+          || (autreEcriture && precautionSurveillee(ajoutes, surveilles));
+        if (annonce && ouvertPour !== cleProduit) {
           ouvertPour = cleProduit;
           precisions.open = true;
         }
@@ -762,6 +834,12 @@ export function creer(ctx) {
         if (!rayonTouche) {
           choixRayon.value = Object.hasOwn(LIBELLES_RAYON, ref?.rayon ?? '') ? ref.rayon : NATURES[nature ?? 'autre'].rayon;
         }
+
+        // Ligne « ✓ Produit connu » : ce qui sera enregistré (nature et repères affichés, rayon choisi), corrigé ici
+        // même par « Plus de précisions ». Vide (et « Changer » masqué) quand le nom n'est pas un produit courant.
+        const texte = courantReconnu ? texteProduitConnu({ marqueurs: reperes.marqueurs, rayon: choixRayon.value }) : '';
+        if (texteConnu.textContent !== texte) texteConnu.textContent = texte;
+        ligneConnu.classList.toggle('ligne-connu-vide', !courantReconnu);
       }
 
       function montrerErreurs(trouvees) {
@@ -808,7 +886,7 @@ export function creer(ctx) {
           forme: touches.forme ?? '',
           role: touches.role ?? '',
           reperes: changements,
-        }, { catalogue, ingredients: saisie.ingredients, index, surveilles });
+        }, { catalogue: foyer, ingredients: saisie.ingredients, index, surveilles, dictionnaire: true });
         if (resultat.erreurs) {
           montrerErreurs(resultat.erreurs);
           return;
@@ -853,11 +931,11 @@ export function creer(ctx) {
       majPrecisions();
 
       return el('form', { class: 'formulaire', novalidate: true, onsubmit: valider },
-        ...(nouveau ? [...blocProduit, listeSuggestions, statutSuggestions] : []),
+        ...(nouveau ? [...blocProduit, listeSuggestions, statutSuggestions, ligneConnu] : []),
         ligneQuantite,
         erreurs.qte,
         erreurs.unite,
-        ...(nouveau ? [] : blocProduit),
+        ...(nouveau ? [] : [...blocProduit, ligneConnu]),
         blocNouveau,
         // Sous le bloc teinté, sur le fond de la feuille : contraste suffisant en clair comme en sombre.
         erreurs.nature,
