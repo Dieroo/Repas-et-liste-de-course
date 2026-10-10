@@ -3,8 +3,9 @@
 export const ROUTE_PAR_DEFAUT = 'semaine';
 
 // Écrans connus, et ceux réservés au gestionnaire.
-const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'modifier', 'decouvrir', 'reglages', 'import', 'restaurer', 'regime'];
-const ROUTES_GESTIONNAIRE = ['reglages', 'import', 'restaurer', 'regime'];
+const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'modifier', 'decouvrir', 'reglages', 'import', 'restaurer', 'regime',
+  'demandes'];
+const ROUTES_GESTIONNAIRE = ['reglages', 'import', 'restaurer', 'regime', 'demandes'];
 
 // Écrans qui reçoivent un identifiant : « #/plat/<id> » et « #/modifier/<id> » (plat, obligatoire),
 // « #/import/<id> » (plat, facultatif), « #/regime/<profilId> » (profil, obligatoire).

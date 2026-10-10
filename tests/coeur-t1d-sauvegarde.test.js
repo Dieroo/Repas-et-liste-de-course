@@ -252,11 +252,18 @@ test('creerSauvegarde : clés exactes, tris, ordre des champs du §8, défauts d
   assert.equal(r.texte, `${JSON.stringify(fichier, null, 2)}\n`);
 });
 
-test('creerSauvegarde : ni photo, ni mise à jour, ni gestionnaire, ni réglages, ni demandes ; aucun undefined', () => {
+test('creerSauvegarde : ni photo, ni mise à jour, ni gestionnaire, ni réglages, ni demandes, ni sujet ntfy ; aucun undefined', () => {
   const etat = etatDeBase();
-  const r = creerSauvegarde({ ...etat, demandes: [{ id: 'lasagnes__recette', statut: 'ouverte' }], reglages: { gestionnaire: 'a@example.com' } },
-    { maintenant: MAINTENANT });
-  for (const absent of ['vignette', 'majPar', 'majLe', 'gestionnaire', 'reglages', 'demandes', 'undefined', 'base64']) {
+  // T2e : une demande de version (`profilId`, `besoin`) et le sujet ntfy du foyer (un secret) ne sont jamais sauvegardés.
+  const sujet = 'repas-abcdefghijkmnpqrstuvwxy';
+  const demandes = [
+    { id: 'lasagnes__recette', type: 'recette', platId: 'lasagnes', creePar: 'b@example.com', statut: 'ouverte' },
+    { id: 'gratin-test__profil-b', type: 'variante', platId: 'gratin-test', profilId: 'profil-b', besoin: 'sans_viande', creePar: 'b@example.com', statut: 'ouverte' },
+  ];
+  const reglages = { gestionnaire: 'a@example.com', notifications: { ntfySujet: sujet } };
+  const r = creerSauvegarde({ ...etat, demandes, reglages }, { maintenant: MAINTENANT });
+  for (const absent of ['vignette', 'majPar', 'majLe', 'gestionnaire', 'reglages', 'demandes', 'undefined', 'base64',
+    'ntfy', 'notifications', 'repas-', sujet, 'profilId', 'besoin', 'sans_viande', 'creePar']) {
     assert.equal(r.texte.includes(absent), false, absent);
   }
   assert.equal(contientUndefined(JSON.parse(r.texte)), false);

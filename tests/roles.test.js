@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ROUTE_PAR_DEFAUT,
+  ROUTES_AVEC_PARAMETRE,
   normaliserEmail,
   roleDe,
+  roleEffectif,
   routeAutorisee,
   resoudreRoute,
   parametreDe,
@@ -104,4 +106,19 @@ test('routes : « Modifier la recette » pour les deux rôles, identifiant oblig
   assert.equal(parametreDe('#/modifier/Abc!', 'modifier'), '');
   assert.equal(parametreDe('#/modifier/risotto-test', 'plat'), '');
   assert.equal(parametreDe('#/plat/risotto-test', 'modifier'), '');
+});
+
+test('routes : « Demandes » réservée au gestionnaire, sans paramètre ; ailleurs et en aperçu, Semaine (T2e)', () => {
+  assert.equal(routeAutorisee('demandes', 'gestionnaire'), true);
+  assert.equal(routeAutorisee('demandes', 'courses'), false);
+  assert.equal(resoudreRoute('#/demandes', 'gestionnaire'), 'demandes');
+  assert.equal(resoudreRoute('#/demandes', 'courses'), 'semaine');
+  assert.equal(resoudreRoute('#/demandes', null), 'semaine');
+  // Aperçu « Repas et courses » : le rôle effectif est « courses ».
+  assert.equal(resoudreRoute('#/demandes', roleEffectif('gestionnaire', true)), 'semaine');
+  assert.equal(resoudreRoute('#/demandes', roleEffectif('gestionnaire', false)), 'demandes');
+  // Sans paramètre : un identifiant ajouté est ignoré.
+  assert.equal(ROUTES_AVEC_PARAMETRE.includes('demandes'), false);
+  assert.equal(resoudreRoute('#/demandes/gratin-test', 'gestionnaire'), 'demandes');
+  assert.equal(parametreDe('#/demandes/gratin-test', 'demandes'), '');
 });

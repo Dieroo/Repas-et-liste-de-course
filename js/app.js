@@ -8,8 +8,13 @@ import {
 } from './firebase.js';
 import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
-import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner } from './coeur/roles.js';
-import { nouveauPlatParNom } from './coeur/plats.js';
+import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
+import { nouveauPlatParNom, demandeDeRecette } from './coeur/plats.js';
+import { idDemande, demandeOuverte, demandeUtile, demandesATraiter, preparerDemande } from './coeur/demandes.js';
+import {
+  SIGNES_SUJET, sujetValide, nouveauSujet, texteNotification, adresseNotification, issueEnvoi,
+} from './coeur/ntfy.js';
+import { envoyerNtfy } from './notifications.js';
 import { estDansCorbeille, separerCorbeille, demandesDesPlats } from './coeur/corbeille.js';
 import { profilDeLEmail, profilsARelier, preparerReliure, preparerDeliure } from './coeur/profils.js';
 import { avecNote, cheminNote, noteValide } from './coeur/notes.js';
@@ -42,6 +47,7 @@ import * as reglages from './ui/reglages.js';
 import * as importRecettes from './ui/import.js';
 import * as restaurer from './ui/restaurer.js';
 import * as regime from './ui/regime.js';
+import * as ecranDemandes from './ui/demandes.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
 import {
@@ -67,12 +73,20 @@ const ECRANS = {
   import: { titre: 'Ajouter des recettes', module: importRecettes, onglet: 'plats' },
   restaurer: { titre: 'Restaurer une sauvegarde', module: restaurer, onglet: null },
   regime: { titre: 'Ce que mange', module: regime, onglet: null, sansOnglets: true },
+  demandes: { titre: 'Demandes', module: ecranDemandes, onglet: null },
 };
 
 const NOM_APP = 'Repas & Courses';
 
 // Délai avant d'annoncer que les données sont injoignables alors que le téléphone a du réseau.
 const DELAI_INJOIGNABLE_MS = 4000;
+
+// « 📬 Demander » (T2e) : un second toucher sur la même demande, pendant ce délai, n'écrit rien (verrou en mémoire, en
+// plus de la demande déjà ouverte dans l'état local).
+const DELAI_VERROU_DEMANDE_MS = 2000;
+// Notification différée (T2e) : après l'accusé du serveur, attente au plus de ce délai que la copie du téléphone soit
+// confirmée par le serveur ; au-delà, l'envoi juge sur l'état du moment.
+const DELAI_CONFIRMATION_MS = 10000;
 
 // Comptes déjà confirmés par le serveur sur ce téléphone. Le cache Firestore est commun à tous les comptes :
 // pour un compte jamais confirmé, la copie locale n'est pas montrée (un compte non autorisé ne voit rien).
@@ -388,11 +402,17 @@ function instructionsAJour() {
  * <Enfant> mange » et à passer à `actions.enregistrerPrecautions`.
  * Repères à la main (T2c-2) : `surveilles`, marqueurs que surveille une règle active d'un profil (Set, même objet tant
  * que les profils ne changent pas).
+ * Demandes (T2e) : `aTraiter`, demandes encore utiles (coeur/demandes.js › demandesATraiter : la plus ancienne
+ * d'abord), seule source de la carte 📬 de Semaine, du panneau du profil et de l'écran Demandes ; [] tant que demandes,
+ * plats et profils ne sont pas tous chargés.
  */
 function contexteCourant() {
   const { utilisateur } = etat;
   const { role, roleReel, route, parametre } = routeCourante();
   const { actifs, corbeille } = platsSepares();
+  const aTraiter = etat.demandesChargees && etat.platsCharges && etat.profilsCharges
+    ? demandesATraiter(etat.demandes, { plats: actifs, profils: etat.profils, evaluer: compat })
+    : [];
   return {
     utilisateur,
     role,
@@ -407,6 +427,7 @@ function contexteCourant() {
     platsCharges: etat.platsCharges,
     demandes: etat.demandes,
     demandesChargees: etat.demandesChargees,
+    aTraiter,
     parametre,
     routePrecedente,
     instructionsAJour: instructionsAJour(),
@@ -481,14 +502,25 @@ function ecrire(promesse, messageEchec) {
 let instructionsClaude = null;
 
 const actions = {
+  /**
+   * Ajoute un plat par son nom (⏳). Rôle effectif « Repas et courses » (aperçu compris, T2e) : la demande de recette
+   * part dans le même lot, s'affiche tout de suite (la fiche, ouverte aussitôt, dit « 📬 Demandée… ») et le
+   * gestionnaire est prévenu (prevenirDemande). → { id } ou { erreur } (coeur/plats.js › nouveauPlatParNom).
+   */
   ajouterPlat(nom) {
     const resultat = nouveauPlatParNom(nom, etat.plats);
     if (resultat.erreur) return resultat;
-    const demanderRecette = roleDe(etat.utilisateur.email, etat.donnees.reglages) !== 'gestionnaire';
-    ecrire(donnees.ajouterPlat(resultat.plat, etat.utilisateur.email, { demanderRecette }),
-      'Le plat n’a pas pu être enregistré. Réessayez.');
+    const demanderRecette = roleCourant() !== 'gestionnaire';
+    const email = etat.utilisateur.email;
+    const envoi = donnees.ajouterPlat(resultat.plat, email, { demanderRecette });
+    ecrire(envoi, 'Le plat n’a pas pu être enregistré. Réessayez.');
     // Affiché tout de suite ; la copie de Firestore remplace cette version dès son arrivée.
     etat.plats = [...etat.plats, resultat.plat];
+    if (demanderRecette) {
+      const demande = demandeDeRecette(resultat.plat.id, email);
+      insererDemande(demande);
+      prevenirDemande(demande.id, 'recette', resultat.plat, envoi);
+    }
     annoncer(demanderRecette
       ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée.`
       : `«\u00A0${resultat.plat.nom}\u00A0» ajouté.`);
@@ -601,6 +633,10 @@ const actions = {
    *   entre-temps ; un échec est annoncé, et la promesse est rejetée avec `code: 'echec'`.
    * → promesse de { manquants: [nom] } (noms des plats disparus avant l'envoi de leur version) ; sans version,
    *   résolue tout de suite avec { manquants: [] }.
+   * Demandes satisfaites (T2e : l'écran Demandes et la carte 📬 en dépendent) : closes tout de suite sur ce téléphone
+   * pour les fiches complètes, comme donnees.importer ; celles des versions seulement après leurs transactions, sauf
+   * pour un plat disparu entre-temps, et jamais si les versions échouent (la demande reste affichée). Versions
+   * échouées : la fiche affichée d'avance revient à ce qu'elle était, si aucun instantané ne l'a remplacée.
    */
   importer({ ecritures, demandesAClore }) {
     const aVersions = ecritures.some((ecriture) => ecriture.mode === 'versions');
@@ -616,16 +652,26 @@ const actions = {
     const nomsAvant = new Map(etat.plats.map((plat) => [plat.id, plat.nom]));
     const { envoi, versions } = donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email);
     ecrire(envoi, 'Les recettes n’ont pas pu être enregistrées. Réessayez.');
+    const platsAvant = new Map(etat.plats.map((plat) => [plat?.id, plat]));
     etat.plats = appliquerImport(etat.plats, ecritures);
-    cloreDemandes(demandesAClore);
+    // Même règle que donnees.importer : une demande dont le plat reçoit des versions attend leurs transactions.
+    const idsVersions = new Set(ecritures.filter((ecriture) => ecriture.mode === 'versions').map(({ id }) => id));
+    const platDe = (demande) => String(demande).split('__')[0];
+    const aClore = Array.isArray(demandesAClore) ? demandesAClore : [];
+    cloreDemandes(aClore.filter((demande) => !idsVersions.has(platDe(demande))));
     if (!aVersions) {
       versions.catch(() => {});
       return Promise.resolve({ manquants: [] });
     }
     const uid = etat.utilisateur.uid;
+    // Fiches qui montrent d'avance les versions reçues (objets de appliquerImport, remplacés par le prochain instantané).
+    const affichees = new Map(etat.plats.filter((plat) => idsVersions.has(plat?.id)).map((plat) => [plat.id, plat]));
     return versions.then(({ manquants }) => {
       const noms = manquants.map((id) => String(nomsAvant.get(id) ?? id));
       if (etat.utilisateur?.uid !== uid) return { manquants: noms };
+      const absents = new Set(manquants);
+      cloreDemandes(aClore.filter((demande) => idsVersions.has(platDe(demande)) && !absents.has(platDe(demande))));
+      rendre();
       const parProfil = profilsDesVersions(ecritures).map((pour) => {
         const profil = etat.profils.find((p) => p.id === pour);
         // Plats actifs seulement : un plat de la corbeille n'attend pas de version.
@@ -642,6 +688,13 @@ const actions = {
       if (texte) annoncer(texte);
       return { manquants: noms };
     }, (erreur) => {
+      if (etat.utilisateur?.uid === uid) {
+        // Une transaction ratée n'écrit rien : aucun instantané ne corrigerait la fiche affichée d'avance.
+        etat.plats = etat.plats.map((plat) => (plat && affichees.get(plat.id) === plat && platsAvant.has(plat.id)
+          ? platsAvant.get(plat.id)
+          : plat));
+        rendre();
+      }
       annoncer('Les versions n’ont pas pu être enregistrées. Réessayez.');
       throw Object.assign(new Error('Les versions n’ont pas pu être enregistrées.'), { code: 'echec', cause: erreur });
     });
@@ -942,7 +995,384 @@ const actions = {
   noterRelectureEnCours(platIds) {
     noterRelectureEnCours(etat.utilisateur?.uid, platIds);
   },
+  /**
+   * « 📬 Demander ma version », « 📬 Demander une version pour <Prénom> » (`profilId`) ou « 📬 Demander la recette »
+   * (sans `profilId`) : rôle effectif « Repas et courses » seulement (aperçu compris), préparée par coeur/demandes.js ›
+   * preparerDemande. Synchrone : écrite (hors ligne : part plus tard), affichée tout de suite (`creeLe: null` jusqu'à
+   * l'horodatage du serveur), gestionnaire prévenu (prevenirDemande), écran redessiné, puis annonce « C’est demandé. »
+   * avec « Annuler » (8 s), qui retire la demande, redessine et appelle `apresAnnulation()` (l'écran y rend le focus au
+   * bouton revenu).
+   * → { code: 'ok', id } | { code } : refuse (gestionnaire hors aperçu), chargement (demandes, plats ou profils pas
+   *   encore lus), inutile (plat ou profil inconnu, rien à demander), deja (déjà ouverte, ou touchée il y a moins de
+   *   2 s), invalide, echec (lot impossible à construire : annoncé).
+   */
+  demander({ platId, profilId = null, apresAnnulation } = {}) {
+    if (!etat.utilisateur || roleCourant() === 'gestionnaire') return { code: 'refuse' };
+    if (!etat.demandesChargees || !etat.platsCharges || !etat.profilsCharges) return { code: 'chargement' };
+    const plat = platsSepares().actifs.find((p) => p.id === platId);
+    const profil = profilId === null || profilId === undefined ? null : etat.profils.find((p) => p.id === profilId);
+    if (!plat || profil === undefined) return { code: 'inutile' };
+    const id = idDemande(plat.id, profil?.id ?? null);
+    if (id && Date.now() - (verrousDemandes.get(id) ?? -Infinity) < DELAI_VERROU_DEMANDE_MS) return { code: 'deja' };
+    const preparation = preparerDemande({ plat, profil }, {
+      demandes: etat.demandes,
+      auteur: etat.utilisateur.email,
+      evaluer: compat,
+    });
+    if (preparation.erreur) return { code: preparation.erreur };
+    const echec = 'La demande n’a pas pu être enregistrée. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.creerDemande(preparation);
+    } catch {
+      annoncer(echec);
+      return { code: 'echec' };
+    }
+    ecrire(envoi, echec);
+    verrousDemandes.set(preparation.id, Date.now());
+    insererDemande(preparation);
+    prevenirDemande(preparation.id, preparation.donnees.type, plat, envoi);
+    rendre();
+    annoncer('C’est demandé.', {
+      action: { libelle: 'Annuler', faire: () => annulerDemande(preparation.id, apresAnnulation) },
+    });
+    return { code: 'ok', id: preparation.id };
+  },
+  /**
+   * « Retirer la demande » (gestionnaire hors aperçu, écran Demandes) : statut `traitee` (hors ligne : part plus tard),
+   * appliqué tout de suite, puis annonce « Demande retirée. » avec « Annuler », qui la remet (remettreDemande) puis
+   * appelle `apresAnnulation()` si l'écran en donne un. L'écran gère le focus de la ligne qui disparaît.
+   * → { code } : ok, refuse, inutile (pas ouverte sur ce téléphone), echec (lot impossible à construire : annoncé).
+   */
+  retirerDemande(id, { apresAnnulation } = {}) {
+    if (!etat.utilisateur || roleCourant() !== 'gestionnaire') return { code: 'refuse' };
+    if (!demandeOuverte(etat.demandes, id)) return { code: 'inutile' };
+    const echec = 'La demande n’a pas pu être retirée. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.retirerDemande(id);
+    } catch {
+      annoncer(echec);
+      return { code: 'echec' };
+    }
+    ecrire(envoi, echec);
+    changerStatutDemande(id, 'traitee');
+    rendre();
+    annoncer('Demande retirée.', {
+      action: {
+        libelle: 'Annuler',
+        faire: () => {
+          if (actions.remettreDemande(id).code === 'ok' && typeof apresAnnulation === 'function') apresAnnulation();
+        },
+      },
+    });
+    return { code: 'ok' };
+  },
+  /**
+   * « Annuler » un retrait (gestionnaire) : la demande redevient ouverte (`creeLe` et auteur gardés ; hors ligne : part
+   * plus tard), appliqué tout de suite. → { code } : ok, refuse, inutile (pas traitée sur ce téléphone), echec.
+   */
+  remettreDemande(id) {
+    if (!etat.utilisateur || roleCourant() !== 'gestionnaire') return { code: 'refuse' };
+    const demande = etat.demandes.find((d) => d.id === id);
+    if (!demande || demande.statut !== 'traitee') return { code: 'inutile' };
+    const echec = 'La demande n’a pas pu être remise. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.remettreDemande(id);
+    } catch {
+      annoncer(echec);
+      return { code: 'echec' };
+    }
+    ecrire(envoi, echec);
+    changerStatutDemande(id, 'ouverte');
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * « Activer les notifications » (gestionnaire, Réglages) : l'app crée le sujet (`repas-` + 24 signes au hasard,
+   * coeur/ntfy.js › nouveauSujet) et l'écrit par transaction, seulement si aucun sujet n'existe (donnees.js ›
+   * remplacerSujet). En ligne seulement ; annonces du plan (§6.8) faites ici, l'écran place le focus selon le code.
+   * → promesse de { code } (jamais rejetée) : ok, existe (sujet créé entre-temps sur un autre appareil : montré, rien
+   *   n'est écrasé), hors_ligne, deja (réglage déjà en cours d'envoi), echec, refuse.
+   */
+  async activerNotifications() {
+    if (!etat.utilisateur || roleCourant() !== 'gestionnaire') return { code: 'refuse' };
+    if (!navigator.onLine) {
+      annoncer(MESSAGE_SUJET_HORS_LIGNE);
+      return { code: 'hors_ligne' };
+    }
+    if (sujetEnCours) return { code: 'deja' };
+    let sujet;
+    try {
+      sujet = nouveauSujet(crypto.getRandomValues(new Uint8Array(SIGNES_SUJET)));
+    } catch {
+      sujet = null;
+    }
+    if (!sujet) {
+      annoncer(MESSAGE_SUJET_ECHEC);
+      return { code: 'echec' };
+    }
+    const resultat = await changerSujet(null, sujet);
+    if (resultat.code === 'ok') annoncer('Notifications activées. Abonnez-vous maintenant dans ntfy.');
+    else if (resultat.code === 'existe') annoncer(MESSAGE_SUJET_EXISTE);
+    return resultat;
+  },
+  /**
+   * « Arrêter les notifications » (gestionnaire) : retire le sujet par transaction, seulement s'il est toujours celui
+   * que la carte montrait. En ligne seulement. Réussi : annonce « Notifications arrêtées. » avec « Annuler » (8 s), qui
+   * remet l'ancien sujet par transaction (seulement si aucun sujet n'a été créé entre-temps) ; si un sujet est alors
+   * montré (remis, ou créé ailleurs), redessine puis appelle `apresAnnulation()` (focus sur « S’abonner dans ntfy › »).
+   * → promesse de { code } (jamais rejetée) : ok, change (sujet changé sur un autre appareil : la carte montre
+   *   l'actuel), hors_ligne, deja (aucun sujet, ou réglage déjà en cours d'envoi), echec, refuse.
+   */
+  async arreterNotifications({ apresAnnulation } = {}) {
+    if (!etat.utilisateur || roleCourant() !== 'gestionnaire') return { code: 'refuse' };
+    if (!navigator.onLine) {
+      annoncer(MESSAGE_SUJET_HORS_LIGNE);
+      return { code: 'hors_ligne' };
+    }
+    const ancien = sujetCourant();
+    if (sujetEnCours || ancien === null) return { code: 'deja' };
+    const resultat = await changerSujet(ancien, null);
+    if (resultat.code === 'ok') {
+      annoncer('Notifications arrêtées.', {
+        action: { libelle: 'Annuler', faire: () => remettreSujet(ancien, apresAnnulation) },
+      });
+    } else if (resultat.code === 'existe') {
+      annoncer('Ce réglage venait de changer sur un autre appareil\u00A0: la carte montre le sujet actuel.');
+      return { code: 'change' };
+    }
+    return resultat;
+  },
+  /**
+   * « Envoyer un essai » (gestionnaire, Réglages) : « Essai : les demandes arriveront ici. », lien vers Réglages.
+   * L'écran affiche coeur/ntfy.js › texteEssai de l'issue et gère son propre minuteur d'affichage (15 s).
+   * → promesse de l'issue (coeur/ntfy.js › issueEnvoi : ok, quota, panne, refus, reseau), jamais rejetée ;
+   *   { code: 'invalide' } sans sujet valide, { code: 'refuse' } hors gestionnaire (texteEssai : '').
+   */
+  async essayerNotification() {
+    if (!etat.utilisateur || roleCourant() !== 'gestionnaire') return { code: 'refuse' };
+    const adresse = adresseNotification(sujetCourant(), { lien: lienApp('#/reglages') });
+    if (!adresse) return { code: 'invalide' };
+    try {
+      return issueEnvoi(await envoyerNtfy(adresse, texteNotification({ type: 'essai' })));
+    } catch {
+      return { code: 'reseau' };
+    }
+  },
 };
+
+// ——— Demandes et notifications (T2e) ———
+
+const MESSAGE_SUJET_HORS_LIGNE = 'Il faut du réseau pour changer ce réglage.';
+const MESSAGE_SUJET_ECHEC = 'Le réglage des notifications n’a pas pu être enregistré. Réessayez.';
+const MESSAGE_SUJET_EXISTE = 'Les notifications étaient déjà activées sur un autre appareil\u00A0: voici leur sujet.';
+
+// Demandes touchées récemment sur ce téléphone : identifiant → heure du toucher (actions.demander).
+const verrousDemandes = new Map();
+// Transaction du sujet ntfy en cours (double toucher sur « Activer », « Arrêter » ou « Annuler »).
+let sujetEnCours = false;
+// Notifications qui attendent la copie confirmée par le serveur (apresConfirmation) : { rappel, minuteur }.
+let rappelsConfirmation = [];
+
+/** Rôle affiché : rôle réel, ou « Repas et courses » en aperçu (coeur/roles.js › roleEffectif). */
+function roleCourant() {
+  return roleEffectif(roleDe(etat.utilisateur?.email, etat.donnees.reglages), etat.apercu);
+}
+
+/** Sujet ntfy de `reglages/foyer` tel que lu sur ce téléphone ; absent ou vide → null. */
+function sujetCourant() {
+  const sujet = etat.donnees.reglages?.notifications?.ntfySujet;
+  return sujet === undefined || sujet === null || sujet === '' ? null : sujet;
+}
+
+/** Sujet appliqué tout de suite sur ce téléphone (null : retiré) ; la copie de Firestore suit. */
+function appliquerSujet(sujet) {
+  if (!etat.donnees.reglages) return;
+  const notifications = { ...(etat.donnees.reglages.notifications ?? {}) };
+  if (sujet === null) delete notifications.ntfySujet;
+  else notifications.ntfySujet = sujet;
+  etat.donnees = { ...etat.donnees, reglages: { ...etat.donnees.reglages, notifications } };
+}
+
+/**
+ * Remplace le sujet par transaction (donnees.js › remplacerSujet), si celui du serveur vaut toujours `attendu`. Écrit :
+ * appliqué tout de suite ; sinon, le sujet trouvé est montré. Redessine dans les deux cas. N'annonce que l'échec.
+ * → promesse de { code } : ok, existe (non écrit : un autre sujet, ou aucun, était là), echec ; refuse si la personne
+ *   connectée a changé entre-temps.
+ */
+async function changerSujet(attendu, nouveau) {
+  const uid = etat.utilisateur.uid;
+  sujetEnCours = true;
+  let resultat;
+  try {
+    resultat = await donnees.remplacerSujet(attendu, nouveau);
+  } catch {
+    resultat = null;
+  } finally {
+    sujetEnCours = false;
+  }
+  if (etat.utilisateur?.uid !== uid) return { code: 'refuse' };
+  if (!resultat) {
+    annoncer(MESSAGE_SUJET_ECHEC);
+    return { code: 'echec' };
+  }
+  appliquerSujet(resultat.ecrit ? nouveau : (resultat.actuel ?? null));
+  rendre();
+  return { code: resultat.ecrit ? 'ok' : 'existe' };
+}
+
+/**
+ * « Annuler » de « Notifications arrêtées. » : remet l'ancien sujet par transaction, seulement si aucun sujet n'a été
+ * créé entre-temps (sinon, celui-ci est montré : « déjà activées sur un autre appareil »). En ligne seulement. Quand un
+ * sujet est de nouveau montré, `apresAnnulation()` (focus sur « S’abonner dans ntfy › »).
+ */
+async function remettreSujet(ancien, apresAnnulation) {
+  if (!etat.utilisateur || roleCourant() !== 'gestionnaire' || sujetEnCours) return;
+  if (!navigator.onLine) {
+    annoncer(MESSAGE_SUJET_HORS_LIGNE);
+    return;
+  }
+  const { code } = await changerSujet(null, ancien);
+  if (code === 'existe') annoncer(MESSAGE_SUJET_EXISTE);
+  if ((code === 'ok' || code === 'existe') && sujetCourant() !== null && typeof apresAnnulation === 'function') {
+    apresAnnulation();
+  }
+}
+
+/**
+ * Demande créée sur ce téléphone ({ id, donnees }) : affichée tout de suite, `creeLe: null` jusqu'à l'horodatage du
+ * serveur, à la place d'une demande traitée du même identifiant ; la copie de Firestore la remplace dès son arrivée.
+ */
+function insererDemande({ id, donnees: champs }) {
+  etat.demandes = [...etat.demandes.filter((demande) => demande.id !== id), { ...champs, id, creeLe: null }];
+}
+
+/** Statut d'une demande changé tout de suite sur ce téléphone (`traiteeLe` effacé quand elle se rouvre). */
+function changerStatutDemande(id, statut) {
+  etat.demandes = etat.demandes.map((demande) => {
+    if (demande.id !== id) return demande;
+    const maj = { ...demande, statut };
+    if (statut === 'ouverte') delete maj.traiteeLe;
+    return maj;
+  });
+}
+
+/**
+ * « Annuler » de « C’est demandé. » (vue « Repas et courses », appelée seulement par l'annonce) : retire la demande
+ * qu'elle vient de créer, encore ouverte et créée par la personne connectée ; redessine, puis `apresAnnulation()`. Une
+ * notification déjà partie n'est pas rattrapée ; une notification en attente (hors ligne) ne partira pas : la demande
+ * n'est plus ouverte quand elle est examinée.
+ */
+function annulerDemande(id, apresAnnulation) {
+  if (!etat.utilisateur || roleCourant() === 'gestionnaire') return;
+  const demande = demandeOuverte(etat.demandes, id);
+  if (!demande || normaliserEmail(demande.creePar) !== normaliserEmail(etat.utilisateur.email)) return;
+  const echec = 'La demande n’a pas pu être annulée. Réessayez.';
+  let envoi;
+  try {
+    envoi = donnees.retirerDemande(id);
+  } catch {
+    annoncer(echec);
+    return;
+  }
+  ecrire(envoi, echec);
+  verrousDemandes.delete(id);
+  changerStatutDemande(id, 'traitee');
+  rendre();
+  if (typeof apresAnnulation === 'function') apresAnnulation();
+}
+
+/** Adresse de l'app, calculée sur le téléphone (rien dans le dépôt), suivie de `ancre` ('#/plat/<id>', '#/reglages'). */
+function lienApp(ancre) {
+  return new URL('./', location.href).href + ancre;
+}
+
+/**
+ * Prévient le gestionnaire d'une demande créée sur ce téléphone (`envoi` : promesse du lot qui l'écrit), au plus deux
+ * envois, sans rien écrire dans Firestore (CLAUDE.md §7 ; plan T2e §5.3, §5.4). Chaque tentative relit tout au moment
+ * où elle part : même compte connecté, sujet valide, demande encore ouverte et utile, nom du plat actuel.
+ * - En ligne : envoi tout de suite, sans attendre l'accusé du serveur. Seulement si ce premier envoi n'a pas trouvé de
+ *   réseau, une seconde et dernière tentative à l'accusé du serveur (un 429, un 4xx ou un 5xx ne sont pas retentés).
+ * - Hors ligne : une seule tentative, à l'accusé du serveur.
+ * Une tentative à l'accusé attend la copie confirmée par le serveur (apresConfirmation, 10 s au plus) : une version
+ * arrivée, un plat mis à la corbeille ou un sujet arrêté pendant la coupure sont vus avant l'envoi. Écriture refusée :
+ * aucune notification (l'échec est déjà annoncé). Rien n'est accroché à l'événement `online` ; app fermée avant
+ * l'accusé : notification perdue (la demande, elle, part et s'affiche).
+ */
+function prevenirDemande(id, type, plat, envoi) {
+  const uid = etat.utilisateur?.uid;
+  const platId = plat?.id;
+  if (!uid || typeof platId !== 'string') return;
+  const tenter = () => {
+    if (etat.utilisateur?.uid !== uid) return Promise.resolve(null);
+    const sujet = sujetCourant();
+    if (!sujetValide(sujet)) return Promise.resolve(null);
+    const { actifs } = platsSepares();
+    const demande = demandeOuverte(etat.demandes, id);
+    if (!demande || !demandeUtile(demande, { plats: actifs, profils: etat.profils, evaluer: compat })) {
+      return Promise.resolve(null);
+    }
+    const nomPlat = actifs.find((p) => p.id === platId)?.nom ?? '';
+    const adresse = adresseNotification(sujet, { lien: lienApp(`#/plat/${encodeURIComponent(platId)}`) });
+    const texte = texteNotification({ type, nomPlat });
+    if (!adresse || !texte) return Promise.resolve(null);
+    return envoyerNtfy(adresse, texte);
+  };
+  const aLAccuse = () => {
+    envoi.then(() => apresConfirmation(tenter), () => {});
+  };
+  if (!navigator.onLine) {
+    aLAccuse();
+    return;
+  }
+  tenter().then((reponse) => {
+    if (reponse && issueEnvoi(reponse).code === 'reseau') aLAccuse();
+  }, () => {});
+}
+
+/** Vrai quand réglages, plats et profils viennent du serveur (et non de la seule copie du téléphone). */
+function copieConfirmee() {
+  return etat.donnees.statut === 'ok' && !etat.donnees.depuisCache
+    && etat.platsCharges && !etat.platsDepuisCache && etat.profilsCharges && !etat.profilsDepuisCache;
+}
+
+/**
+ * Appelle `rappel` dès que la copie du téléphone est confirmée par le serveur : tout de suite si elle l'est, sinon au
+ * premier instantané qui la confirme (verifierConfirmation), au plus tard après DELAI_CONFIRMATION_MS (il juge alors
+ * sur l'état du moment). L'accusé d'une écriture prouve que le réseau marche ; les écoutes peuvent encore être en
+ * retard sur le serveur.
+ */
+function apresConfirmation(rappel) {
+  if (copieConfirmee()) {
+    rappel();
+    return;
+  }
+  const attente = { rappel, minuteur: null };
+  attente.minuteur = setTimeout(() => lancerRappel(attente), DELAI_CONFIRMATION_MS);
+  rappelsConfirmation.push(attente);
+}
+
+function lancerRappel(attente) {
+  if (!rappelsConfirmation.includes(attente)) return;
+  clearTimeout(attente.minuteur);
+  rappelsConfirmation = rappelsConfirmation.filter((autre) => autre !== attente);
+  attente.rappel();
+}
+
+/** À chaque instantané (réglages, collections) : les rappels en attente partent si la copie est confirmée. */
+function verifierConfirmation() {
+  if (!rappelsConfirmation.length || !copieConfirmee()) return;
+  for (const attente of [...rappelsConfirmation]) lancerRappel(attente);
+}
+
+/** Déconnexion : plus aucune notification en attente, plus aucun verrou. */
+function oublierRappels() {
+  for (const { minuteur } of rappelsConfirmation) clearTimeout(minuteur);
+  rappelsConfirmation = [];
+  verrousDemandes.clear();
+}
 
 /**
  * Relecture des repères par Claude (T2d, écritures `mode: 'precautions'`, en ligne seulement : vérifié par l'appelant).
@@ -1051,6 +1481,12 @@ function ouvrirPanneauProfil() {
     // Rappel de recopier les instructions du projet Claude quand elles ont changé (gestionnaire, hors aperçu).
     instructionsAJour: ctx.instructionsAJour,
     onInstructions: () => { location.hash = '#/reglages'; },
+    // Demandes à traiter (T2e) : l'entrée « 📬 Demandes · N » n'apparaît que s'il y en a (gestionnaire, hors aperçu).
+    demandes: ctx.aTraiter.length,
+    onDemandes: () => {
+      if (panneauProfil.open) panneauProfil.close();
+      location.hash = '#/demandes';
+    },
     version: etat.version,
     versionPrete: etat.versionPrete,
   });
@@ -1092,6 +1528,7 @@ async function lancerConnexion() {
 function oublierDonnees() {
   arreterReglages();
   donnees.arreterCollections();
+  oublierRappels();
   Object.assign(etat, {
     donnees: { statut: 'chargement' },
     collectionsSuivies: false,
@@ -1156,6 +1593,7 @@ function suivreDonnees() {
       else if (!compteConfirme(uid)) suivi = { statut: 'injoignable' };
     }
     etat.donnees = suivi;
+    verifierConfirmation();
     if (suivi.statut === 'ok' && !etat.collectionsSuivies) {
       etat.collectionsSuivies = true;
       donnees.suivreCollections((maj) => {
@@ -1163,6 +1601,7 @@ function suivreDonnees() {
         if (maj.plats) etat.platsCharges = true;
         if (maj.profils) etat.profilsCharges = true;
         if (maj.demandes) etat.demandesChargees = true;
+        verifierConfirmation();
         rendre();
       }, (code) => {
         donnees.arreterCollections();

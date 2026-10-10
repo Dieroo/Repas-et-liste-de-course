@@ -252,10 +252,15 @@ export function creer(ctx) {
 
   // Ouvert depuis Réglages (carte « 🧸 Relire les recettes », « Ajouter des recettes ») : le retour y ramène.
   const depuisReglages = () => !cible && courant.routePrecedente === 'reglages';
+  // Ouvert depuis l'écran Demandes (« Coller la réponse de Claude », T2e) : le retour, et l'enregistrement, y ramènent.
+  const depuisDemandes = () => !cible && courant.routePrecedente === 'demandes';
 
   function revenir(evenement) {
     // Venu de cet écran-là : retour dans l'historique, pour que le geste retour d'Android reste naturel.
-    const attendu = cible ? 'plat' : depuisReglages() ? 'reglages' : 'plats';
+    let attendu = 'plats';
+    if (cible) attendu = 'plat';
+    else if (depuisReglages()) attendu = 'reglages';
+    else if (depuisDemandes()) attendu = 'demandes';
     if (courant.routePrecedente === attendu && history.length > 1) {
       evenement.preventDefault();
       history.back();
@@ -273,6 +278,9 @@ export function creer(ctx) {
     } else if (depuisReglages()) {
       retour.href = '#/reglages';
       retour.querySelector('.retour-texte').textContent = 'Réglages';
+    } else if (depuisDemandes()) {
+      retour.href = '#/demandes';
+      retour.querySelector('.retour-texte').textContent = 'Demandes';
     } else {
       retour.href = '#/plats';
       retour.querySelector('.retour-texte').textContent = 'Plats';
@@ -899,6 +907,12 @@ export function creer(ctx) {
     });
     if (!ecritures.length) annoncer('Recette marquée comme ajoutée.');
     else if (comptes.recettes) annoncer(comptes.recettes > 1 ? `${comptes.recettes} recettes enregistrées.` : 'Recette enregistrée.');
+    // Venu de l'écran Demandes : toujours y revenir, il montre ce qui reste à traiter.
+    if (depuisDemandes()) {
+      if (courant.routePrecedente === 'demandes' && history.length > 1) history.back();
+      else location.replace('#/demandes');
+      return;
+    }
     // Retour à l'écran d'où l'on vient (fiche ciblée, liste) : un pas en arrière, sans doublon dans l'historique.
     // Sinon, cet écran est remplacé : le geste retour ne ramène pas à un aperçu déjà enregistré.
     const origine = cible ? `#/plat/${encodeURIComponent(cible)}` : '#/plats';

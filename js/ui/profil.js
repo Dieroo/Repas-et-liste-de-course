@@ -133,6 +133,18 @@ function blocInstructions(instructionsAJour, onInstructions, bouton) {
   ];
 }
 
+/**
+ * Demandes à traiter (gestionnaire, T2e) : seulement s'il y en a, « 📬 Demandes · 2 », qui ferme le panneau et ouvre
+ * l'écran Demandes. Nom accessible « Voir les 2 demandes à traiter » (« · 2 » est mal lu par les lecteurs d'écran).
+ * `demandes` : nombre lu à l'ouverture du panneau (il ne se met pas à jour pendant qu'il est ouvert).
+ */
+function blocDemandes(demandes, onDemandes, bouton) {
+  if (!Number.isInteger(demandes) || demandes < 1 || !onDemandes) return [];
+  const entree = bouton(`📬 Demandes\u00A0·\u00A0${demandes}`, onDemandes);
+  entree.setAttribute('aria-label', demandes > 1 ? `Voir les ${demandes} demandes à traiter` : 'Voir la demande à traiter');
+  return [entree];
+}
+
 /** « 8 octobre 2026 » pour '2026-10-08' ; null si la date est illisible. */
 function dateLongue(iso) {
   const morceaux = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ''));
@@ -167,11 +179,14 @@ function lignesVersion(version, versionPrete) {
  * `onSauvegarder()` est appelé dans le toucher, panneau déjà fermé.
  * `instructionsAJour` : faux si les instructions du projet Claude ont changé depuis la dernière copie (rappel et
  * `onInstructions()`, panneau déjà fermé) ; vrai par défaut, sans rappel.
+ * `demandes` : nombre de demandes à traiter (gestionnaire hors aperçu ; entrée « 📬 Demandes · N » s'il y en a) ;
+ * `onDemandes()` ouvre l'écran Demandes, panneau déjà fermé.
  */
 export function ouvrirProfil(dialogue, {
   utilisateur, role, apercu, moi = null, aRelier = [], avecProfils = false,
   onReglages, onAjouterRecettes, onApercu, onDeconnecter, onQuiEtesVous, onDelier,
   sauvegarde = null, onSauvegarder, instructionsAJour = true, onInstructions, version = null, versionPrete = false,
+  demandes = 0, onDemandes,
 }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
@@ -195,6 +210,7 @@ export function ouvrirProfil(dialogue, {
       blocReliure({ moi, aRelier, avecProfils, role, bouton, onQuiEtesVous, onDelier, fermer }),
       role === 'gestionnaire' && !apercu ? blocSauvegarde(sauvegarde, onSauvegarder, bouton) : null,
       role === 'gestionnaire' && !apercu ? blocInstructions(instructionsAJour, onInstructions, bouton) : null,
+      role === 'gestionnaire' && !apercu ? blocDemandes(demandes, onDemandes, bouton) : null,
       role === 'gestionnaire' && !apercu ? bouton('📋 Ajouter des recettes', onAjouterRecettes) : null,
       role === 'gestionnaire' && !apercu ? bouton('⚙️ Réglages', onReglages) : null,
       role === 'gestionnaire'

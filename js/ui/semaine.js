@@ -1,6 +1,7 @@
 // Écran Semaine (accueil) : salutation, jours de la semaine, carte d'accueil ; pour le gestionnaire (hors aperçu
 // « Repas et courses »), la carte « 🧸🎂 <Enfant> a 5 ans ! » quand des précautions de l'enfant ont passé leur âge
-// (T2c-3), et la carte « Idées de plats » qui copie une demande pour le projet Claude.
+// (T2c-3), la carte « 📬 2 demandes à traiter » (T2e) et la carte « Idées de plats » qui copie une demande pour le
+// projet Claude.
 import { el, enteteVue, pastille } from './dom.js';
 import { prenomDe } from './profil.js';
 import { ouvrirFeuille } from './feuille.js';
@@ -213,14 +214,63 @@ function creerCarteAnniversaire(ctx) {
   return { noeud, maj };
 }
 
+/** Nom d'un plat pour un texte d'écran : espaces resserrés. */
+const nomCourt = (plat) => String(plat?.nom ?? '').replace(/\s+/g, ' ').trim();
+
+/** « A. », « A et B. », « A, B et C. », « A, B, C et 2 autres. » : au plus trois noms, puis le compte des autres. */
+function nomsDesPlats(noms) {
+  if (noms.length > 3) {
+    const autres = noms.length - 3;
+    return `${noms.slice(0, 3).join(', ')} et ${autres}\u00A0${autres > 1 ? 'autres' : 'autre'}.`;
+  }
+  return noms.length > 1 ? `${noms.slice(0, -1).join(', ')} et ${noms.at(-1)}.` : `${noms.join('')}.`;
+}
+
+/**
+ * Carte « 📬 2 demandes à traiter » (T2e, gestionnaire hors aperçu « Repas et courses ») : les demandes encore utiles
+ * (`ctx.aTraiter`, coeur/demandes.js › demandesATraiter), les noms de leurs plats et « Voir les demandes › ». Nœud
+ * gardé et mis à jour en place (`maj`) : la carte apparaît en direct quand une demande arrive et disparaît dès qu'il
+ * n'y a plus rien à traiter. Textes et lien réécrits seulement s'ils changent.
+ * → { noeud, maj }
+ */
+function creerCarteDemandes(ctx) {
+  const titre = el('h2', { id: 'titre-demandes' });
+  const plats = el('p', {});
+  const lien = el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/demandes' }, 'Voir les demandes ›');
+  const noeud = el('section', { class: 'carte carte-demandes', 'aria-labelledby': 'titre-demandes', hidden: true },
+    el('div', { class: 'carte-ligne' },
+      pastille('📬', 'bleu'),
+      el('div', { class: 'carte-texte' }, titre, plats)),
+    lien);
+
+  function maj(c) {
+    const aTraiter = c?.role === 'gestionnaire' && Array.isArray(c.aTraiter) ? c.aTraiter : [];
+    const n = aTraiter.length;
+    noeud.hidden = n === 0;
+    if (!n) return;
+    const noms = [...new Set(aTraiter.map((element) => nomCourt(element?.plat)).filter(Boolean))];
+    const texteTitre = n > 1 ? `${n}\u00A0demandes à traiter` : '1\u00A0demande à traiter';
+    if (titre.textContent !== texteTitre) titre.textContent = texteTitre;
+    const textePlats = noms.length ? nomsDesPlats(noms) : '';
+    if (plats.textContent !== textePlats) plats.textContent = textePlats;
+    plats.hidden = !textePlats;
+    const nomAccessible = n > 1 ? `Voir les ${n} demandes à traiter` : 'Voir la demande à traiter';
+    if (lien.getAttribute('aria-label') !== nomAccessible) lien.setAttribute('aria-label', nomAccessible);
+  }
+
+  maj(ctx);
+  return { noeud, maj };
+}
+
 /**
  * Écran reconstruit seulement quand sa clé change (jour, salutation, rôle, aperçu) ; `maj(ctx)` garde le contexte à
- * jour pour la feuille « Idées de plats » et met à jour en place la carte « 🧸🎂 ». `ctx.role` est le rôle affiché :
- * « courses » en aperçu.
+ * jour pour la feuille « Idées de plats » et met à jour en place les cartes « 🧸🎂 » et « 📬 ». `ctx.role` est le rôle
+ * affiché : « courses » en aperçu.
  */
 export function creer(ctx) {
   contexteSemaine = ctx;
   const anniversaire = ctx.role === 'gestionnaire' ? creerCarteAnniversaire(ctx) : null;
+  const demandes = ctx.role === 'gestionnaire' ? creerCarteDemandes(ctx) : null;
   const maintenant = new Date();
   const prenom = prenomDe(ctx.utilisateur);
   const jours = joursDeLaSemaine(maintenant);
@@ -231,6 +281,7 @@ export function creer(ctx) {
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
 
     anniversaire?.noeud ?? null,
+    demandes?.noeud ?? null,
 
     el('section', { class: 'carte carte-ligne' },
       pastille('🍲'),
@@ -265,6 +316,7 @@ export function creer(ctx) {
     maj(nouveau) {
       contexteSemaine = nouveau;
       anniversaire?.maj(nouveau);
+      demandes?.maj(nouveau);
     },
   };
 }

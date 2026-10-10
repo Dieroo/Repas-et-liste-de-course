@@ -1,4 +1,5 @@
-// Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde.
+// Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde, projet Claude, relecture des recettes et
+// notifications (T2e : carte « 🔔 Notifications », où l'app crée le sujet ntfy du foyer).
 // Profil d'un enfant (T2c) : « 🧸 Ce que <Enfant> mange › » ouvre l'écran de ses précautions selon l'âge ; la ligne
 // du profil donne son âge (« · 🧸 4 ans ») et, si sa date demande des précautions que ses règles n'ont pas encore
 // (restauration, règle abîmée retirée, barème complété), « 🧸 N précautions à ajouter › ». Calcul seulement : rien
@@ -14,6 +15,7 @@ import { VERSION_INSTRUCTIONS, LOT_PRECAUTIONS, texteDemandePrecautions } from '
 import { platsARelire, lotDePrecautions } from '../coeur/relecture.js';
 import { MARQUEURS_PRECAUTION, estRelue } from '../coeur/vocabulaire.js';
 import { ageEnMois, estRegleAge, reglesSelonAge, texteAge } from '../coeur/age.js';
+import { LIEN_INSTALLER_NTFY, lienAbonnement, sujetValide, texteEssai } from '../coeur/ntfy.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -408,10 +410,254 @@ function creerCarteRelecture(ctx) {
   return { noeud, maj };
 }
 
+// « Envoyer un essai » : sans réponse de ntfy.sh au bout de ce délai, la carte le dit et rend le bouton (l'envoi, lui,
+// n'est pas annulé : son issue remplace le message si elle arrive).
+const DELAI_ESSAI_MS = 15000;
+
+/** Sujet ntfy des réglages, tel qu'il est écrit ; absent ou vide → null. */
+function sujetDes(ctx) {
+  const sujet = ctx?.reglages?.notifications?.ntfySujet;
+  return sujet === undefined || sujet === null || sujet === '' ? null : sujet;
+}
+
+/**
+ * Carte « 🔔 Notifications » (T2e, gestionnaire, sous « 🧸 Relire les recettes ») : pas à pas, installer l'app gratuite
+ * ntfy, « Activer les notifications » (l'app crée le sujet du foyer, par transaction, en ligne seulement), « S’abonner
+ * dans ntfy › » d'un toucher (ou « Copier le sujet »), « Envoyer un essai ». Trois états : sans sujet ; sujet valide ;
+ * sujet présent mais invalide (changé dans la console : « arrêtez puis réactivez »). Nœuds gardés d'un rendu à l'autre.
+ * Les deux premiers états n'ont pas les mêmes boutons, d'où des cibles de focus fixées : « S’abonner dans ntfy › » après
+ * « Activer » (ou un sujet remis par « Annuler », ou trouvé sur un autre appareil), « Activer les notifications » après
+ * « Arrêter » ; pendant une transaction, le bouton touché garde le focus (aria-busy), et le garde après un refus ou un
+ * échec. « Activer », « Arrêter » et l'essai demandent du réseau : hors ligne, ils sont désactivés, avec l'aide reliée.
+ * Les annonces des transactions sont faites par l'app ; l'issue de l'essai s'affiche ici (coeur/ntfy.js › texteEssai),
+ * au plus tard après DELAI_ESSAI_MS (« Pas encore de réponse… »), sans annuler l'envoi.
+ * → { noeud, titre, maj, detruire }
+ */
+function creerCarteNotifications(ctx) {
+  let courant = ctx;
+  let detruit = false;
+  let occupe = false; // transaction du sujet en cours (« Activer », « Arrêter »)
+  let numeroEssai = 0; // seule l'issue du dernier essai s'affiche
+  let essaiEnCours = false;
+  let minuteurEssai = null;
+  let sujetVu; // sujet du dernier rendu : s'il change, les messages de l'ancien s'effacent
+
+  const titre = el('h2', { id: 'titre-notifications', tabindex: '-1' }, el('span', { 'aria-hidden': 'true' }, '🔔\u00A0'), 'Notifications');
+  const aideReseau = el('p', { class: 'aide', id: 'notifications-hors-ligne', hidden: true },
+    'Il faut du réseau pour changer ce réglage ou envoyer un essai.');
+  const lienInstaller = el('a', {
+    class: 'bouton bouton-secondaire bouton-plein', href: LIEN_INSTALLER_NTFY, target: '_blank', rel: 'noopener',
+  }, 'Installer ntfy ›');
+  const boutonActiver = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'button', onclick: activer },
+    'Activer les notifications');
+  const lienAbonner = el('a', { class: 'bouton bouton-principal bouton-plein', href: '#/reglages' }, 'S’abonner dans ntfy ›');
+  const boutonCopier = el('button', { class: 'bouton bouton-secondaire bouton-copier-sujet', type: 'button', onclick: copierSujet },
+    'Copier le sujet');
+  const messageCopie = el('p', { class: 'aide', role: 'status', hidden: true });
+  const boutonEssai = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', onclick: essayer },
+    'Envoyer un essai');
+  const resultatEssai = el('p', { class: 'aide resultat-essai', role: 'status', hidden: true });
+  const sujetAffiche = el('code', { class: 'sujet-ntfy' });
+  const sujetInvalide = el('p', { class: 'bandeau bandeau-alerte', hidden: true },
+    'Ce sujet n’est pas valable\u00A0: arrêtez puis réactivez les notifications.');
+  const boutonArreter = el('button', { class: 'bouton bouton-texte bouton-arreter-ntfy', type: 'button', onclick: arreter },
+    'Arrêter les notifications');
+
+  const etapeActiver = el('li', {}, el('p', {}, 'Revenez ici\u00A0:'), boutonActiver);
+  const etapeAbonner = el('li', {},
+    el('p', {}, 'Abonnez ntfy à votre sujet\u00A0:'),
+    lienAbonner,
+    el('p', { class: 'aide etape-copier' },
+      'Si rien ne s’ouvre\u00A0: ', el('span', { class: 'insecable' }, boutonCopier, ', puis'),
+      ' dans ntfy touchez «\u00A0+\u00A0», collez-le dans «\u00A0Nom de sujet\u00A0» et touchez «\u00A0Abonner\u00A0».'),
+    messageCopie);
+  const etapeEssai = el('li', {}, el('p', {}, 'Vérifiez\u00A0:'), boutonEssai, resultatEssai);
+  const blocSujet = el('div', { class: 'bloc-sujet' },
+    el('p', {}, 'Votre sujet\u00A0: ', sujetAffiche),
+    el('p', { class: 'aide' }, 'Gardez-le pour vous\u00A0: qui le connaît peut lire ces messages, que ntfy.sh garde 12\u00A0heures.'));
+
+  const visible = (noeud) => noeud.isConnected && !noeud.hidden && !noeud.closest('[hidden]');
+
+  /** Action principale de l'état affiché : cible du focus quand le bouton touché a disparu. */
+  function actionPrincipale() {
+    return [lienAbonner, boutonActiver, boutonArreter].find(visible) ?? titre;
+  }
+
+  /** Après une transaction : `cible` si elle est affichée ; sinon le bouton touché, s'il l'est encore ; sinon l'action
+   *  principale. */
+  function placerFocus(cible, touche = null) {
+    if (detruit) return;
+    if (cible && visible(cible)) cible.focus();
+    else if (!touche || !visible(touche)) actionPrincipale().focus();
+  }
+
+  async function activer() {
+    if (occupe) return;
+    occupe = true;
+    boutonActiver.setAttribute('aria-busy', 'true');
+    let code;
+    try {
+      ({ code } = await courant.actions.activerNotifications());
+    } catch {
+      code = 'echec';
+    }
+    occupe = false;
+    boutonActiver.removeAttribute('aria-busy');
+    placerFocus(code === 'ok' || code === 'existe' ? lienAbonner : null, boutonActiver);
+  }
+
+  async function arreter() {
+    if (occupe) return;
+    occupe = true;
+    boutonArreter.setAttribute('aria-busy', 'true');
+    let code;
+    try {
+      ({ code } = await courant.actions.arreterNotifications({
+        // « Annuler » de l'annonce : le sujet est de nouveau montré.
+        apresAnnulation: () => placerFocus(lienAbonner),
+      }));
+    } catch {
+      code = 'echec';
+    }
+    occupe = false;
+    boutonArreter.removeAttribute('aria-busy');
+    placerFocus(code === 'ok' ? boutonActiver : null, boutonArreter);
+  }
+
+  async function copierSujet() {
+    const sujet = sujetDes(courant);
+    if (!sujetValide(sujet)) return;
+    const reussi = await copier(sujet);
+    if (detruit) return;
+    messageCopie.textContent = reussi ? 'Sujet copié.' : 'La copie n’a pas marché. Réessayez.';
+    messageCopie.hidden = false;
+  }
+
+  /** Message de l'essai (texteEssai) ; `data-statut` porte le code d'un refus de ntfy.sh. */
+  function montrerEssai(issue) {
+    const texte = issue ? texteEssai(issue) : '';
+    if (resultatEssai.textContent !== texte) resultatEssai.textContent = texte;
+    resultatEssai.hidden = !texte;
+    if (issue?.code === 'refus' && Number.isInteger(issue.statut)) resultatEssai.dataset.statut = String(issue.statut);
+    else delete resultatEssai.dataset.statut;
+  }
+
+  function finEssai() {
+    essaiEnCours = false;
+    clearTimeout(minuteurEssai);
+    boutonEssai.removeAttribute('aria-busy');
+  }
+
+  /**
+   * « Envoyer un essai » : le message « Essai : les demandes arriveront ici. » part vers ntfy.sh (actions.
+   * essayerNotification). Pas de réponse au bout de DELAI_ESSAI_MS : « Pas encore de réponse… », le bouton est rendu ;
+   * l'issue réelle remplace ce message si elle arrive avant un autre essai.
+   */
+  async function essayer() {
+    if (essaiEnCours) return;
+    essaiEnCours = true;
+    numeroEssai += 1;
+    const numero = numeroEssai;
+    boutonEssai.setAttribute('aria-busy', 'true');
+    montrerEssai(null);
+    clearTimeout(minuteurEssai);
+    minuteurEssai = setTimeout(() => {
+      if (detruit || numero !== numeroEssai || !essaiEnCours) return;
+      finEssai();
+      montrerEssai({ code: 'attente' });
+    }, DELAI_ESSAI_MS);
+    let issue;
+    try {
+      issue = await courant.actions.essayerNotification();
+    } catch {
+      issue = { code: 'reseau' };
+    }
+    if (detruit || numero !== numeroEssai) return;
+    finEssai();
+    montrerEssai(issue);
+  }
+
+  function maj(nouveau) {
+    courant = nouveau;
+    const sujet = sujetDes(nouveau);
+    const valide = sujetValide(sujet);
+    if (sujet !== sujetVu) {
+      // Autre sujet (activé, arrêté, remis, ou changé ailleurs) : la copie et l'essai d'avant ne le concernent plus.
+      if (sujetVu !== undefined) {
+        numeroEssai += 1;
+        finEssai();
+        montrerEssai(null);
+        messageCopie.textContent = '';
+        messageCopie.hidden = true;
+      }
+      sujetVu = sujet;
+    }
+    etapeActiver.hidden = sujet !== null;
+    etapeAbonner.hidden = !valide;
+    etapeEssai.hidden = !valide;
+    blocSujet.hidden = !valide;
+    sujetInvalide.hidden = sujet === null || valide;
+    boutonArreter.hidden = sujet === null;
+    if (valide) {
+      if (sujetAffiche.textContent !== sujet) sujetAffiche.textContent = sujet;
+      const lien = lienAbonnement(sujet);
+      if (lienAbonner.getAttribute('href') !== lien) lienAbonner.setAttribute('href', lien);
+    }
+    // Hors ligne : les boutons qui demandent du réseau sont inactifs et disent pourquoi (description reliée seulement
+    // hors ligne : une description cachée serait lue quand même).
+    const enLigne = navigator.onLine;
+    aideReseau.hidden = enLigne;
+    for (const bouton of [boutonActiver, boutonEssai, boutonArreter]) {
+      bouton.disabled = !enLigne;
+      if (enLigne) bouton.removeAttribute('aria-describedby');
+      else bouton.setAttribute('aria-describedby', 'notifications-hors-ligne');
+    }
+  }
+
+  const noeud = el('section', { class: 'carte carte-notifications', 'aria-labelledby': 'titre-notifications' },
+    titre,
+    el('p', { class: 'texte-doux' },
+      'Recevez un message sur votre téléphone quand une recette ou une version est demandée dans l’app.'),
+    aideReseau,
+    el('ol', { class: 'etapes-ntfy' },
+      el('li', {},
+        el('p', {}, 'Sur le téléphone qui doit sonner\u00A0: installez l’app gratuite ntfy, ouvrez-la une fois depuis son icône et autorisez ses notifications.'),
+        lienInstaller),
+      etapeActiver,
+      etapeAbonner,
+      etapeEssai),
+    sujetInvalide,
+    blocSujet,
+    boutonArreter);
+
+  maj(ctx);
+  return {
+    noeud,
+    titre,
+    maj,
+    detruire() {
+      detruit = true;
+      clearTimeout(minuteurEssai);
+    },
+  };
+}
+
 export function creer(ctx) {
   let courant = ctx;
   const carteProjetClaude = creerCarteProjetClaude(ctx);
   const carteRelecture = creerCarteRelecture(ctx);
+  const carteNotifications = creerCarteNotifications(ctx);
+  // Venu du lien « 🔔 Être prévenu sur votre téléphone › » de l'écran Demandes : une seule fois, la carte « 🔔
+  // Notifications » défile en haut et son titre reçoit le focus. Après l'image suivante : `monter` a déjà remis le
+  // défilement et le focus de la zone.
+  if (ctx.routePrecedente === 'demandes') {
+    requestAnimationFrame(() => {
+      const { titre } = carteNotifications;
+      if (!titre.isConnected) return;
+      titre.scrollIntoView({ block: 'start' });
+      titre.focus({ preventScroll: true });
+    });
+  }
   const gestionnaire = el('dd', {});
   const listeProfils = el('div', { class: 'section' });
 
@@ -528,6 +774,7 @@ export function creer(ctx) {
       carteSauvegarde,
       carteProjetClaude.noeud,
       carteRelecture.noeud,
+      carteNotifications.noeud,
       etatVide({
         emoji: '⚙️',
         teinte: 'olive',
@@ -540,9 +787,11 @@ export function creer(ctx) {
       remplir();
       carteProjetClaude.maj(nouveau);
       carteRelecture.maj(nouveau);
+      carteNotifications.maj(nouveau);
     },
     detruire() {
       carteProjetClaude.detruire();
+      carteNotifications.detruire();
     },
   };
 }
