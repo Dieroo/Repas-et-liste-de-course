@@ -109,8 +109,8 @@ export function styleDe(variante) {
   return mer ? 'mer' : 'vegetal';
 }
 
-/** Jours au frigo d'une version : entier de 1 à 30, sinon null. */
-function frigoJoursDe(variante) {
+/** Jours au frigo d'une version : entier de 1 à 30, sinon null. Exporté pour coeur/semaine.js (T3a). */
+export function frigoJoursDe(variante) {
   const jours = variante?.frigoJours;
   return Number.isInteger(jours) && jours >= 1 && jours <= FRIGO_JOURS_MAX ? jours : null;
 }
@@ -135,14 +135,17 @@ function jugerVersion(variante, exclus, regles) {
   return { variante, style: styleDe(variante), convient: !problemes.length, restants: nomsDe(problemes), problemes };
 }
 
-/** Version retenue, sous la forme qu'utilisent les écrans : `style` toujours (styleDe), `frigoJours` s'il est donné. */
-function varianteRetenue(variante) {
+/**
+ * Version retenue, sous la forme qu'utilisent les écrans : `style` toujours (styleDe), `frigoJours` s'il est donné.
+ * Exporté pour coeur/semaine.js (T3a : version servie d'un plat de la semaine).
+ */
+export function varianteRetenue(variante) {
   const frigoJours = frigoJoursDe(variante);
   return {
     source: 'fiche',
-    retirer: textes(variante.retirer),
+    retirer: textes(variante?.retirer),
     ajouter: ajoutsDe(variante),
-    consigne: typeof variante.consigne === 'string' ? variante.consigne : '',
+    consigne: typeof variante?.consigne === 'string' ? variante.consigne : '',
     style: styleDe(variante),
     ...(frigoJours ? { frigoJours } : {}),
   };

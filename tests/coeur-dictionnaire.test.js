@@ -16,6 +16,8 @@ import {
 } from '../js/coeur/edition.js';
 import { DICTIONNAIRE } from '../js/coeur/dictionnaire.js';
 import { HOMOGRAPHES, natureDe, reconnaitre } from '../js/coeur/produits.js';
+import { VOCABULAIRES } from '../js/coeur/vocabulaire.js';
+import { dansLePlacard, listeDeCourses, versBase } from '../js/coeur/liste.js';
 import { IDS_DICTIONNAIRE } from './donnees/ids-dictionnaire.js';
 import { CORPUS_INGREDIENTS } from './donnees/corpus-ingredients.js';
 
@@ -23,11 +25,11 @@ const lire = (chemin) => readFileSync(fileURLToPath(new URL(`../${chemin}`, impo
 
 /**
  * Budget du fichier (octets UTF-8) : ~117 octets par entrée mesurés sur les 50 premières ; ~70 Ko pour ~580 entrées.
- * La marge sert aux champs réservés à T3 (placard, équivalences, recherche).
+ * La marge sert aux champs de T3 (placard et équivalences en T3a, produits hors cuisine en T3d).
  */
 const BUDGET_OCTETS = 90_000;
 
-const CHAMPS = ['id', 'nom', 'rayon', 'unite', 'marqueurs', 'forme', 'role', 'alias'];
+const CHAMPS = ['id', 'nom', 'rayon', 'unite', 'marqueurs', 'forme', 'role', 'alias', 'placard', 'equivalences'];
 /** Charcuteries qui ne sont pas de porc (point 2) : bœuf séché, merguez (bœuf et mouton), volaille. */
 const CHARCUTERIE_SANS_PORC = new Set(['bresaola', 'viande des grisons', 'merguez', 'saucisse de volaille', 'blanc de dinde']);
 /** Noms ambigus, jamais une forme du dictionnaire (la question « C'est… ? » reste). */
@@ -446,6 +448,9 @@ const HORS_FIXTURES = new Map([
   ['tartare de saumon', 'plat'], ['fond de veau au miel', 'nom inventé pour un essai de repères'],
   ['jambon', 'ambigu exprès : cuit ou cru'], ['rôti', 'ambigu exprès : la viande n’est pas dite'],
   ['crème', 'ambigu exprès'], ['fromage', 'ambigu exprès'], ['tartare', 'ambigu exprès : viande ou poisson'],
+  ['pâte', 'homographe exprès (T3a : clé de repli)'], ['pâté', 'homographe exprès (T3a : clé de repli)'],
+  ['pate', 'homographe exprès (T3a : clé de repli)'], ['the', 'thé sans accent, exprès (T3a : clé de repli)'],
+  ['pate brisee', 'pâte brisée sans accents, exprès (T3a : clé de repli)'],
 ]);
 
 /**
@@ -504,3 +509,110 @@ test('12. budget : le fichier reste léger ; les deux modules sont dans le préc
   const sw = lire('sw.js');
   for (const chemin of ['./js/coeur/dictionnaire.js', './js/coeur/produits.js']) assert.ok(sw.includes(`'${chemin}'`), chemin);
 });
+
+// ——— 13. Placard de départ et équivalences (T3a) ———
+
+/**
+ * Placard de départ (CLAUDE.md §9.9, plan T3 §4.1.a) : id → seuil attendu ({} : toujours mis de côté). Le laurier est
+ * compté en feuilles (4) : un seuil en cuillère ne s'y comparerait jamais.
+ */
+const PLACARD_DE_DEPART = {
+  sel: {}, poivre: {}, eau: {},
+  huile: { seuil: 6, unite: 'cs' }, 'huile-d-olive': { seuil: 6, unite: 'cs' }, 'huile-neutre': { seuil: 6, unite: 'cs' },
+  'huile-de-tournesol': { seuil: 6, unite: 'cs' }, 'huile-de-colza': { seuil: 6, unite: 'cs' },
+  'gro-sel': { seuil: 2, unite: 'cs' },
+  paprika: { seuil: 2, unite: 'cc' }, cumin: { seuil: 2, unite: 'cc' }, curry: { seuil: 2, unite: 'cc' },
+  curcuma: { seuil: 2, unite: 'cc' }, cannelle: { seuil: 2, unite: 'cc' }, 'noi-de-muscade': { seuil: 2, unite: 'cc' },
+  'piment-d-espelette': { seuil: 2, unite: 'cc' }, 'quatre-epice': { seuil: 2, unite: 'cc' },
+  'gingembre-moulu': { seuil: 2, unite: 'cc' }, 'herbe-de-provence': { seuil: 2, unite: 'cc' }, thym: { seuil: 2, unite: 'cc' },
+  origan: { seuil: 2, unite: 'cc' }, laurier: { seuil: 4, unite: 'pc' },
+  vinaigre: { seuil: 4, unite: 'cs' }, 'vinaigre-de-vin': { seuil: 4, unite: 'cs' }, 'vinaigre-de-vin-rouge': { seuil: 4, unite: 'cs' },
+  'vinaigre-de-vin-blanc': { seuil: 4, unite: 'cs' }, 'vinaigre-balsamique': { seuil: 4, unite: 'cs' },
+  'vinaigre-de-cidre': { seuil: 4, unite: 'cs' }, 'sauce-soja': { seuil: 4, unite: 'cs' },
+  moutarde: { seuil: 2, unite: 'cs' }, 'concentre-de-tomate': { seuil: 2, unite: 'cs' }, 'fecule-de-mai': { seuil: 2, unite: 'cs' },
+  miel: { seuil: 2, unite: 'cs' }, chapelure: { seuil: 2, unite: 'cs' },
+  'bouillon-de-volaille': { seuil: 2, unite: 'pc' }, 'bouillon-de-boeuf': { seuil: 2, unite: 'pc' },
+  'bouillon-de-legume': { seuil: 2, unite: 'pc' }, 'fond-de-veau': { seuil: 2, unite: 'cs' },
+  'fumet-de-poisson': { seuil: 2, unite: 'cs' },
+  sucre: { seuil: 30, unite: 'g' }, 'sucre-rou': { seuil: 30, unite: 'g' }, farine: { seuil: 50, unite: 'g' },
+  'levure-chimique': { seuil: 1, unite: 'sachet' }, 'sucre-vanille': { seuil: 1, unite: 'sachet' },
+  'extrait-de-vanille': { seuil: 1, unite: 'cc' }, ail: { seuil: 2, unite: 'pc' }, beurre: { seuil: 30, unite: 'g' },
+  lait: { seuil: 10, unite: 'cl' }, 'lait-entier': { seuil: 10, unite: 'cl' }, 'lait-demi-ecreme': { seuil: 10, unite: 'cl' },
+  'lait-ecreme': { seuil: 10, unite: 'cl' },
+};
+
+test('13. placard : un seuil > 0 et une unité du vocabulaire, ou aucun des deux ; équivalences vers g ou ml', () => {
+  for (const entree of DICTIONNAIRE) {
+    if ('placard' in entree) {
+      const { placard } = entree;
+      assert.ok(placard && typeof placard === 'object' && !Array.isArray(placard), entree.id);
+      assert.deepEqual(Object.keys(placard).filter((cle) => !['seuil', 'unite'].includes(cle)), [], entree.id);
+      if ('seuil' in placard || 'unite' in placard) {
+        assert.ok(typeof placard.seuil === 'number' && placard.seuil > 0, `${entree.id} : seuil`);
+        assert.ok(VOCABULAIRES.unite.includes(placard.unite), `${entree.id} : unité du seuil`);
+      }
+    }
+    if ('equivalences' in entree) {
+      assert.ok('placard' in entree, `${entree.id} : équivalences sans placard (elles ne servent qu'au seuil)`);
+      const paires = Object.entries(entree.equivalences);
+      assert.ok(paires.length > 0, entree.id);
+      for (const [unite, valeur] of paires) {
+        assert.ok(VOCABULAIRES.unite.includes(unite), `${entree.id} : ${unite}`);
+        assert.ok(['g', 'ml'].includes(valeur?.unite), `${entree.id} : équivalence vers g ou ml`);
+        assert.ok(typeof valeur.qte === 'number' && valeur.qte > 0, entree.id);
+      }
+    }
+  }
+});
+
+test('13. placard : chaque produit du tableau du §9 porte son seuil de départ, et rien d’autre n’est mis de côté', () => {
+  const avecPlacard = DICTIONNAIRE.filter((entree) => 'placard' in entree);
+  assert.deepEqual(avecPlacard.map((e) => e.id).sort(), Object.keys(PLACARD_DE_DEPART).sort());
+  for (const entree of avecPlacard) assert.deepEqual(entree.placard, PLACARD_DE_DEPART[entree.id], entree.id);
+  // Seuils comparables à l'unité courante du produit (sinon il serait toujours sur la liste).
+  for (const entree of avecPlacard.filter((e) => 'seuil' in e.placard)) {
+    const recette = { [versBase(1, entree.unite).famille]: versBase(1, entree.unite).qte };
+    assert.equal(typeof dansLePlacard(recette, entree.placard, entree.equivalences ?? null), 'boolean', entree.id);
+    assert.ok(dansLePlacard({ [versBase(entree.placard.seuil, entree.placard.unite).famille]: versBase(entree.placard.seuil, entree.placard.unite).qte },
+      entree.placard, entree.equivalences ?? null), `${entree.id} : le seuil lui-même est à la maison`);
+  }
+  // Équivalences propres : bouillons (un cube fait 500 ml), levure (11 g), sucre vanillé (7,5 g), ail (5 g la gousse).
+  const equivalences = Object.fromEntries(DICTIONNAIRE.filter((e) => 'equivalences' in e).map((e) => [e.id, e.equivalences]));
+  assert.deepEqual(equivalences, {
+    'bouillon-de-volaille': { pc: { qte: 500, unite: 'ml' } }, 'bouillon-de-boeuf': { pc: { qte: 500, unite: 'ml' } },
+    'bouillon-de-legume': { pc: { qte: 500, unite: 'ml' } }, 'levure-chimique': { sachet: { qte: 11, unite: 'g' } },
+    'sucre-vanille': { sachet: { qte: 7.5, unite: 'g' } }, ail: { pc: { qte: 5, unite: 'g' } },
+  });
+});
+
+test('13. entrées neuves : « eau » (toujours à la maison), « vinaigre de vin », « fumet » ; ids figés', () => {
+  for (const nom of ['eau', 'Eau froide', 'eau chaude', 'eau tiède', 'eau bouillante']) {
+    assert.equal(reconnaitre(nom)?.entree?.id ?? reconnaitre(nom)?.element?.id, 'eau', nom);
+  }
+  assert.equal(reconnaitre('eau')?.element.rayon, 'boissons');
+  assert.equal(reconnaitre('vinaigre de vin')?.element.id, 'vinaigre-de-vin');
+  assert.equal(reconnaitre('fumet')?.element.id, 'fumet-de-poisson');
+  assert.deepEqual(reconnaitre('fumet').element.marqueurs, ['poisson']);
+  for (const id of ['eau', 'vinaigre-de-vin']) assert.ok(IDS_DICTIONNAIRE.includes(id), id);
+  // Les autres eaux restent des produits à acheter.
+  assert.equal(reconnaitre('eau gazeuse')?.element.id, 'eau-gazeuse');
+  assert.equal('placard' in DICTIONNAIRE.find((e) => e.id === 'eau-gazeuse'), false);
+});
+
+test('13. une recette avec « eau 1 l » ne met une ligne que dans « Déjà à la maison ? »', () => {
+  const soupe = {
+    id: 'soupe-essai', nom: 'Soupe essai', type: 'plat', statutRecette: 'brouillon', portionsBase: 2,
+    ingredients: [
+      { produit: 'eau', qte: 1, unite: 'l', rayon: 'boissons', marqueurs: [] },
+      { produit: 'eau tiède', qte: 20, unite: 'cl', rayon: 'boissons', marqueurs: [] },
+      { produit: 'carotte', qte: 3, unite: 'pc', rayon: 'fruits_legumes', marqueurs: ['legume'], role: 'incorpore' },
+    ],
+  };
+  const semaine = { id: '2026-10-10', debut: '2026-10-10', fin: '2026-10-16', creeLe: 0, plats: { 'soupe-essai': { ajouteLe: 1 } } };
+  const liste = listeDeCourses(semaine, { tousLesPlats: [soupe], profils: [{ id: 'profil-a', nom: 'Adulte A', ordre: 1, coefPortion: 1 }] });
+  assert.deepEqual(liste.lignes.map((l) => l.produitId), ['carotte']);
+  assert.deepEqual(liste.maison.map((l) => l.produitId), ['eau']);
+  // Un adulte, recette pour 2 : 2 repas, la recette telle quelle (1 l + 20 cl).
+  assert.deepEqual(liste.maison[0].totaux, { volume: 1200 });
+});
+

@@ -472,53 +472,6 @@ html:has(> body.sans-onglets .lien-erreurs:not([hidden])) {
   text-align: center;
 }
 
-/* ——— Semaine ——— */
-
-.jours {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.jour {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 10px 0;
-  border: 1px solid var(--bordure);
-  border-radius: 14px;
-  background: var(--surface);
-}
-
-.jour-nom {
-  color: var(--texte-doux);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.jour-numero {
-  font-family: var(--police-titre);
-  font-size: 1.25rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.jour.passe .jour-numero { color: var(--texte-doux); }
-
-.jour.aujourdhui {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--sur-accent);
-  box-shadow: 0 4px 12px rgb(180 73 47 / 25%);
-}
-
-.jour.aujourdhui .jour-nom { color: inherit; }
-
 /* ——— Découvrir : un plat à la fois, trois gestes ——— */
 
 .vue.decouvrir { gap: 10px; }
@@ -3341,3 +3294,694 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
 }
 
 .bouton-arreter-ntfy { align-self: flex-start; padding: 0 4px; }
+
+/* ——— Semaine (T3a) : carte « prochaine action », plats de la semaine ——— */
+
+/* Carte « prochaine action » : le seul bouton principal de l'écran. « Cette semaine se termine vendredi 16 octobre. »
+   en texte normal (la phrase qui demande d'agir). */
+.carte-action h2,
+.carte-action p { overflow-wrap: anywhere; }
+
+.carte-action .fin-semaine {
+  color: var(--texte);
+  font-weight: 600;
+}
+
+.actions-carte {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* « En ce moment, jusqu'au 16 octobre : Carbonade, Gratin. » : texte doux, noms en liens (cible de 48 px de haut sans
+   changer la hauteur de ligne). */
+.en-ce-moment {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.lien-en-ce-moment {
+  display: inline-block;
+  margin: -12px 0;
+  padding: 12px 0;
+  color: var(--texte);
+  font-weight: 600;
+  text-underline-offset: 2px;
+}
+
+.cartes-plats-semaine {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Carte d'un plat : le haut est un bouton (ouvre la feuille du plat), le choix Mer / Végétale et la conservation
+   dessous ; jamais de bouton dans un lien. */
+.carte-plat-semaine {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 10px 10px;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+}
+
+.plat-semaine-ouvrir {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 0 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.plat-semaine-ouvrir:active { transform: scale(0.99); }
+
+.plat-semaine-visuel {
+  display: grid;
+  flex: none;
+}
+
+.plat-semaine-visuel .pastille {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  font-size: 1.75rem;
+}
+
+.plat-semaine-resume {
+  color: var(--texte);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.plat-semaine-exception {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* Mer / Végétale : légende au-dessus, deux choix côte à côte (48 px de haut). */
+.versions-plat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legende-version {
+  padding: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.choix-styles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.choix.choix-style { min-height: 48px; }
+
+.version-unique,
+.conservation-plat {
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.conservation-plat { color: var(--texte-doux); }
+
+/* Plat de la corbeille encore dans la semaine : une ligne discrète. */
+.plats-hors-semaine {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plat-hors-semaine {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.plat-hors-semaine .lien-fiche {
+  display: inline-flex;
+  color: var(--texte);
+}
+
+/* ——— Feuille « Ajouter à la semaine » ——— */
+
+/* Hauteur fixe (la plus grande permise) : la recherche qui réduit la liste ne fait jamais bouger la feuille ni son
+   champ ; « Terminé » reste en bas. */
+.feuille:has(.feuille-choix) {
+  height: calc(100dvh - 48px - var(--clavier, 0px));
+}
+
+.feuille:has(.feuille-choix) .feuille-contenu {
+  min-height: calc(100% - 20px);
+}
+
+.feuille-choix {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feuille-choix > .feuille-pied { margin-top: auto; }
+
+.sous-titre-feuille {
+  margin-top: -8px;
+  color: var(--texte-doux);
+}
+
+/* « Il reste 2 articles de la semaine qui finit : beurre et sel. » : texte sur ocre doux. */
+.bloc-restes {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 12px 16px 2px;
+  border-radius: 12px;
+  background: var(--ocre-doux);
+  color: var(--texte);
+  overflow-wrap: anywhere;
+}
+
+.bloc-restes .bouton-restes {
+  padding: 0;
+  color: var(--texte);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.bouton.bouton-autre-semaine {
+  align-self: flex-start;
+  padding: 0 4px;
+  color: var(--accent);
+  text-align: left;
+}
+
+/* Recherche et puces collées en haut de la feuille pendant le défilement. */
+.choix-entete {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 -20px;
+  padding: 8px 20px 10px;
+  background: var(--surface);
+}
+
+.listes-choix,
+.bloc-choix {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.listes-choix { gap: 16px; }
+
+.titre-choix { font-size: 1.0625rem; }
+
+.liste-choix {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liste-choix li + li { border-top: 1px solid var(--bordure); }
+
+/* Une ligne : case à cocher native dans un label qui couvre toute la ligne (56 px au moins). */
+.ligne-choix {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.choix-plat-visuel {
+  display: grid;
+  flex: none;
+}
+
+.choix-plat-visuel .pastille,
+.choix-plat-visuel .vignette {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 1.375rem;
+}
+
+.choix-plat-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.choix-plat-nom {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.choix-sans-recette {
+  color: var(--texte-doux);
+  font-weight: 400;
+}
+
+.choix-plat-detail {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+/* Case des listes (choix des plats, courses) : un rond, coché en olive avec une coche claire (5,7:1 et 6,6:1). */
+.case-choix,
+.case-article {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  border: 2px solid var(--bordure-champ);
+  border-radius: 50%;
+  background: var(--surface);
+  appearance: none;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.case-choix { border-radius: 8px; }
+
+.case-choix::after,
+.case-article::after {
+  content: '';
+  width: 12px;
+  height: 7px;
+  border-bottom: 3px solid var(--surface);
+  border-left: 3px solid var(--surface);
+  transform: translateY(-2px) rotate(-45deg) scale(0);
+  transition: transform 0.12s ease;
+}
+
+.case-choix:checked,
+.case-article:checked {
+  border-color: var(--olive);
+  background: var(--olive);
+}
+
+.case-choix:checked::after,
+.case-article:checked::after { transform: translateY(-2px) rotate(-45deg) scale(1); }
+
+/* Le contour du focus entoure toute la ligne (la cible), pas seulement la case. */
+.case-choix:focus-visible,
+.case-article:focus-visible { outline: none; }
+
+.ligne-choix:has(.case-choix:focus-visible),
+.article-cible:has(.case-article:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+@media (forced-colors: active) {
+  .case-choix,
+  .case-article { appearance: auto; }
+  .case-choix::after,
+  .case-article::after { display: none; }
+}
+
+.bouton-nouveau-plat { justify-content: flex-start; text-align: left; }
+
+.message-choix { max-width: none; }
+
+/* ——— Feuille du plat de la semaine ——— */
+
+.feuille-plat-semaine {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.resume-plat-feuille { font-weight: 600; }
+
+.liste-ecartes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  color: var(--texte-doux);
+  list-style: none;
+}
+
+.bloc-repas {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.phrase-portions { color: var(--texte-doux); }
+
+/* ——— Fiche : « ＋ Ajouter à la semaine » ——— */
+
+.bloc-semaine {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aide-semaine { text-align: center; }
+
+/* ——— Plats : pastille « 🗓️ Au menu » ——— */
+
+.au-menu {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--olive-doux);
+  color: var(--texte);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ——— Courses (T3a) ——— */
+
+.courses-titre {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.courses-progression {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.vue.courses { gap: 16px; }
+
+/* Courses garde elle-même la ligne sous le doigt à sa place pendant une mise à jour (courses.js) : l'ancrage de
+   défilement du navigateur, qui choisirait une autre ligne, est coupé sur cet écran. */
+html:has(.vue.courses),
+html:has(.vue.courses) body { overflow-anchor: none; }
+
+.courses-aide { margin-top: -8px; }
+
+.bandeaux-verifier {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.carte-sans-plats h2 { font-size: 1.125rem; }
+
+/* « 🏠 Déjà à la maison ? » et « Dans le panier » : repliés, la flèche dit leur état. */
+.details-courses {
+  padding: 0 16px;
+  border: 1px solid var(--bordure);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.details-courses > summary {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.details-courses > summary::-webkit-details-marker { display: none; }
+.details-courses > summary::before { content: '▸' / ''; flex: none; width: 1.25em; }
+.details-courses[open] > summary::before { content: '▾' / ''; }
+
+.details-courses[open] { padding-bottom: 8px; }
+
+.details-maison > .aide { margin-bottom: 4px; }
+
+.lignes-maison {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lignes-maison li + li { border-top: 1px solid var(--bordure); }
+
+/* Un produit du placard : toute la ligne se touche, interrupteur « À racheter » à droite. */
+.ligne-maison {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 56px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.maison-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.maison-nom { font-weight: 600; }
+
+.maison-detail {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+}
+
+/* « Sur la liste · Épicerie salée » : olive sur surface (5,7:1 et 6,6:1). */
+.maison-etat {
+  color: var(--olive);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.maison-bascule {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.maison-bascule-texte {
+  color: var(--texte-doux);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Rayons : en-tête collant sous l'en-tête de l'app (et sous le bandeau d'aperçu), sous les feuilles. */
+.rayons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rayon-titre {
+  position: sticky;
+  top: max(64px, calc(env(safe-area-inset-top) + 56px)); /* hauteur réelle de l'en-tête */
+  z-index: 3;
+  margin: 0 -4px;
+  padding: 8px 4px 6px;
+  background: var(--fond);
+  font-size: 1.0625rem;
+  overflow-wrap: anywhere;
+}
+
+body:has(.bandeau-apercu:not([hidden])) .rayon-titre {
+  top: calc(max(64px, calc(env(safe-area-inset-top) + 56px)) + 60px); /* sous le bandeau d'aperçu */
+}
+
+.lignes-courses {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lignes-courses li + li { border-top: 1px solid var(--bordure); }
+
+/* Un article : toute la ligne coche (56 px au moins) ; ⋮ à droite, hors de la cible, écarté de 8 px. */
+.ligne-article {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.article-cible {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.article-texte {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Nom : deux lignes au plus, coupées sans points de suspension. */
+.article-nom {
+  max-height: calc(2 * 1.3em);
+  overflow: hidden;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.article-detail {
+  color: var(--texte-doux);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* Cochée : barrée, en texte doux (jamais une opacité réduite : le contraste reste AA, en clair comme en sombre). */
+.ligne-article.cochee .article-nom,
+.ligne-article.cochee .article-detail {
+  color: var(--texte-doux);
+  text-decoration: line-through;
+}
+
+.bouton-details {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--texte-doux);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bouton-details:active { background: var(--fond); }
+
+.details-panier .lignes-courses { margin-top: 2px; }
+
+.carte-fini {
+  align-items: center;
+  text-align: center;
+}
+
+.carte-fini h2:focus:not(:focus-visible) { outline: none; }
+
+/* « ＋ Ajouter un article » : barre fixée au-dessus des onglets, comme la barre des gestes de Découvrir ; la page
+   réserve sa hauteur mesurée (--hauteur-barre-courses) et le bandeau d'annonce passe au-dessus. */
+.barre-courses {
+  position: fixed;
+  right: 0;
+  bottom: calc(var(--hauteur-onglets) + 4px + env(safe-area-inset-bottom));
+  left: 0;
+  z-index: 9;
+  padding: 8px max(20px, env(safe-area-inset-right)) 8px max(20px, env(safe-area-inset-left));
+  border-top: 1px solid var(--bordure);
+  background: var(--fond);
+}
+
+.vue.entree > .barre-courses { animation: apparait 0.22s ease-out; }
+
+.barre-courses-contenu {
+  max-width: calc(var(--largeur) - 40px);
+  margin: 0 auto;
+}
+
+body:has(.barre-courses) main {
+  padding-bottom: calc(var(--hauteur-onglets) + 4px + var(--hauteur-barre-courses, 69px) + 24px + env(safe-area-inset-bottom));
+}
+
+body:has(.barre-courses) .annonce {
+  bottom: calc(var(--hauteur-onglets) + 4px + var(--hauteur-barre-courses, 69px) + 12px + env(safe-area-inset-bottom));
+}
+
+/* ——— Feuilles de Courses : « Ajouter à la liste », détails d'un article ——— */
+
+.ligne-ajout-article {
+  display: flex;
+  gap: 8px;
+}
+
+.ligne-ajout-article .champ {
+  flex: 1;
+  min-width: 0;
+}
+
+.bouton.bouton-ajouter-article {
+  flex: none;
+  padding: 0 18px;
+}
+
+/* Trois suggestions réservées : rien ne bouge pendant la frappe. */
+.suggestions-article { min-height: calc(3 * 48px + 2 * 6px); }
+
+.message-ajout {
+  min-height: 48px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.bouton.bouton-retirer-article {
+  padding: 0 8px;
+  color: var(--accent);
+}
+
+.feuille-article {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.total-article {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.bloc-sources,
+.bloc-placard,
+.bloc-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.etiquette-pour { font-weight: 600; }
+
+.sources-article li { overflow-wrap: anywhere; }

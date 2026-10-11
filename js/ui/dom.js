@@ -47,6 +47,79 @@ export function enteteVue(titre, sousTitre) {
   );
 }
 
+// Clé de chaque nœud posé par reconcilier (hors du DOM : aucun attribut à lire ni à garder propre).
+const clesDesNoeuds = new WeakMap();
+
+/** Déplace `noeud` avant `reference` (à la fin si null) en gardant son focus : moveBefore s'il existe, sinon remis. */
+function placer(parent, noeud, reference) {
+  const actif = document.activeElement;
+  const avaitLeFocus = Boolean(actif && actif !== document.body && noeud.contains(actif));
+  if (avaitLeFocus && noeud.isConnected && typeof parent.moveBefore === 'function') {
+    try {
+      parent.moveBefore(noeud, reference);
+      return;
+    } catch {
+      // moveBefore refusé (nœud venu d'ailleurs) : déplacement ordinaire, puis focus rendu.
+    }
+  }
+  parent.insertBefore(noeud, reference);
+  if (avaitLeFocus && actif.isConnected && document.activeElement !== actif) actif.focus({ preventScroll: true });
+}
+
+/**
+ * Met à jour les enfants de `parent` d'après `elements`, sans rien reconstruire de ce qui existe déjà : chaque nœud est
+ * retrouvé par sa clé (`cle(element)`), mis à jour par `maj(noeud, element)` et déplacé seulement s'il n'est pas à sa
+ * place ; les clés disparues sont retirées, les nouvelles créées par `creer(element)`. Le focus et le défilement ne sont
+ * jamais perdus par une mise à jour (l'ancrage de défilement du navigateur garde la ligne sous le doigt quand une ligne
+ * apparaît au-dessus). `parent` ne contient que des nœuds posés ici ; les clés doivent être uniques.
+ * `noeuds` (facultatif) : Map clé → nœud partagée par plusieurs parents, pour qu'un nœud passe de l'un à l'autre sans
+ * être recréé (une ligne cochée qui rejoint « Dans le panier ») ; tenue à jour ici, à l'appelant d'en retirer les clés
+ * disparues de tous les parents.
+ * → les nœuds, dans l'ordre.
+ */
+export function reconcilier(parent, elements, { cle, creer, maj = null, noeuds = null } = {}) {
+  const presents = new Map();
+  for (const enfant of [...parent.children]) {
+    if (clesDesNoeuds.has(enfant)) presents.set(clesDesNoeuds.get(enfant), enfant);
+  }
+  const voulus = (Array.isArray(elements) ? elements : []).map((element) => {
+    const k = String(cle(element));
+    let noeud = presents.get(k) ?? noeuds?.get(k) ?? null;
+    if (noeud) {
+      maj?.(noeud, element);
+    } else {
+      noeud = creer(element);
+      clesDesNoeuds.set(noeud, k);
+    }
+    noeuds?.set(k, noeud);
+    return noeud;
+  });
+  const gardes = new Set(voulus);
+  for (const enfant of [...parent.children]) {
+    if (!gardes.has(enfant)) enfant.remove();
+  }
+  voulus.forEach((noeud, i) => {
+    const reference = parent.children[i] ?? null;
+    if (reference !== noeud) placer(parent, noeud, reference);
+  });
+  return voulus;
+}
+
+/** Remplace un texte seulement s'il change (un lecteur d'écran ne relit pas un texte inchangé). */
+export function ecrireTexte(noeud, texte) {
+  const valeur = String(texte ?? '');
+  if (noeud.textContent !== valeur) noeud.textContent = valeur;
+}
+
+/** Vibration légère (CLAUDE.md §4) : 40 ms, comme Découvrir ; ignorée si le téléphone la refuse. */
+export function vibrer() {
+  try {
+    navigator.vibrate?.(40);
+  } catch {
+    // Vibration refusée ou absente : le geste compte quand même.
+  }
+}
+
 /** Logo de l'app (bol fumant), en SVG construit nœud par nœud. */
 export function logo(classe = 'logo') {
   const ns = 'http://www.w3.org/2000/svg';

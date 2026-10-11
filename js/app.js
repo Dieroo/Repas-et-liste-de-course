@@ -55,6 +55,15 @@ import {
   lireRelectureEnCours, noterRelectureEnCours,
 } from './ui/envoyes.js';
 import { annonceRelecture, bilanRelecture, platsARelire } from './coeur/relecture.js';
+import {
+  lireSemaine, semaineAPreparer, semaineEnCours, appliquerChamps, estDansLaSemaine, texteDates, aDesPlats,
+  ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage,
+} from './coeur/semaine.js';
+import {
+  listeDeCourses, ecrituresCoche, ecrituresCocheArticle, ecrituresRachat, preparerAjout, texteAjoutArticle,
+  ERREURS_ARTICLE, phraseRestesAjoutes,
+} from './coeur/liste.js';
+import { indexDesRecettes } from './coeur/produits.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -120,6 +129,14 @@ const etat = {
   platsDepuisCache: false,
   demandes: [],
   demandesChargees: false,
+  // Semaines (T3a) : documents `semaines/{id}` bruts ({ id, ...champs }), toutes, historique compris.
+  semaines: [],
+  semainesChargees: false,
+  semainesDepuisCache: false,
+  // Articles ajoutés à la main (T3a) : documents `articles/{id}` bruts, indépendants des semaines.
+  articles: [],
+  articlesCharges: false,
+  articlesDepuisCache: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
 };
 
@@ -369,6 +386,72 @@ function platsSepares() {
   return memoCorbeille;
 }
 
+// ——— Semaine et liste de courses (T3a) ———
+
+/**
+ * Vrai quand tout ce que la semaine et la liste demandent est lu (semaines, articles, plats, profils ; copie du
+ * téléphone comprise). Avant : « Chargement… », boutons inactifs, et les actions de la semaine rendent
+ * { code: 'chargement' } sans rien écrire (jamais de semaine créée sans connaître les autres, plan T3 §3.2 règle 4).
+ */
+function semainesLues() {
+  return etat.semainesChargees && etat.articlesCharges && etat.platsCharges && etat.profilsCharges;
+}
+
+// Semaine montrée (coeur/semaine.js › semaineAPreparer) et semaine en cours quand la suivante est déjà montrée
+// (semaineEnCours), gardées tant que `etat.semaines` est le même tableau et que le jour n'a pas changé : les écrans
+// reçoivent le même objet d'un rendu à l'autre.
+let memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
+
+function semainesDuJour(aujourdhui = dateDuJour()) {
+  if (memoSemaines.semaines !== etat.semaines || memoSemaines.aujourdhui !== aujourdhui) {
+    memoSemaines = {
+      semaines: etat.semaines,
+      aujourdhui,
+      semaine: semaineAPreparer(etat.semaines, aujourdhui),
+      enCours: semaineEnCours(etat.semaines, aujourdhui),
+    };
+  }
+  return memoSemaines;
+}
+
+/** Semaine montrée par Semaine et Courses (lue par lireSemaine), ou null. */
+function semaineCourante(aujourdhui = dateDuJour()) {
+  return semainesDuJour(aujourdhui).semaine;
+}
+
+// Liste de courses (coeur/liste.js › listeDeCourses), calculée sur le téléphone, jamais écrite. Gardée tant que la
+// semaine montrée, les plats, les profils, les articles, les réglages du foyer (`etat.donnees.reglages`, nouvel objet
+// à chaque instantané : ordre des rayons, `frigoJoursDefaut`…) et le jour sont les mêmes objets.
+let memoListe = { cles: null, liste: null };
+
+function listeCourante(aujourdhui = dateDuJour()) {
+  const semaine = semaineCourante(aujourdhui);
+  const reglages = etat.donnees.reglages ?? null;
+  const cles = [semaine, etat.plats, etat.profils, etat.articles, reglages, aujourdhui];
+  if (!memoListe.cles || cles.some((cle, i) => cle !== memoListe.cles[i])) {
+    memoListe = {
+      cles,
+      liste: listeDeCourses(semaine, {
+        tousLesPlats: etat.plats,
+        profils: etat.profils,
+        produitsFoyer: {}, // T3b : produits/{id}
+        articles: etat.articles,
+        reglages,
+        evaluer: compat,
+        index: indexDesRecettes(etat.plats),
+        maintenant: Date.now(),
+      }),
+    };
+  }
+  return memoListe.liste;
+}
+
+/** Semaine lue par son identifiant (`semaineId`), ou la semaine montrée sans identifiant ; null si elle est inconnue. */
+function semaineParId(semaineId) {
+  if (semaineId === undefined || semaineId === null) return semaineCourante();
+  return lireSemaine(etat.semaines.find((semaine) => semaine?.id === semaineId) ?? null);
+}
+
 // Instructions du projet Claude copiées pendant cette visite ({ uid, version }) : repli si le stockage du téléphone
 // est plein ou bloqué, pour que le rappel ne revienne pas avant la prochaine ouverture.
 let instructionsCopieesIci = null;
@@ -405,6 +488,14 @@ function instructionsAJour() {
  * Demandes (T2e) : `aTraiter`, demandes encore utiles (coeur/demandes.js › demandesATraiter : la plus ancienne
  * d'abord), seule source de la carte 📬 de Semaine, du panneau du profil et de l'écran Demandes ; [] tant que demandes,
  * plats et profils ne sont pas tous chargés.
+ * Semaine et liste (T3a) : `semaine`, la semaine montrée par Semaine et Courses (coeur/semaine.js › semaineAPreparer,
+ * lue par lireSemaine ; null s'il n'y en a pas ; même objet tant que rien ne change) ; `semaines`, tous les documents
+ * `semaines/{id}` bruts ({ id, ...champs }) ; `semainesChargees`, vrai quand semaines, articles, plats et profils sont
+ * lus (avant : « Chargement… », boutons inactifs) ; `semainesDepuisCache`, semaines lues seulement dans la copie du
+ * téléphone ; `semaineEnCours`, semaine qui contient aujourd'hui quand la suivante est déjà montrée (ligne « En ce
+ * moment… »), sinon null ; `articles`, documents `articles/{id}` bruts (`articlesCharges`, `articlesDepuisCache`) ;
+ * `liste`, liste de courses de la semaine montrée (coeur/liste.js › listeDeCourses, jamais écrite ; même objet tant que
+ * rien ne change) ; `enLigne`, réseau du téléphone (navigator.onLine).
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -413,6 +504,8 @@ function contexteCourant() {
   const aTraiter = etat.demandesChargees && etat.platsCharges && etat.profilsCharges
     ? demandesATraiter(etat.demandes, { plats: actifs, profils: etat.profils, evaluer: compat })
     : [];
+  const aujourdhui = dateDuJour();
+  const { semaine, enCours } = semainesDuJour(aujourdhui);
   return {
     utilisateur,
     role,
@@ -432,11 +525,21 @@ function contexteCourant() {
     routePrecedente,
     instructionsAJour: instructionsAJour(),
     compat,
-    aujourdhui: dateDuJour(),
+    aujourdhui,
     precautions,
     profilsAvecAge: profilsAvecAgeCourants(),
     empreintePrecautions: donnees.empreintePrecautions,
     surveilles: surveillesCourants(),
+    semaine,
+    semaines: etat.semaines,
+    semainesChargees: semainesLues(),
+    semainesDepuisCache: etat.semainesDepuisCache,
+    semaineEnCours: enCours,
+    articles: etat.articles,
+    articlesCharges: etat.articlesCharges,
+    articlesDepuisCache: etat.articlesDepuisCache,
+    liste: listeCourante(aujourdhui),
+    enLigne: navigator.onLine,
     actions,
   };
 }
@@ -1165,7 +1268,355 @@ const actions = {
       return { code: 'reseau' };
     }
   },
+
+  // ——— Semaine et liste de courses (T3a, les deux membres, aperçu compris) ———
+  // Chaque geste est écrit par un lot (hors ligne : part plus tard), appliqué tout de suite sur ce téléphone, puis
+  // l'écran est redessiné. Rien n'est écrit à l'ouverture d'un écran ni d'une feuille.
+
+  /**
+   * « ＋ Ajouter à la semaine » (fiche) et une case de la feuille « Ajouter à la semaine » : le plat va dans la semaine
+   * `cible` ({ id, debut, fin }, coeur/semaine.js › semaineVisee, figée par l'écran à l'ouverture de la feuille ou au
+   * toucher ; sans elle, celle du moment), créée dans le même lot si elle n'existe pas encore, avec les articles des
+   * `restes` gardés (coeur/liste.js › restes ; seulement tant que la cible n'a aucun plat). Un plat retiré revient avec
+   * ses réglages. Annonce « « Gratin » ajouté à la semaine du 17 au 23 octobre. » (suivie, si des restes sont partis
+   * avec lui, de « Les 7 articles pas pris de la semaine qui finit passent sur sa liste. ») avec « Annuler » (qui le
+   * retire de cette même semaine, sans autre annonce ; vidée, une semaine qui commence plus tard emporte ses restes) ;
+   * `silencieux: true` (feuille de choix, où la case et la phrase des restes suffisent) : aucune annonce.
+   * → { code: 'ok', id (semaine), creee (vrai si ce geste a créé la semaine), restes (articles des restes écrits) } |
+   *   { code } : chargement (semaines, articles, plats ou profils pas encore lus : rien n'est écrit), invalide (plat
+   *   inconnu, dans la corbeille, apéro ou préparation de chaque semaine, cible illisible), deja (déjà dans cette
+   *   semaine ; `id`), echec (lot impossible à construire : annoncé), refuse.
+   */
+  ajouterALaSemaine(platId, { cible = null, restes = [], silencieux = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const plat = platsSepares().actifs.find((p) => p.id === platId);
+    if (!plat) return { code: 'invalide' };
+    const ecritures = ecrituresAjout(etat.semaines, platId, {
+      cible,
+      semainesChargees: etat.semainesChargees,
+      aujourdhui: dateDuJour(),
+      auteur: etat.utilisateur.email,
+      maintenant: Date.now(),
+      restes,
+      plat,
+    });
+    if (ecritures.code) return ecritures;
+    const nom = citerPlat(platId);
+    if (!ecrireDansLaSemaine(ecritures, `${nom} n’a pas pu être ajouté à la semaine. Réessayez.`)) return { code: 'echec' };
+    rendre();
+    const semaine = semaineParId(ecritures.id);
+    const nbRestes = ecritures.articles?.length ?? 0;
+    if (!silencieux) {
+      const dates = semaine ? ` ${texteDates(semaine.debut, semaine.fin)}` : '';
+      const suite = nbRestes ? ` ${phraseRestesAjoutes(nbRestes)}` : '';
+      annoncer(`${nom} ajouté à la semaine${dates}.${suite}`, {
+        action: { libelle: 'Annuler', faire: () => retirerDe(ecritures.id, platId) },
+      });
+    }
+    return { code: 'ok', id: ecritures.id, creee: Boolean(ecritures.creation), restes: nbRestes };
+  },
+  /**
+   * « Retirer de la semaine » (feuille du plat ; second toucher d'une case de la feuille de choix) : `retire: true`,
+   * l'entrée et ses réglages restent. `semaineId` : la semaine visée (sans lui, la semaine montrée). Vidée, une semaine
+   * qui commence plus tard s'efface de l'écran et emporte ses articles des restes pas cochés (coeur/semaine.js ›
+   * ecrituresRetrait). Annonce « « Gratin » retiré de la semaine. » avec « Annuler », qui le remet (nouvel `ajouteLe`,
+   * réglages gardés, restes rendus) ; `silencieux: true` : aucune annonce.
+   * → { code: 'ok', vide (la semaine n'a plus de plat) } | { code } : chargement, inutile (pas dans cette semaine),
+   *   invalide, echec, refuse.
+   */
+  retirerDeLaSemaine(platId, { semaineId = null, silencieux = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine) return { code: 'invalide' };
+    if (!estDansLaSemaine(semaine.plats[platId])) return { code: 'inutile' };
+    const ecritures = ecrituresRetrait(semaine, platId, { articles: etat.articles, aujourdhui: dateDuJour() });
+    if (ecritures.code) return ecritures;
+    const nom = citerPlat(platId);
+    const emportes = articlesParId(ecritures.supprimer);
+    if (!ecrireDansLaSemaine(ecritures, `${nom} n’a pas pu être retiré de la semaine. Réessayez.`)) return { code: 'echec' };
+    rendre();
+    if (!silencieux) {
+      annoncer(`${nom} retiré de la semaine.`, {
+        action: { libelle: 'Annuler', faire: () => remettreDans(semaine.id, platId, emportes) },
+      });
+    }
+    return { code: 'ok', vide: !aDesPlats(semaineParId(semaine.id)) };
+  },
+  /**
+   * Mer / Végétale pour un profil (carte du plat, feuille du plat) : `plats.<id>.styles.<profilId>` ; le style par
+   * défaut (la mer si elle convient) efface le chemin. Aucune annonce : la carte change aussitôt. `semaineId` : sans
+   * lui, la semaine montrée.
+   * → { code } : ok, chargement, inutile (plat absent de la semaine), style (ce style ne convient pas), invalide, echec,
+   *   refuse.
+   */
+  choisirStyle(platId, profilId, style, { semaineId = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine) return { code: 'invalide' };
+    if (!estTable(semaine.plats[platId])) return { code: 'inutile' };
+    const ecritures = ecrituresStyle(semaine, platId, profilId, style, {
+      evaluer: compat, tousLesPlats: etat.plats, profils: etat.profils,
+    });
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'Ce choix n’a pas pu être enregistré. Réessayez.')) return { code: 'echec' };
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * Réglage d'un plat de la semaine (feuille du plat) : T3a, `{ repas }` (entier de 1 à 14, écrit même s'il vaut le
+   * défaut ; null : revenir au défaut) ; T3c ajoutera `mange` et `invites`. Écrit tout de suite : l'écran regroupe
+   * lui-même les touchers (0,8 s) et les envoie à la fermeture de la feuille ou quand l'app passe en arrière-plan. Aucune
+   * annonce. `semaineId` : sans lui, la semaine montrée.
+   * → { code } : ok, chargement, inutile (plat absent de la semaine), invalide, echec, refuse.
+   */
+  reglerPlat(platId, reglage, { semaineId = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine) return { code: 'invalide' };
+    if (!estTable(semaine.plats[platId])) return { code: 'inutile' };
+    const ecritures = ecrituresReglage(semaine, platId, reglage, {
+      evaluer: compat, tousLesPlats: etat.plats, profils: etat.profils,
+    });
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'Ce réglage n’a pas pu être enregistré. Réessayez.')) return { code: 'echec' };
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * Cocher (`oui` vrai) ou décocher une ligne de la liste par sa clé (`ligne.cle` de ctx.liste) : une ligne calculée
+   * écrit `coches.<cle>` de la semaine montrée (la quantité affichée au moment du toucher, coeur/liste.js ›
+   * ecrituresCoche) ou l'efface ; un article à la main (`article:<id>`, ou son identifiant) écrit `articles/{id}.coche`
+   * (un article supprimé entre-temps n'est jamais recréé : refus silencieux). Rien n'est écrit si la ligne est déjà dans
+   * l'état voulu. Aucune annonce : la progression de Courses le dit.
+   * → { code } : ok, chargement, inutile (clé inconnue de la liste), invalide, echec, refuse.
+   */
+  cocher(cle, oui) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const voulu = Boolean(oui);
+    const liste = listeCourante();
+    const maintenant = Date.now();
+    const echec = 'La liste n’a pas pu être mise à jour. Réessayez.';
+    const article = liste.articles.find((a) => a.cle === cle || a.articleId === cle);
+    if (article) {
+      if (Boolean(article.cochee) === voulu) return { code: 'ok' };
+      const ecritures = ecrituresCocheArticle(article, voulu, { maintenant });
+      if (ecritures.code) return ecritures;
+      let envoi;
+      try {
+        envoi = donnees.modifierArticle(ecritures.articleId, ecritures.champs);
+      } catch {
+        annoncer(echec);
+        return { code: 'echec' };
+      }
+      ecrire(envoi, echec);
+      etat.articles = etat.articles.map((a) => (a.id === ecritures.articleId ? appliquerChamps(a, ecritures.champs) : a));
+      rendre();
+      return { code: 'ok' };
+    }
+    const ligne = liste.lignes.find((l) => l.cle === cle);
+    if (!ligne) return { code: 'inutile' };
+    // Déjà prise en entier (cocher) ou rien de pris (décocher) : rien à écrire.
+    if (voulu ? ligne.cochee : !ligne.cochee && !ligne.dejaPris) return { code: 'ok' };
+    const ecritures = ecrituresCoche(semaineCourante(), ligne, voulu, { maintenant });
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, echec)) return { code: 'echec' };
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * « À racheter » d'un produit du placard (« Déjà à la maison ? », feuille ⋮) : `racheter.<cle>` de la semaine montrée
+   * (vrai), ou effacé. Rien n'est écrit si c'est déjà l'état voulu. Aucune annonce.
+   * → { code } : ok, chargement, invalide (aucune semaine, clé hors chemin sûr), echec, refuse.
+   */
+  racheter(cle, oui) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineCourante();
+    if (!semaine) return { code: 'invalide' };
+    const voulu = Boolean(oui);
+    // Clé de repli de la ligne (coeur/liste.js) : un « À racheter » rangé sous elle compte aussi, et s'efface avec.
+    const liste = listeCourante();
+    const repli = [...liste.lignes, ...liste.maison].find((l) => l.cle === cle)?.repli ?? null;
+    const pose = (c) => typeof c === 'string' && Object.hasOwn(semaine.racheter, c) && semaine.racheter[c] === true;
+    if ((pose(cle) || pose(repli)) === voulu) return { code: 'ok' };
+    const ecritures = ecrituresRachat(semaine, cle, voulu, { repli });
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'La liste n’a pas pu être mise à jour. Réessayez.')) return { code: 'echec' };
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * « Ajouter à la liste » : nouvel article `articles/{id}` ({ libelle, creePar, creeLe }), indépendant des semaines.
+   * N'annonce rien : la feuille montre `message` dans sa zone `aria-live` (« ✓ « Piles » ajouté. » ; même produit déjà
+   * dans la liste, l'ajout restant fait : « ✓ « Lait » ajouté. Il y en a aussi 6 l pour vos plats. », `aussi` non nul :
+   * la feuille offre alors « Retirer », c'est-à-dire retirerArticle(id, { silencieux: true })).
+   * → { code: 'ok', id, message, aussi } | { code: 'vide' | 'long', message } (« Écrivez le nom d'un article. »,
+   *   « 60 caractères au plus. ») | { code: 'echec', message } (lot impossible à construire) | { code: 'refuse' }.
+   */
+  ajouterArticle(libelle) {
+    if (!etat.utilisateur) return { code: 'refuse', message: null };
+    const prepare = preparerAjout(libelle, { liste: listeCourante() });
+    if (prepare.erreur) return { code: prepare.erreur, message: ERREURS_ARTICLE[prepare.erreur] ?? null };
+    const email = etat.utilisateur.email;
+    const article = {
+      libelle: prepare.donnees.libelle,
+      ...(typeof email === 'string' && email ? { creePar: email } : {}),
+      creeLe: Date.now(),
+    };
+    const echec = `«\u00A0${nomArticle(article)}\u00A0» n’a pas pu être ajouté à la liste. Réessayez.`;
+    let resultat;
+    try {
+      resultat = donnees.ajouterArticle(article);
+    } catch {
+      return { code: 'echec', message: echec };
+    }
+    ecrire(resultat.envoi, echec);
+    etat.articles = [...etat.articles, { ...article, id: resultat.id }];
+    rendre();
+    return { code: 'ok', id: resultat.id, message: texteAjoutArticle(article.libelle, prepare.aussi), aussi: prepare.aussi };
+  },
+  /**
+   * « Retirer de la liste » d'un article à la main (`id` : son identifiant, ou la clé `article:<id>`) : document supprimé.
+   * Annonce « « Piles » retiré de la liste. » avec « Annuler », qui remet le même document (même identifiant) ;
+   * `silencieux: true` (« Retirer » de la feuille d'ajout, qui montre `message` elle-même) : aucune annonce.
+   * → { code: 'ok', message } | { code: 'inutile' | 'echec' | 'refuse', message } (inutile : article inconnu).
+   */
+  retirerArticle(id, { silencieux = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse', message: null };
+    const articleId = typeof id === 'string' && id.startsWith('article:') ? id.slice('article:'.length) : id;
+    const article = etat.articles.find((a) => a?.id === articleId);
+    if (!article) return { code: 'inutile', message: null };
+    const nom = nomArticle(article);
+    const echec = `«\u00A0${nom}\u00A0» n’a pas pu être retiré de la liste. Réessayez.`;
+    let envoi;
+    try {
+      envoi = donnees.supprimerArticles([articleId]);
+    } catch {
+      annoncer(echec);
+      return { code: 'echec', message: echec };
+    }
+    ecrire(envoi, echec);
+    etat.articles = etat.articles.filter((a) => a !== article);
+    rendre();
+    const message = `«\u00A0${nom}\u00A0» retiré de la liste.`;
+    if (!silencieux) annoncer(message, { action: { libelle: 'Annuler', faire: () => remettreArticle(article) } });
+    return { code: 'ok', message };
+  },
 };
+
+// ——— Semaine et liste de courses (T3a) ———
+
+/** Table simple (ni tableau, ni null). */
+function estTable(valeur) {
+  return Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
+}
+
+/** Nom d'un plat pour les annonces, entre guillemets (corbeille comprise) ; « Ce plat » s'il est inconnu. */
+function citerPlat(platId) {
+  const nom = String(etat.plats.find((plat) => plat?.id === platId)?.nom ?? '').replace(/\s+/g, ' ').trim();
+  return nom ? `«\u00A0${nom}\u00A0»` : 'Ce plat';
+}
+
+/** Nom d'un article pour les annonces : celui de la liste (majuscule initiale), sinon son libellé. */
+function nomArticle(article) {
+  const nom = listeCourante().articles.find((a) => a.articleId === article?.id)?.nom;
+  if (typeof nom === 'string' && nom) return nom;
+  const libelle = String(article?.libelle ?? '').replace(/\s+/g, ' ').trim();
+  return libelle ? libelle.charAt(0).toUpperCase() + libelle.slice(1) : 'Cet article';
+}
+
+/**
+ * Écritures d'une semaine ({ creation?, id, champs, articles? }, préparées par coeur/semaine.js ou coeur/liste.js) :
+ * envoyées par un lot (donnees.js › ecrireSemaine ; hors ligne : plus tard ; un refus du serveur est annoncé avec
+ * `echec`), puis appliquées tout de suite sur ce téléphone (appliquerChamps, pour l'affichage seulement : la copie de
+ * Firestore les remplace dès son arrivée). Lot impossible à construire : `echec` annoncé, rien d'appliqué.
+ * → vrai si le lot est parti.
+ */
+function ecrireDansLaSemaine(ecritures, echec) {
+  let resultat;
+  try {
+    resultat = donnees.ecrireSemaine(ecritures);
+  } catch {
+    annoncer(echec);
+    return false;
+  }
+  ecrire(resultat.envoi, echec);
+  const { creation = null, id, champs = {}, articles = [], supprimer = [] } = ecritures;
+  const existante = etat.semaines.find((semaine) => semaine?.id === id) ?? null;
+  const base = creation ? { ...(existante ?? {}), ...creation.donnees, id } : existante;
+  if (base) {
+    const maj = { ...appliquerChamps(base, champs), id };
+    etat.semaines = existante
+      ? etat.semaines.map((semaine) => (semaine === existante ? maj : semaine))
+      : [...etat.semaines, maj];
+  }
+  // Articles écrits (set fusionné : un article déjà là garde sa coche), puis articles emportés.
+  const ecrits = new Map((Array.isArray(articles) ? articles : [])
+    .map((article, i) => [resultat.articleIds[i], article])
+    .filter(([articleId]) => typeof articleId === 'string' && articleId));
+  const partis = new Set(Array.isArray(supprimer) ? supprimer : []);
+  if (ecrits.size || partis.size) {
+    const restants = etat.articles.filter((a) => !partis.has(a?.id))
+      .map((a) => (ecrits.has(a?.id) ? { ...a, ...ecrits.get(a.id), id: a.id } : a));
+    const neufs = [...ecrits].filter(([articleId]) => !restants.some((a) => a?.id === articleId))
+      .map(([articleId, article]) => ({ ...article, id: articleId }));
+    etat.articles = [...restants, ...neufs];
+  }
+  return true;
+}
+
+/** Articles de la liste par identifiant (ceux qu'un retrait emporte, pour « Annuler »). */
+function articlesParId(ids) {
+  const voulus = new Set(Array.isArray(ids) ? ids : []);
+  return voulus.size ? etat.articles.filter((a) => voulus.has(a?.id)).map((a) => ({ ...a })) : [];
+}
+
+/**
+ * « Annuler » de « « Gratin » ajouté à la semaine… » : le plat est retiré de cette même semaine, sans autre annonce ;
+ * vidée, une semaine qui commence plus tard emporte les articles des restes venus avec lui (rien ne reste de l'ajout).
+ */
+function retirerDe(semaineId, platId) {
+  if (!etat.utilisateur) return;
+  const semaine = semaineParId(semaineId);
+  if (!semaine || !estDansLaSemaine(semaine.plats[platId])) return;
+  const ecritures = ecrituresRetrait(semaine, platId, { articles: etat.articles, aujourdhui: dateDuJour() });
+  if (ecritures.code) return;
+  if (ecrireDansLaSemaine(ecritures, `${citerPlat(platId)} n’a pas pu être retiré de la semaine. Réessayez.`)) rendre();
+}
+
+/**
+ * « Annuler » de « « Gratin » retiré de la semaine. » : le plat revient dans cette semaine, réglages gardés, avec les
+ * articles des restes que le retrait avait emportés (`remettre`, mêmes identifiants).
+ */
+function remettreDans(semaineId, platId, remettre = []) {
+  if (!etat.utilisateur) return;
+  const semaine = semaineParId(semaineId);
+  if (!semaine || estDansLaSemaine(semaine.plats[platId])) return;
+  const ecritures = ecrituresRemise(semaine, platId, { maintenant: Date.now(), remettre });
+  if (ecritures.code) return;
+  if (ecrireDansLaSemaine(ecritures, `${citerPlat(platId)} n’a pas pu être remis dans la semaine. Réessayez.`)) rendre();
+}
+
+/** « Annuler » de « « Piles » retiré de la liste. » : le même document revient (même identifiant). */
+function remettreArticle(article) {
+  if (!etat.utilisateur || etat.articles.some((a) => a?.id === article.id)) return;
+  const echec = `«\u00A0${nomArticle(article)}\u00A0» n’a pas pu être remis dans la liste. Réessayez.`;
+  let envoi;
+  try {
+    envoi = donnees.remettreArticles([article]);
+  } catch {
+    annoncer(echec);
+    return;
+  }
+  ecrire(envoi, echec);
+  etat.articles = [...etat.articles, article];
+  rendre();
+}
 
 // ——— Demandes et notifications (T2e) ———
 
@@ -1548,8 +1999,16 @@ function oublierDonnees() {
     platsDepuisCache: false,
     demandes: [],
     demandesChargees: false,
+    semaines: [],
+    semainesChargees: false,
+    semainesDepuisCache: false,
+    articles: [],
+    articlesCharges: false,
+    articlesDepuisCache: false,
     apercu: false,
   });
+  memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
+  memoListe = { cles: null, liste: null };
 }
 
 async function seDeconnecter() {
@@ -1609,6 +2068,8 @@ function suivreDonnees() {
         if (maj.plats) etat.platsCharges = true;
         if (maj.profils) etat.profilsCharges = true;
         if (maj.demandes) etat.demandesChargees = true;
+        if (maj.semaines) etat.semainesChargees = true;
+        if (maj.articles) etat.articlesCharges = true;
         verifierConfirmation();
         rendre();
       }, (code) => {

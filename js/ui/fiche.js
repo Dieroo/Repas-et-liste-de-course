@@ -4,6 +4,8 @@
 // version à créer ou à revoir, et « 📬 Demander la recette » sur un plat ⏳ ; une fois demandée, la phrase « 📬 Demandée
 // aujourd’hui. … » prend la place du bouton. Le gestionnaire (hors aperçu) lit « 📬 Demandée par <Prénom> le … », et
 // « Demander à Claude » vise d'abord la version demandée.
+// Semaine (T3a) : sous les badges, « ＋ Ajouter à la semaine » (les deux membres ; bouton principal, sauf quand la fiche
+// en a déjà un) ; une fois le plat dans la semaine visée, « ✓ Dans la semaine · Régler › » ouvre la feuille du plat.
 import { el, pastille, annoncer } from './dom.js';
 import { choisirImage, preparerPhoto } from './photo.js';
 import { copier } from './presse-papiers.js';
@@ -20,6 +22,8 @@ import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 import { estDansCorbeille, platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
 import { dateDemande, etatDemande, texteDemandee } from '../coeur/demandes.js';
+import { estDansLaSemaine, lireSemaine, peutAllerDansLaSemaine, semaineVisee, texteDates } from '../coeur/semaine.js';
+import { majPlatsDeLaSemaine, ouvrirPlatDeLaSemaine, restesPour } from './plat-semaine.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -384,6 +388,22 @@ export function creer(ctx) {
   const lienColler = el('a', { class: 'bouton bouton-plein', href: `#/import/${encodeURIComponent(id)}` }, 'Coller la réponse');
   const messageCopie = el('p', { class: 'aide', role: 'status' });
   const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, boutonDemander, lienColler);
+  // Vrai quand « Demander à Claude » est dans la section « Nouvelle version » (bas de fiche, geste rare) : il y est
+  // secondaire, pour que « ＋ Ajouter à la semaine » reste le bouton principal de la fiche.
+  let actionsEnBas = false;
+
+  // « ＋ Ajouter à la semaine » (T3a) : gardé d'un rendu à l'autre (le focus reste sur le bouton touché, qui devient
+  // « ✓ Dans la semaine · Régler › »). Inactif tant que les semaines ne sont pas lues ; absent sur un plat de la
+  // corbeille. La semaine visée (coeur/semaine.js › semaineVisee) est calculée au toucher ; si ce n'est pas celle qui
+  // est montrée, une aide le dit (« Pour la semaine du 17 au 23 octobre. ») ; l'annonce de l'app donne les dates.
+  const libelleSemaine = el('span', {});
+  const iconeSemaine = el('span', { 'aria-hidden': 'true' });
+  const boutonSemaine = el('button', { class: 'bouton bouton-plein', type: 'button', onclick: toucherSemaine },
+    iconeSemaine, libelleSemaine);
+  const aideSemaine = el('p', { class: 'aide aide-semaine', id: 'fiche-aide-semaine', hidden: true });
+  const blocSemaine = el('div', { class: 'bloc-semaine' }, boutonSemaine, aideSemaine);
+  // Ce qui décide si le bouton est principal : la fiche a-t-elle déjà un bouton principal ? (dernier rendu)
+  let autrePrincipal = false;
 
   // « Modifier la recette » (les deux membres), ou « Reprendre » si une modification attend sur ce téléphone.
   const lienModifier = el('a', { class: 'bouton bouton-secondaire bouton-plein', href: `#/modifier/${encodeURIComponent(id)}` });
@@ -508,11 +528,72 @@ export function creer(ctx) {
     majActionsRecette();
   }
 
-  /** Avant la copie, l'action principale est « Demander à Claude » ; ensuite, « Coller la réponse ». */
+  /**
+   * Avant la copie, l'action principale est « Demander à Claude » ; ensuite, « Coller la réponse ». Dans la section
+   * « Nouvelle version » (bas de fiche), « Demander à Claude » reste secondaire.
+   */
   function majActionsRecette() {
-    boutonDemander.className = `bouton bouton-plein ${demandeCopiee ? 'bouton-secondaire' : 'bouton-principal'}`;
-    lienColler.className = `bouton bouton-plein ${demandeCopiee ? 'bouton-principal' : 'bouton-secondaire'}`;
+    const principal = demandeCopiee ? lienColler : actionsEnBas ? null : boutonDemander;
+    boutonDemander.className = `bouton bouton-plein ${principal === boutonDemander ? 'bouton-principal' : 'bouton-secondaire'}`;
+    lienColler.className = `bouton bouton-plein ${principal === lienColler ? 'bouton-principal' : 'bouton-secondaire'}`;
     messageCopie.hidden = !messageCopie.textContent;
+    majBlocSemaine();
+  }
+
+  /**
+   * La semaine visée et le plat : { visee, montree, dedans } ; null tant que les semaines ne sont pas lues. `dedans` :
+   * le plat est déjà dans la semaine visée.
+   */
+  function etatSemaine() {
+    if (!courant.semainesChargees) return null;
+    const visee = semaineVisee(courant.semaines ?? [], courant.aujourdhui);
+    if (!visee) return null;
+    const semaineDeLaCible = lireSemaine((courant.semaines ?? []).find((s) => s?.id === visee.id));
+    return {
+      visee,
+      montree: lireSemaine(courant.semaine),
+      dedans: estDansLaSemaine(semaineDeLaCible?.plats?.[id]),
+    };
+  }
+
+  /** « ＋ Ajouter à la semaine » : écrit dans la semaine visée (créée au besoin) ; « Régler › » ouvre la feuille du plat. */
+  function toucherSemaine() {
+    const etat = etatSemaine();
+    const plat = platCourant();
+    if (!etat || !plat || !peutAllerDansLaSemaine(plat)) return;
+    if (etat.dedans) {
+      if (etat.montree?.id !== etat.visee.id) {
+        location.hash = '#/semaine';
+        return;
+      }
+      ouvrirPlatDeLaSemaine(() => courant, id, {
+        onFermer: () => {
+          if (boutonSemaine.isConnected) boutonSemaine.focus();
+        },
+      });
+      return;
+    }
+    courant.actions?.ajouterALaSemaine?.(id, { cible: etat.visee, restes: restesPour(courant, etat.visee) });
+  }
+
+  /** Texte, rôle et aide du bouton de la semaine, d'après l'état du moment ; réécrits seulement s'ils changent. */
+  function majBlocSemaine() {
+    const etat = etatSemaine();
+    const dedans = Boolean(etat?.dedans);
+    const icone = dedans ? '✓' : '＋';
+    const libelle = dedans ? 'Dans la semaine · Régler ›' : 'Ajouter à la semaine';
+    if (iconeSemaine.textContent !== icone) iconeSemaine.textContent = icone;
+    if (libelleSemaine.textContent !== libelle) libelleSemaine.textContent = libelle;
+    const principal = !dedans && !autrePrincipal && !(actionsEnBas && demandeCopiee);
+    const classe = `bouton bouton-plein ${principal ? 'bouton-principal' : 'bouton-secondaire'}`;
+    if (boutonSemaine.className !== classe) boutonSemaine.className = classe;
+    boutonSemaine.disabled = !etat;
+    const autre = etat && !dedans && etat.montree?.id !== etat.visee.id;
+    const aide = autre ? `Pour la semaine ${texteDates(etat.visee.debut, etat.visee.fin)}.` : '';
+    if (aideSemaine.textContent !== aide) aideSemaine.textContent = aide;
+    aideSemaine.hidden = !aide;
+    if (aide) boutonSemaine.setAttribute('aria-describedby', 'fiche-aide-semaine');
+    else boutonSemaine.removeAttribute('aria-describedby');
   }
 
   /**
@@ -696,7 +777,7 @@ export function creer(ctx) {
     if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
     const blocs = [...blocsDemande.values()];
-    const focusGarde = [actionsRecette, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud,
+    const focusGarde = [actionsRecette, blocSemaine, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud,
       ...blocs.flatMap((bloc) => [bloc.bouton, bloc.phrase])]
       .some((n) => n.contains(document.activeElement))
       ? document.activeElement
@@ -711,8 +792,13 @@ export function creer(ctx) {
     const focusDouteux = Boolean(document.activeElement?.closest?.('.compat-douteux'));
     // Lien « Ses précautions › » d'une section « 🧸 Pour <Enfant> » : de même, retrouvé par son repère.
     const repereFocus = contenu.contains(document.activeElement) ? document.activeElement.dataset?.repere ?? null : null;
-    majActionsRecette();
     const brouillon = lireBrouillon(courant.utilisateur?.uid, id);
+    // « Demander à Claude » en bas, dans « Nouvelle version » : secondaire. La fiche a déjà un bouton principal avec
+    // « Reprendre », sous une version manquante ou sur un plat ⏳ (gestionnaire) : « ＋ Ajouter à la semaine » est
+    // alors secondaire.
+    actionsEnBas = gestionnaire && statut !== 'attente' && !versionManquante;
+    autrePrincipal = Boolean(brouillon) || (gestionnaire && (statut === 'attente' || Boolean(versionManquante)));
+    majActionsRecette();
     lienModifier.replaceChildren(
       el('span', { 'aria-hidden': 'true' }, '✏️'),
       statut === 'attente' ? 'Écrire la recette moi-même' : 'Modifier la recette',
@@ -730,6 +816,9 @@ export function creer(ctx) {
             : null,
         ),
       ),
+
+      // Ni sur un plat de la corbeille, ni sur un apéro (T3e) ou une préparation de chaque semaine (T3d).
+      jete || !peutAllerDansLaSemaine(plat) ? null : blocSemaine,
 
       jete ? carteJete : brouillon ? carteReprise : lienModifier,
 
@@ -839,6 +928,7 @@ export function creer(ctx) {
       // Plat mis à la corbeille : la fiche s'en va vers la liste, elle ne se redessine plus d'ici là.
       if (depart) return;
       toutDessiner();
+      majPlatsDeLaSemaine(nouveau);
     },
     detruire() {
       arreterPhoto();

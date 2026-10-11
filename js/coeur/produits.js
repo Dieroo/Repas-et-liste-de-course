@@ -5,7 +5,9 @@
 // donnerait une mauvaise nature sans le dire (« steak de soja » lu comme de la viande, « lait de coco » comme un
 // produit laitier). Les ressemblances ne servent qu'aux suggestions, que la personne touche elle-même.
 // Logique pure : ni DOM ni Firebase. N'importe que slug.js, vocabulaire.js et dictionnaire.js ; edition.js l'importe,
-// jamais l'inverse (pas de cycle). En T3 : `ficheProduit` (priorité champ par champ).
+// jamais l'inverse (pas de cycle). T3a : identifiant d'un produit des courses (`idProduit`, qui sépare les homographes),
+// ce que les recettes du foyer disent de chaque produit (`indexDesRecettes`) et `ficheProduit` (priorité champ par
+// champ : produits/{id} du foyer > recettes > produits courants > défaut).
 import { cleProduit, motsAccentues, slug } from './slug.js';
 import { MARQUEURS_PRECAUTION, VIANDES, VOCABULAIRES, marqueursEffectifs } from './vocabulaire.js';
 import { DICTIONNAIRE } from './dictionnaire.js';
@@ -247,10 +249,12 @@ function elementDe(entree) {
 function indexDictionnaire() {
   if (index) return index;
   const parCle = new Map();
+  const parId = new Map();
   const elements = [];
   for (const entree of DICTIONNAIRE) {
     const element = elementDe(entree);
     elements.push(element);
+    if (!parId.has(entree.id)) parId.set(entree.id, entree);
     for (const forme of [entree.nom, ...(Array.isArray(entree.alias) ? entree.alias : [])]) {
       const cle = cleProduit(forme);
       // Clés uniques sur tout le dictionnaire (tests/coeur-dictionnaire.test.js) : la première l'emporterait.
@@ -258,7 +262,7 @@ function indexDictionnaire() {
     }
   }
   elements.sort((a, b) => comparer(a.produit, b.produit) || (a.id < b.id ? -1 : 1));
-  index = { parCle, elements: Object.freeze(elements) };
+  index = { parCle, parId, elements: Object.freeze(elements) };
   return index;
 }
 
@@ -422,4 +426,190 @@ export function chercheur(saisie) {
 /** Rang d'un élément pour une saisie (voir chercheur). → { rang, ecart, mots } ou null */
 export function rangSuggestion(element, saisie) {
   return chercheur(saisie)?.(element) ?? null;
+}
+
+// ——— Produits des courses (T3a) ———
+
+/** Entrée des produits courants pour ce nom (même clé, homographes accordés), ou null ; un nom ambigu seul → null. */
+export function entreeCourante(nom) {
+  if (typeof nom !== 'string' || !cleProduit(nom) || estAmbigu(nom)) return null;
+  return dansLeDictionnaire(nom)?.entree ?? null;
+}
+
+/** Entrée des produits courants de cet id, ou null. */
+export function entreeParId(id) {
+  if (typeof id !== 'string' || id === '') return null;
+  return indexDictionnaire().parId.get(id) ?? null;
+}
+
+/** Code d'un accent dans un id : aigu 1, grave 2, circonflexe 3, tréma 4, cédille 5. */
+const CODES_ACCENT = new Map([['́', '1'], ['̀', '2'], ['̂', '3'], ['̈', '4'], ['̧', '5']]);
+
+/** Mot homographe écrit pour un id : lettres de base, chaque accent suivi de son code (« pâté » → 'pa3te1'). */
+function formeDuMot(mot) {
+  let forme = '';
+  for (const c of String(mot).normalize('NFD')) {
+    if (/[a-z0-9]/.test(c)) forme += c;
+    else forme += CODES_ACCENT.get(c) ?? '';
+  }
+  return forme;
+}
+
+/** Suffixe d'un nom dont la clé touche un homographe : `--` puis les seuls mots homographes (motsCompares), reliés par `-`. */
+function suffixeHomographes(nom, cle) {
+  const mots = motsCompares(nom);
+  const formes = cle.split('-')
+    .map((mot, i) => (HOMOGRAPHES.has(mot) ? formeDuMot(mots[i] ?? mot) : ''))
+    .filter(Boolean);
+  return formes.length ? `--${formes.join('-')}` : '';
+}
+
+/**
+ * Identifiant d'un produit des courses (lignes de la liste, coches, produits/{id}), dans cet ordre :
+ * 1. nom sans lettre ni chiffre → '' (rien à écrire) ;
+ * 2. nom ambigu seul (« pâte », « pâté », « pâtés », « pate ») → `<cle>--<forme>`, AVANT les produits courants (qui
+ *    rendraient les pâtes pour « pâte ») ;
+ * 3. nom reconnu par les produits courants (homographes accordés) → l'id de l'entrée (« oignons » → 'oignon-jaune') ;
+ * 4. sinon cleProduit(nom), suivi de `--<forme>` si la clé touche un homographe (« pâtes complètes » →
+ *    'pate-complete--pa3te', « the » → 'the--the').
+ * `<forme>` : les mots homographes tels que motsCompares les lit (formes admises, sans pluriel), chaque lettre accentuée
+ * devenue sa lettre suivie du code de l'accent. Jamais deux tirets de suite ailleurs : un id à `--` n'est ni un produit
+ * courant ni la clé d'un nom ordinaire. Ne dépend pas des recettes du foyer. Toujours `^[a-z0-9-]*$`.
+ */
+export function idProduit(nom) {
+  if (typeof nom !== 'string') return '';
+  const cle = cleProduit(nom);
+  if (!cle) return '';
+  if (estAmbigu(nom)) return `${cle}${suffixeHomographes(nom, cle)}`;
+  const trouve = dansLeDictionnaire(nom);
+  if (trouve) return trouve.entree.id;
+  return toucheHomographe(cle) ? `${cle}${suffixeHomographes(nom, cle)}` : cle;
+}
+
+/**
+ * Clé de repli d'un produit (§3.4 du plan) : la clé qu'une version d'avant de l'app a pu donner au nom affiché `nom`
+ * avant que les produits courants ne l'apprennent, c'est-à-dire cleProduit(nom) quand elle diffère de `id`. null
+ * quand un homographe est en jeu : un id à `--` n'a jamais été changé par les produits courants, et un nom dont la clé
+ * touche « pâte », « thé »… n'a jamais eu sa clé seule pour id (étape 4 d'idProduit) ; la clé sans accents serait
+ * celle d'un autre produit (« pâté » → 'pate', l'id des pâtes). null aussi sans clé.
+ */
+export function cleDeRepli(nom, id) {
+  const cle = typeof nom === 'string' ? cleProduit(nom) : '';
+  if (!cle || typeof id !== 'string' || cle === id || id.includes('--') || toucheHomographe(cle)) return null;
+  return cle;
+}
+
+const listeDe = (valeur) => (Array.isArray(valeur) ? valeur : []);
+const memoireIndex = new WeakMap();
+
+/**
+ * Ce que les recettes du foyer disent de chaque produit, par idProduit : Map id → { noms: Map(nom → nombre),
+ * rayons: Map(rayon → nombre) } ; ingrédients des recettes et ajouts des versions ; noms en minuscules, espaces
+ * réduits ; rayons du vocabulaire seulement. Même tableau `plats` → même Map (identité), sans recalcul.
+ */
+export function indexDesRecettes(plats) {
+  if (!Array.isArray(plats)) return new Map();
+  if (memoireIndex.has(plats)) return memoireIndex.get(plats);
+  const index = new Map();
+  const noter = (brut) => {
+    if (!estObjet(brut) || typeof brut.produit !== 'string') return;
+    const nom = brut.produit.replace(/\s+/g, ' ').trim().toLocaleLowerCase('fr-FR');
+    const id = idProduit(nom);
+    if (!id) return;
+    if (!index.has(id)) index.set(id, { noms: new Map(), rayons: new Map() });
+    const connu = index.get(id);
+    connu.noms.set(nom, (connu.noms.get(nom) ?? 0) + 1);
+    if (VOCABULAIRES.rayon.includes(brut.rayon)) connu.rayons.set(brut.rayon, (connu.rayons.get(brut.rayon) ?? 0) + 1);
+  };
+  for (const plat of plats) {
+    if (!estObjet(plat)) continue;
+    for (const ingredient of listeDe(plat.ingredients)) noter(ingredient);
+    for (const variante of listeDe(plat.variantes)) for (const ajout of listeDe(variante?.ajouter)) noter(ajout);
+  }
+  memoireIndex.set(plats, index);
+  return index;
+}
+
+/** Nom le plus fréquent ; à égalité le plus court, puis l'ordre alphabétique. null si aucun. */
+function nomLePlusFrequent(noms) {
+  let meilleur = null;
+  for (const [nom, nombre] of noms instanceof Map ? noms : []) {
+    if (!meilleur || nombre > meilleur.nombre
+      || (nombre === meilleur.nombre && (nom.length < meilleur.nom.length
+        || (nom.length === meilleur.nom.length && (comparer(nom, meilleur.nom) < 0
+          || (comparer(nom, meilleur.nom) === 0 && nom < meilleur.nom)))))) {
+      meilleur = { nom, nombre };
+    }
+  }
+  return meilleur?.nom ?? null;
+}
+
+/** Rayon le plus fréquent ; à égalité, l'ordre du vocabulaire. null si aucun. */
+function rayonLePlusFrequent(rayons) {
+  let meilleur = null;
+  for (const rayon of VOCABULAIRES.rayon) {
+    const nombre = rayons instanceof Map ? rayons.get(rayon) ?? 0 : 0;
+    if (nombre > 0 && (!meilleur || nombre > meilleur.nombre)) meilleur = { rayon, nombre };
+  }
+  return meilleur?.rayon ?? null;
+}
+
+/** produits/{id} du foyer (objet par id, ou Map), s'il est lisible. */
+function produitDuFoyer(produitsFoyer, id) {
+  if (typeof id !== 'string' || id === '') return null;
+  const valeur = produitsFoyer instanceof Map ? produitsFoyer.get(id)
+    : estObjet(produitsFoyer) && Object.hasOwn(produitsFoyer, id) ? produitsFoyer[id] : null;
+  return estObjet(valeur) ? valeur : null;
+}
+
+/**
+ * Ce que l'app sait d'un produit des courses, champ par champ, du plus fort au plus faible (décision T3-0) :
+ * produits/{id} du foyer > recettes du foyer (indexDesRecettes) > produits courants > défaut.
+ * → { nom, rayon, recherche, placard, equivalences, habituel } ; chacun { valeur, source: 'foyer' | 'recettes' |
+ *   'courants' | 'saisie' | 'defaut' } :
+ * - nom : le plus fréquent dans les recettes (à égalité le plus court, puis l'ordre alphabétique) > nom courant >
+ *   `saisie` > '' ;
+ * - rayon : foyer > le plus fréquent dans les recettes > courant > 'divers' ;
+ * - recherche (T3b) : foyer.rechercheDrive > le nom (même source) ;
+ * - placard : foyer.placard { actif } (faux → null ; vrai → le seuil courant, sinon {} : toujours mis de côté, T3d) >
+ *   courant (`{}` ou `{ seuil, unite }`) > null ;
+ * - equivalences : celles du produit courant, sinon null ; habituel (T3d) : foyer.habituel s'il est actif, sinon null.
+ * `repli` : clé cherchée aussi dans produitsFoyer quand `id` n'y est pas (un id changé par le dictionnaire garde ainsi
+ * son mot cherché ; cleDeRepli) ; jamais pour un id à `--` (homographe). `produitsFoyer` : objet par id (ou Map). Rien n'est modifié en entrée.
+ */
+export function ficheProduit(id, { produitsFoyer = {}, index = new Map(), saisie = '', repli = null } = {}) {
+  // Un id à `--` (homographe) n'a jamais de repli : « pâté » ne prend jamais le mot cherché des pâtes.
+  const repliSur = repli && repli !== id && !(typeof id === 'string' && id.includes('--')) ? repli : null;
+  const foyer = produitDuFoyer(produitsFoyer, id) ?? (repliSur ? produitDuFoyer(produitsFoyer, repliSur) : null);
+  const recettes = index instanceof Map && typeof id === 'string' ? index.get(id) ?? null : null;
+  const courant = entreeParId(id);
+
+  const nomRecettes = recettes ? nomLePlusFrequent(recettes.noms) : null;
+  const tape = typeof saisie === 'string' ? saisie.replace(/\s+/g, ' ').trim() : '';
+  let nom = { valeur: '', source: 'defaut' };
+  if (nomRecettes) nom = { valeur: nomRecettes, source: 'recettes' };
+  else if (courant) nom = { valeur: courant.nom, source: 'courants' };
+  else if (tape) nom = { valeur: tape, source: 'saisie' };
+
+  let rayon = { valeur: 'divers', source: 'defaut' };
+  const rayonRecettes = recettes ? rayonLePlusFrequent(recettes.rayons) : null;
+  if (VOCABULAIRES.rayon.includes(foyer?.rayon)) rayon = { valeur: foyer.rayon, source: 'foyer' };
+  else if (rayonRecettes) rayon = { valeur: rayonRecettes, source: 'recettes' };
+  else if (VOCABULAIRES.rayon.includes(courant?.rayon)) rayon = { valeur: courant.rayon, source: 'courants' };
+
+  const motCherche = typeof foyer?.rechercheDrive === 'string' ? foyer.rechercheDrive.replace(/\s+/g, ' ').trim() : '';
+  const recherche = motCherche ? { valeur: motCherche, source: 'foyer' } : { ...nom };
+
+  const placardCourant = estObjet(courant?.placard) ? courant.placard : null;
+  let placard = { valeur: null, source: 'defaut' };
+  if (estObjet(foyer?.placard) && typeof foyer.placard.actif === 'boolean') {
+    placard = { valeur: foyer.placard.actif ? placardCourant ?? {} : null, source: 'foyer' };
+  } else if (placardCourant) placard = { valeur: placardCourant, source: 'courants' };
+
+  const equivalences = estObjet(courant?.equivalences)
+    ? { valeur: courant.equivalences, source: 'courants' } : { valeur: null, source: 'defaut' };
+  const habituel = estObjet(foyer?.habituel) && foyer.habituel.actif === true
+    ? { valeur: foyer.habituel, source: 'foyer' } : { valeur: null, source: 'defaut' };
+
+  return { nom, rayon, recherche, placard, equivalences, habituel };
 }
