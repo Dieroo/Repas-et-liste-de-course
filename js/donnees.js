@@ -19,6 +19,8 @@ import { estDansCorbeille } from './coeur/corbeille.js';
 import { empreinteRelecture, appliquerReperes } from './coeur/relecture.js';
 import { VERSION_REPERES } from './coeur/vocabulaire.js';
 import { lireIdDemande } from './coeur/demandes.js';
+import { EFFACER, cheminSur, champsValides } from './coeur/semaine.js';
+import { ARTICLE_MAX, PRECISION_MAX } from './coeur/liste.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -68,19 +70,22 @@ export function devenirGestionnaire(email) {
   });
 }
 
-// ——— Collections partagées (profils, plats, demandes) ———
+// ——— Collections partagées (profils, plats, demandes, semaines, articles) ———
 
 /**
- * Suit les profils, les plats et les demandes en temps réel (un abonnement par collection).
- * rappel({ profils, profilsDepuisCache }), rappel({ plats, platsDepuisCache }) ou rappel({ demandes }) à chaque
- * changement, documents sous la forme { id, ...champs } ; `…DepuisCache` : copie du téléphone, pas encore confirmée
- * par le serveur.
+ * Suit les profils, les plats, les demandes, les semaines et les articles ajoutés à la main (T3a) en temps réel, un
+ * abonnement par collection entière, créé une fois au démarrage : la liste de courses est ainsi dans la copie du
+ * téléphone dès que l'app a été ouverte avec du réseau, même si l'onglet Courses ne l'a jamais été.
+ * rappel({ profils, profilsDepuisCache }), rappel({ plats, platsDepuisCache }), rappel({ demandes }),
+ * rappel({ semaines, semainesDepuisCache }) ou rappel({ articles, articlesDepuisCache }) à chaque changement, documents
+ * sous la forme { id, ...champs } ; `…DepuisCache` : copie du téléphone, pas encore confirmée par le serveur.
  * surErreur(code) si une écoute s'arrête pour une autre raison qu'un accès refusé (géré par reglages/foyer).
  */
 export function suivreCollections(rappel, surErreur) {
   arreterCollections();
-  for (const nom of ['profils', 'plats', 'demandes']) {
-    // Profils et plats : on sait aussi si la copie vient du serveur ou seulement du téléphone (sauvegarde).
+  for (const nom of ['profils', 'plats', 'demandes', 'semaines', 'articles']) {
+    // Profils, plats, semaines et articles : on sait aussi si la copie vient du serveur ou seulement du téléphone
+    // (sauvegarde ; « La liste n'est pas encore sur ce téléphone »).
     const suivreCache = nom !== 'demandes';
     let dernierCache = null;
     arretsCollections.push(onSnapshot(
@@ -815,4 +820,181 @@ export function remplacerSujet(attendu, nouveau) {
     transaction.update(reference, { 'notifications.ntfySujet': nouveau === null ? deleteField() : nouveau });
     return { ecrit: true };
   });
+}
+
+// ——— Semaine et liste de courses (T3a) ———
+// La liste se calcule sur le téléphone (coeur/liste.js) : on n'écrit que les gestes, toujours par lot (appliqué tout de
+// suite sur le téléphone, envoyé au retour du réseau ; aucune transaction : rien ne doit être refusé en magasin).
+
+/** Valeur prête pour Firestore : EFFACER (coeur/semaine.js) → deleteField(), seulement au premier niveau d'un chemin. */
+function versChamp(valeur) {
+  return valeur === EFFACER ? deleteField() : valeur;
+}
+
+/** Vrai si EFFACER se cache sous le premier niveau (Firestore refuse deleteField() imbriqué dans un update). */
+function effacerImbrique(valeur) {
+  if (Array.isArray(valeur)) return valeur.some((v) => v === EFFACER || effacerImbrique(v));
+  if (valeur && typeof valeur === 'object') return Object.values(valeur).some((v) => v === EFFACER || effacerImbrique(v));
+  return false;
+}
+
+/** Table simple (ni tableau, ni null, ni objet du SDK). */
+function estTable(valeur) {
+  return Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur)
+    && Object.getPrototypeOf(valeur) === Object.prototype;
+}
+
+/** Identifiant de document utilisable dans un chemin : texte non vide, sans « / ». */
+function idDocumentSur(id) {
+  return typeof id === 'string' && id.trim() !== '' && !id.includes('/') && id !== '.' && id !== '..';
+}
+
+const CHAMPS_CREATION_SEMAINE = new Set(['debut', 'fin', 'creePar', 'creeLe']);
+const CHAMPS_ARTICLE = new Set(['libelle', 'precision', 'creePar', 'creeLe']);
+
+/**
+ * Données d'un nouvel article ({ libelle, precision?, creePar?, creeLe }) vérifiées avant tout envoi : libellé non vide
+ * de ARTICLE_MAX caractères au plus, précision de PRECISION_MAX au plus, aucun autre champ, aucune valeur indéfinie.
+ * Lève une erreur sinon.
+ */
+function verifierNouvelArticle(donnees) {
+  const ok = estTable(donnees)
+    && Object.keys(donnees).every((cle) => CHAMPS_ARTICLE.has(cle))
+    && !contientIndefini(donnees)
+    && typeof donnees.libelle === 'string' && donnees.libelle.trim() !== '' && donnees.libelle.length <= ARTICLE_MAX
+    && (donnees.precision === undefined
+      || (typeof donnees.precision === 'string' && donnees.precision.length <= PRECISION_MAX))
+    && (donnees.creePar === undefined || typeof donnees.creePar === 'string')
+    && Number.isFinite(donnees.creeLe);
+  if (!ok) throw new Error('Article refusé : libellé, précision, auteur et date du téléphone seulement.');
+}
+
+/**
+ * Écritures d'un geste sur une semaine, préparées par coeur/semaine.js (ecrituresAjout, ecrituresRetrait,
+ * ecrituresRemise, ecrituresStyle, ecrituresReglage) ou coeur/liste.js (ecrituresCoche, ecrituresRachat), en un lot :
+ * - `creation` ({ id, donnees: { debut, fin, creePar?, creeLe } }, seulement au premier plat) : `set` fusionné de ces
+ *   champs seulement (jamais de statut : deux téléphones qui créent la même semaine le même jour se fusionnent) ;
+ * - `champs` : `update` des chemins pointés (`plats.<id>.ajouteLe`, `coches.<cle>`…), EFFACER → deleteField() ; deux
+ *   téléphones qui touchent deux chemins différents ne s'écrasent jamais ;
+ * - `articles` (restes de la semaine qui finit, seulement avec l'ajout d'un plat, `plats.<id>.ajouteLe`) : un document
+ *   `articles/{id}` chacun ({ id?, libelle, precision?, creePar?, creeLe }), `set` fusionné ; `id` donné
+ *   (`reste--<semaine>--<produit>`, coeur/semaine.js › idReste) : deux téléphones écrivent le même document, une coche
+ *   posée entre-temps reste ; sans lui, identifiant créé ici ;
+ * - `supprimer` (identifiants d'articles des restes, coeur/semaine.js › ecrituresRetrait) : supprimés dans le même lot.
+ * Lève une erreur avant tout envoi si l'identifiant de la semaine n'est pas `^[a-z0-9-]+$`, si un chemin, une valeur
+ * (undefined, NaN, table vide) ou un article est refusé, si la création porte un autre champ, ou s'il n'y a rien à
+ * écrire. Hors ligne : part plus tard.
+ * → { envoi, articleIds } : `envoi`, promesse de l'envoi (ne pas l'attendre pour mettre l'écran à jour) ; `articleIds`,
+ *   identifiants des articles écrits, dans l'ordre de `articles`.
+ */
+export function ecrireSemaine({ creation = null, id, champs = {}, articles = [], supprimer = [] } = {}) {
+  if (!cheminSur(id)) throw new Error('Identifiant de semaine refusé.');
+  const chemins = estTable(champs) ? Object.entries(champs) : null;
+  if (!chemins || !champsValides(champs) || chemins.some(([, valeur]) => effacerImbrique(valeur))) {
+    throw new Error('Écriture de la semaine refusée : chemins sûrs et valeurs définies attendus.');
+  }
+  if (creation !== null) {
+    const donnees = creation?.donnees;
+    const ok = estTable(donnees) && (creation.id === undefined || creation.id === id)
+      && Object.keys(donnees).every((cle) => CHAMPS_CREATION_SEMAINE.has(cle))
+      && typeof donnees.debut === 'string' && typeof donnees.fin === 'string'
+      && !contientIndefini(donnees) && !effacerImbrique(donnees);
+    if (!ok) throw new Error('Création de la semaine refusée : début, fin, auteur et date du téléphone seulement.');
+  }
+  const nouveaux = (Array.isArray(articles) ? articles : []).map((article) => {
+    const { id: articleId, ...donnees } = estTable(article) ? article : {};
+    if (articleId !== undefined && !idDocumentSur(articleId)) throw new Error('Identifiant d’article refusé.');
+    verifierNouvelArticle(donnees);
+    return { articleId, donnees };
+  });
+  const ajoutDePlat = chemins.some(([chemin]) => /^plats\.[a-z0-9-]+\.ajouteLe$/.test(chemin));
+  if (nouveaux.length && !ajoutDePlat) throw new Error('Articles refusés : seulement avec l’ajout d’un plat.');
+  const aSupprimer = Array.isArray(supprimer) ? supprimer : [];
+  if (aSupprimer.some((articleId) => !idDocumentSur(articleId))) throw new Error('Identifiant d’article refusé.');
+  if (creation === null && !chemins.length) throw new Error('Rien à écrire dans la semaine.');
+
+  const reference = doc(db, 'semaines', id);
+  const lot = writeBatch(db);
+  if (creation !== null) lot.set(reference, { ...creation.donnees }, { merge: true });
+  if (chemins.length) lot.update(reference, Object.fromEntries(chemins.map(([chemin, valeur]) => [chemin, versChamp(valeur)])));
+  const articleIds = [];
+  for (const { articleId, donnees } of nouveaux) {
+    const referenceArticle = articleId === undefined ? doc(collection(db, 'articles')) : doc(db, 'articles', articleId);
+    lot.set(referenceArticle, { ...donnees }, { merge: true });
+    articleIds.push(referenceArticle.id);
+  }
+  for (const articleId of new Set(aSupprimer)) lot.delete(doc(db, 'articles', articleId));
+  return { envoi: lot.commit(), articleIds };
+}
+
+/**
+ * Ajoute un article à la main (« Ajouter à la liste ») : nouveau document `articles/{id}`, identifiant créé ici (sur le
+ * téléphone, hors ligne compris). `donnees` : { libelle, precision?, creePar?, creeLe } (voir verifierNouvelArticle).
+ * Lève une erreur avant tout envoi sinon. → { id, envoi } (promesse de l'envoi).
+ */
+export function ajouterArticle(donnees) {
+  verifierNouvelArticle(donnees);
+  const reference = doc(collection(db, 'articles'));
+  const lot = writeBatch(db);
+  lot.set(reference, { ...donnees });
+  return { id: reference.id, envoi: lot.commit() };
+}
+
+/**
+ * Coche (`coche: { le }` ou EFFACER) ou précision (texte de PRECISION_MAX caractères au plus, ou EFFACER) d'un article :
+ * `update` de ces seuls champs. Un article supprimé entre-temps par l'autre téléphone n'est jamais recréé à moitié :
+ * le refus `not-found` est silencieux (promesse résolue). Lève une erreur avant tout envoi si l'identifiant ou un champ
+ * est refusé. → promesse de l'envoi (rejetée pour un autre refus).
+ */
+export function modifierArticle(id, champs) {
+  if (!idDocumentSur(id)) throw new Error('Identifiant d’article refusé.');
+  const entrees = estTable(champs) ? Object.entries(champs) : [];
+  const ok = entrees.length > 0 && entrees.every(([cle, valeur]) => {
+    if (valeur === EFFACER) return cle === 'coche' || cle === 'precision';
+    if (cle === 'coche') return estTable(valeur) && !contientIndefini(valeur) && !effacerImbrique(valeur);
+    if (cle === 'precision') return typeof valeur === 'string' && valeur.length <= PRECISION_MAX;
+    return false;
+  });
+  if (!ok) throw new Error('Modification d’article refusée : coche ou précision seulement.');
+  const lot = writeBatch(db);
+  lot.update(doc(db, 'articles', id), Object.fromEntries(entrees.map(([cle, valeur]) => [cle, versChamp(valeur)])));
+  return lot.commit().catch((erreur) => {
+    if (erreur?.code === 'not-found') return undefined;
+    throw erreur;
+  });
+}
+
+/** Retire des articles de la liste (« Retirer de la liste ») : suppression de chaque document. → promesse de l'envoi. */
+export function supprimerArticles(ids) {
+  const liste = [...new Set((Array.isArray(ids) ? ids : [ids]).filter(idDocumentSur))];
+  if (!liste.length) throw new Error('Aucun article à retirer.');
+  const envois = [];
+  for (let debut = 0; debut < liste.length; debut += ECRITURES_PAR_TRANSACTION) {
+    const lot = writeBatch(db);
+    for (const id of liste.slice(debut, debut + ECRITURES_PAR_TRANSACTION)) lot.delete(doc(db, 'articles', id));
+    envois.push(lot.commit());
+  }
+  return Promise.all(envois);
+}
+
+/**
+ * « Annuler » d'un retrait : remet chaque article tel qu'il était ({ id, ...champs }, même identifiant), par un `set`
+ * sans fusion. Lève une erreur avant tout envoi si un identifiant est refusé ou si une valeur est indéfinie.
+ * → promesse de l'envoi.
+ */
+export function remettreArticles(docs) {
+  const liste = (Array.isArray(docs) ? docs : [docs]).map((article) => {
+    if (!estTable(article) || !idDocumentSur(article.id)) throw new Error('Article refusé.');
+    const { id, ...champs } = article;
+    if (contientIndefini(champs) || effacerImbrique(champs)) throw new Error('Article refusé : valeur indéfinie.');
+    return { id, champs };
+  });
+  if (!liste.length) throw new Error('Aucun article à remettre.');
+  const envois = [];
+  for (let debut = 0; debut < liste.length; debut += ECRITURES_PAR_TRANSACTION) {
+    const lot = writeBatch(db);
+    for (const { id, champs } of liste.slice(debut, debut + ECRITURES_PAR_TRANSACTION)) lot.set(doc(db, 'articles', id), champs);
+    envois.push(lot.commit());
+  }
+  return Promise.all(envois);
 }

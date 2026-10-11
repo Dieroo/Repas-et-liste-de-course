@@ -26,7 +26,7 @@ export const IDS_DICTIONNAIRE = Object.freeze([
   'creme-fraiche', 'creme-fraiche-epaisse', 'creme-fraiche-legere', 'creme-liquide', 'creme-liquide-entiere',
   'cresson', 'crevette', 'crevette-decortiquee', 'crottin-de-chevre', 'crouton', 'cuisse-de-canard',
   'cuisse-de-grenouille', 'cuisse-de-lapin', 'cuisse-de-poulet', 'cumin', 'curcuma', 'curry', 'datte', 'dinde',
-  'do-de-cabillaud', 'dorade', 'eau-de-fleur-d-oranger', 'eau-gazeuse', 'echalote', 'echine-de-porc', 'edamame',
+  'do-de-cabillaud', 'dorade', 'eau', 'eau-de-fleur-d-oranger', 'eau-gazeuse', 'echalote', 'echine-de-porc', 'edamame',
   'emince-de-poulet', 'emmental', 'encornet', 'endive', 'entrecote', 'epaule-d-agneau', 'epaule-de-porc',
   'epaule-de-veau', 'epinard', 'epinard-hache', 'epoisse', 'escalope-de-dinde', 'escalope-de-poulet',
   'escalope-de-veau', 'escargot', 'espadon', 'estragon', 'extrait-de-vanille', 'faisselle', 'farfalle', 'farine',
@@ -83,6 +83,6 @@ export const IDS_DICTIONNAIRE = Object.freeze([
   'tomate-pelee', 'tomate-sechee', 'tomme', 'tomme-de-savoie', 'topinambour', 'tortilla-de-ble', 'traver-de-porc',
   'truite', 'truite-fumee', 'tzatziki', 'vacherin', 'veau', 'vergeoise', 'vermicelle', 'vermicelle-de-riz',
   'viande-de-grison', 'vin-blanc', 'vin-rose', 'vin-rouge', 'vinaigre', 'vinaigre-balsamique', 'vinaigre-blanc',
-  'vinaigre-de-cidre', 'vinaigre-de-riz', 'vinaigre-de-vin-blanc', 'vinaigre-de-vin-rouge', 'vinaigre-de-xere',
-  'whisky', 'yaourt-au-soja', 'yaourt-grec', 'yaourt-nature',
+  'vinaigre-de-cidre', 'vinaigre-de-riz', 'vinaigre-de-vin', 'vinaigre-de-vin-blanc', 'vinaigre-de-vin-rouge',
+  'vinaigre-de-xere', 'whisky', 'yaourt-au-soja', 'yaourt-grec', 'yaourt-nature',
 ]);

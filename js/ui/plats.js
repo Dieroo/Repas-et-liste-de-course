@@ -1,5 +1,8 @@
 // Écran Plats : recherche, filtres, liste, ajout d'un plat par son nom ; bandeau « Personne n'en veut » et, en bas de
 // la liste, la corbeille (« Remettre » pour les deux membres, « Vider la corbeille » pour le gestionnaire).
+// Semaine (T3a) : pastille « 🗓️ Au menu » sur les plats de la semaine montrée ; le bouton flottant « ＋ Nouveau plat »
+// crée un plat (jamais confondu avec l'ajout à la semaine) ; un nom déjà pris propose « Voir sa fiche » et « ＋ Ajouter
+// à la semaine ».
 import { el, etatVide, pastille, annoncer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { modeDeCuisson } from './pictos.js';
@@ -13,6 +16,8 @@ import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { ligneCompat, lignePrecautions, garderPour, nomDe, libellesStyles, rangerStyles } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 import { platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
+import { estDansLaSemaine, idsDansLaSemaine, lireSemaine, peutAllerDansLaSemaine, semaineVisee } from '../coeur/semaine.js';
+import { restesPour } from './plat-semaine.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
 let recherche = '';
@@ -46,13 +51,15 @@ function ligneDeNotes(plat, profils) {
     el('span', { class: 'visuellement-masque' }, resume.accessible));
 }
 
-function carteDuPlat(plat, ctx) {
+function carteDuPlat(plat, ctx, auMenu = false) {
   const statut = statutDe(plat) !== 'validee' ? STATUTS[statutDe(plat)] : null;
-  // « Plat · [pictogramme] Four · 📝 Recette à vérifier » : type, mode de cuisson principal, statut.
+  // « Plat · [pictogramme] Four · 📝 Recette à vérifier · 🗓️ Au menu » : type, mode de cuisson principal, statut, et
+  // la pastille des plats de la semaine montrée.
   const morceaux = [
     LIBELLES_TYPE[typeDe(plat)] ?? 'Plat',
     modeDeCuisson(plat),
     statut ? `${statut.emoji}\u00A0${statut.libelle}` : null,
+    auMenu ? el('span', { class: 'au-menu' }, el('span', { 'aria-hidden': 'true' }, '🗓️\u00A0'), 'Au menu') : null,
   ].filter(Boolean);
   const detail = morceaux.flatMap((morceau, i) => (i ? [' · ', morceau] : [morceau]));
   return el('li', {},
@@ -437,11 +444,38 @@ function ouvrirFeuilleCorbeille(lireCtx, { focusPlat = null, onFermer } = {}) {
 }
 
 /**
- * Feuille « Ajouter un plat ». `ouvrirCorbeille(platId)` : ouvre la corbeille sur ce plat, quand le nom est celui d'un
- * plat de la corbeille (on le remet au lieu de le recréer).
+ * Feuille « Nouveau plat » : crée un plat par son nom (⏳). `lireCtx()` : le contexte du moment. `ouvrirCorbeille(platId)` :
+ * ouvre la corbeille sur ce plat, quand le nom est celui d'un plat de la corbeille (on le remet au lieu de le recréer).
+ * Un nom déjà pris propose « Voir sa fiche » et, si le plat n'est pas déjà dans la semaine visée, « ＋ Ajouter à la
+ * semaine » (secondaire ; la feuille se ferme, l'annonce de l'app donne les dates et permet d'annuler).
  */
-function ouvrirAjout(ctx, { ouvrirCorbeille = null } = {}) {
-  ouvrirFeuille('Ajouter un plat', (fermer) => {
+function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
+  const ctx = lireCtx();
+  /**
+   * « ＋ Ajouter à la semaine » pour un plat qui existe déjà : null tant que les semaines ne sont pas lues, s'il est
+   * déjà dans la semaine visée, ou s'il ne va pas dans la semaine (apéro, préparation de chaque semaine).
+   */
+  function boutonSemaine(platId, fermer) {
+    const courant = lireCtx();
+    if (!courant.semainesChargees) return null;
+    const plat = (courant.tousLesPlats ?? courant.plats ?? []).find((p) => p?.id === platId);
+    if (!peutAllerDansLaSemaine(plat)) return null;
+    const visee = semaineVisee(courant.semaines ?? [], courant.aujourdhui);
+    if (!visee) return null;
+    const semaine = lireSemaine((courant.semaines ?? []).find((s) => s?.id === visee.id));
+    if (estDansLaSemaine(semaine?.plats?.[platId])) return null;
+    return el('button', {
+      class: 'bouton bouton-secondaire bouton-plein lien-erreur',
+      type: 'button',
+      onclick: () => {
+        fermer();
+        const maintenant = lireCtx();
+        maintenant.actions?.ajouterALaSemaine?.(platId, { cible: visee, restes: restesPour(maintenant, visee) });
+      },
+    }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Ajouter à la semaine');
+  }
+
+  ouvrirFeuille('Nouveau plat', (fermer) => {
     const erreur = el('p', { class: 'message-erreur', role: 'alert', hidden: true });
     const entree = el('input', {
       class: 'champ',
@@ -467,7 +501,7 @@ function ouvrirAjout(ctx, { ouvrirCorbeille = null } = {}) {
                 class: 'bouton bouton-secondaire bouton-plein lien-erreur',
                 href: `#/plat/${encodeURIComponent(resultat.existant)}`,
                 onclick: fermer,
-              }, 'Voir sa fiche')]
+              }, 'Voir sa fiche'), boutonSemaine(resultat.existant, fermer)].filter(Boolean)
               : []),
             ...(resultat.corbeille && ouvrirCorbeille
               ? [el('button', {
@@ -679,15 +713,16 @@ export function creer(ctx) {
     }
     // Une carte qui avait le focus le retrouve après la mise à jour.
     const cleFocus = liste.contains(document.activeElement) ? document.activeElement.dataset.cle : null;
-    liste.replaceChildren(...resultat.map((plat) => carteDuPlat(plat, courant)));
+    const auMenu = idsDansLaSemaine(courant.semaine);
+    liste.replaceChildren(...resultat.map((plat) => carteDuPlat(plat, courant, auMenu.has(plat.id))));
     if (cleFocus) liste.querySelector(`[data-cle="${CSS.escape(cleFocus)}"]`)?.focus();
   }
 
   const boutonAjouter = el('button', {
     class: 'bouton bouton-principal bouton-flottant',
     type: 'button',
-    onclick: () => ouvrirAjout(courant, { ouvrirCorbeille: (platId) => ouvrirLaCorbeille(platId) }),
-  }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Ajouter un plat');
+    onclick: () => ouvrirAjout(() => courant, { ouvrirCorbeille: (platId) => ouvrirLaCorbeille(platId) }),
+  }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Nouveau plat');
 
   remplir();
 

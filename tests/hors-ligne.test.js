@@ -44,6 +44,16 @@ test('chaque fichier de l’app est dans la liste de précache de sw.js', async 
   }
 });
 
+test('aucune espace insécable telle quelle dans js/, css/ et index.html (l’écrire \\u00A0 dans le code)', async () => {
+  const fichiers = ['index.html', ...(await lister('css')), ...(await lister('js'))];
+  assert.ok(fichiers.length > 10);
+  for (const fichier of fichiers) {
+    const lignes = (await lire(fichier)).split('\n');
+    const numero = lignes.findIndex((ligne) => /[\u00A0\u202F]/.test(ligne));
+    assert.equal(numero, -1, `${fichier}:${numero + 1} : espace insécable telle quelle, à écrire \\u00A0`);
+  }
+});
+
 test('la liste de précache ne cite que des fichiers qui existent', async () => {
   for (const chemin of cheminsPrecache(await lire('sw.js'))) {
     await assert.doesNotReject(access(path.join(racine, chemin)), `${chemin} n’existe pas`);
