@@ -98,7 +98,8 @@ test('entreeCourante : l’entrée des produits courants ; nom ambigu seul ou in
 
 test('entreeParId : l’entrée de cet id ; id inconnu, vide ou non texte → null', () => {
   assert.equal(entreeParId('sel').nom, 'sel');
-  assert.deepEqual(entreeParId('laurier').placard, { seuil: 4, unite: 'pc' });
+  assert.deepEqual(entreeParId('laurier').placard, {}, 'herbe sèche : toujours à la maison (décision du 2026-10-11)');
+  assert.deepEqual(entreeParId('beurre').placard, { seuil: 30, unite: 'g' });
   for (const id of ['inconnu', '', null, undefined, 3, 'pate--pa3te']) assert.equal(entreeParId(id), null, String(id));
   for (const entree of DICTIONNAIRE) assert.equal(entreeParId(entree.id), entree, entree.id);
 });

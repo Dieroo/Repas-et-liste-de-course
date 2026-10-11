@@ -168,11 +168,13 @@ function convertir(qte, de, vers, equivalences) {
 
 /**
  * Vrai si le total tient dans le seuil du placard (seuil compris, tolérance) : il va dans « Déjà à la maison ? ».
- * Placard sans seuil (`{}`) → vrai ; comparaison impossible (pas de quantité, unité sans équivalence, seuil illisible)
- * → faux : dans le doute, on l'achète. Équivalences générales (EQUIVALENCES) et du produit, pour comparer seulement.
+ * Placard sans seuil (`{}`) → vrai, sauf une quantité en bottes (une botte est toujours un produit frais : « laurier
+ * 1 botte » s'achète) ; comparaison impossible (pas de quantité, unité sans équivalence, seuil illisible) → faux : dans
+ * le doute, on l'achète. Équivalences générales (EQUIVALENCES) et du produit, pour comparer seulement.
  */
 export function dansLePlacard(totaux, placard, equivalences = null) {
   if (!estObjet(placard)) return false;
+  if (estObjet(totaux) && estNombre(totaux.botte) && totaux.botte > 0) return false;
   if (placard.seuil === undefined && placard.unite === undefined) return true;
   const seuil = versBase(placard.seuil, placard.unite);
   if (!seuil) return false;
@@ -232,11 +234,20 @@ export function ecrituresCoche(semaine, ligne, oui, { maintenant = null } = {}) 
   const lue = lireSemaine(semaine);
   const chemin = cheminSur('coches', ligne?.cle ?? '');
   if (!lue || !chemin || ligne?.type === 'article') return { code: 'invalide' };
-  if (oui) return { id: lue.id, champs: { [chemin]: valeurCoche(ligne.totaux, maintenant) } };
-  const champs = { [chemin]: EFFACER };
-  const repli = ligne.repli ? cheminSur('coches', ligne.repli) : null;
-  if (repli && Object.hasOwn(lue.coches, ligne.repli)) champs[repli] = EFFACER;
+  const champs = { [chemin]: oui ? valeurCoche(ligne.totaux, maintenant) : EFFACER };
+  // Coches rangées sous les clés de repli : effacées au décocher, et au cocher, puisque la nouvelle coche dit tout ce
+  // qui a été pris (elles s'ajouteraient sinon à elle).
+  for (const cle of clesDeRepli(ligne)) {
+    const repli = cheminSur('coches', cle);
+    if (repli && repli !== chemin && Object.hasOwn(lue.coches, cle)) champs[repli] = EFFACER;
+  }
   return { id: lue.id, champs };
+}
+
+/** Clés de repli d'une ligne : `replis`, sinon `repli` (une ligne calculée par une version d'avant). */
+function clesDeRepli(ligne) {
+  if (Array.isArray(ligne?.replis)) return ligne.replis.filter((cle) => typeof cle === 'string' && cle !== '');
+  return typeof ligne?.repli === 'string' && ligne.repli !== '' ? [ligne.repli] : [];
 }
 
 /** Cocher ou décocher un article ajouté à la main → { articleId, champs: { coche: { le } | EFFACER } }. */
@@ -247,16 +258,20 @@ export function ecrituresCocheArticle(article, oui, { maintenant = null } = {}) 
 }
 
 /**
- * « À racheter » d'un produit du placard → { id, champs: { racheter.<cle>: true | EFFACER } } ; `repli` (la clé de
- * repli de la ligne) : éteindre efface aussi `racheter.<repli>`, sinon la ligne resterait rachetée.
+ * « À racheter » d'un produit du placard → { id, champs: { racheter.<cle>: true | EFFACER } } ; `replis` (les clés de
+ * repli de la ligne ; `repli` : une seule) : éteindre efface aussi `racheter.<repli>`, sinon la ligne resterait rachetée.
  */
-export function ecrituresRachat(semaine, cle, oui, { repli = null } = {}) {
+export function ecrituresRachat(semaine, cle, oui, { repli = null, replis = null } = {}) {
   const lue = lireSemaine(semaine);
   const chemin = cheminSur('racheter', cle ?? '');
   if (!lue || !chemin) return { code: 'invalide' };
   const champs = { [chemin]: oui ? true : EFFACER };
-  const cheminRepli = !oui && repli && repli !== cle ? cheminSur('racheter', repli) : null;
-  if (cheminRepli && Object.hasOwn(lue.racheter, repli)) champs[cheminRepli] = EFFACER;
+  if (!oui) {
+    for (const autre of clesDeRepli({ repli, replis })) {
+      const cheminRepli = autre !== cle ? cheminSur('racheter', autre) : null;
+      if (cheminRepli && Object.hasOwn(lue.racheter, autre)) champs[cheminRepli] = EFFACER;
+    }
+  }
   return { id: lue.id, champs };
 }
 
@@ -284,7 +299,7 @@ const portionsBaseDe = (plat) => (estNombre(plat?.portionsBase) && plat.portions
  * - `sansRecette` : plats ⏳ (fiches) ; `horsListe` : [{ platId, plat (null si introuvable), etat }] (corbeille ou
  *   introuvable) ; `sansPortion` : plats que personne ne mange (fiches) ; `aVerifier` : [{ plat, produit }] (portions de
  *   base illisibles : `produit` null ; quantité ou unité illisible : le nom, la ligne existe sans quantité).
- * Ligne : { type: 'ligne', cle, produitId, repli, nom (majuscule), libelle (minuscules), rayon, totaux (exacts, par
+ * Ligne : { type: 'ligne', cle, produitId, repli (la première de `replis`), replis (clés de repli), nom (majuscule), libelle (minuscules), rayon, totaux (exacts, par
  *   famille, en unités de base), quantite (affichée), sources: [{ type: 'plat', platId, nom, pour?, style?, totaux }],
  *   placard (produit du placard sous son seuil), rachetee, cochee, dejaPris, reste, recherche }.
  * Article : { type: 'article', cle: 'article:<id>', articleId, produitId, nom, libelle, precision, rayon, totaux: {},
@@ -387,18 +402,24 @@ export function listeDeCourses(semaine, {
     const sources = [...produit.sources.values()].map((s) => ({ ...s, totaux: arrondirTotaux(s.totaux) }));
     const saisie = produit.noms[0] ?? '';
     let fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie });
-    // Clé de repli (un id changé par les produits courants) : jamais celle d'un homographe ni d'une autre ligne
-    // (« pâté » n'hérite jamais de la coche des pâtes).
-    const cleRepli = cleDeRepli(fiche.nom.valeur, produitId);
-    const repli = cleRepli && !produits.has(cleRepli) ? cleRepli : null;
+    // Clés de repli (un id changé par les produits courants) : celle du nom affiché, puis celle de chaque écriture de
+    // la semaine qui donne la ligne (le nom affiché vient de toutes les recettes du foyer : « farine » d'une autre
+    // recette ne doit pas faire perdre la coche posée sous « farine-t55 ») ; jamais celle d'un homographe ni d'une
+    // autre ligne (« pâté » n'hérite jamais de la coche des pâtes).
+    const replis = [];
+    for (const nom of [fiche.nom.valeur, ...produit.noms]) {
+      const cle = cleDeRepli(nom, produitId);
+      if (cle && !produits.has(cle) && !replis.includes(cle)) replis.push(cle);
+    }
+    const repli = replis[0] ?? null;
     if (repli) fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie, repli });
     const placard = fiche.placard.valeur !== null && dansLePlacard(totaux, fiche.placard.valeur, fiche.equivalences.valeur);
-    const rachetee = placard && (racheter[produitId] === true || (repli !== null && racheter[repli] === true));
-    const coche = Object.hasOwn(coches, produitId) ? coches[produitId] : repli !== null ? coches[repli] : undefined;
+    const rachetee = placard && [produitId, ...replis].some((cle) => racheter[cle] === true);
+    const coche = cocheReunie([produitId, ...replis].filter((cle) => Object.hasOwn(coches, cle)).map((cle) => coches[cle]));
     const etat = placard && !rachetee ? { cochee: false, dejaPris: null, reste: null } : etatCoche(totaux, coche);
     const libelle = fiche.nom.valeur || saisie;
     const ligne = {
-      type: 'ligne', cle: produitId, produitId, repli, nom: majuscule(libelle), libelle, rayon: fiche.rayon.valeur,
+      type: 'ligne', cle: produitId, produitId, repli, replis, nom: majuscule(libelle), libelle, rayon: fiche.rayon.valeur,
       totaux, quantite: texteQuantites(totaux), sources, placard, rachetee, ...etat, recherche: fiche.recherche.valeur,
     };
     (placard && !rachetee ? sortie.maison : sortie.lignes).push(ligne);
@@ -434,6 +455,25 @@ export function listeDeCourses(semaine, {
   sortie.articles.sort(parRayon);
   sortie.maison.sort((a, b) => comparerNoms(a.nom, b.nom) || parId(a.cle, b.cle));
   return sortie;
+}
+
+/**
+ * Coches d'une même ligne rangées sous plusieurs clés (son id et ses clés de repli : deux écritures réunies par les
+ * produits courants, chacune cochée avant) → une seule coche, ce qui a été pris additionné famille par famille ;
+ * undefined sans coche lisible. Une seule coche est rendue telle quelle.
+ */
+function cocheReunie(lues) {
+  const valides = lues.filter(estObjet);
+  if (valides.length <= 1) return valides[0];
+  const q = {};
+  let le = null;
+  for (const coche of valides) {
+    if (estObjet(coche.q)) {
+      for (const f of famillesDe(coche.q)) if (estNombre(coche.q[f]) && coche.q[f] > 0) q[f] = arrondi((q[f] ?? 0) + coche.q[f]);
+    }
+    if (estNombre(coche.le)) le = le === null ? coche.le : Math.max(le, coche.le);
+  }
+  return le === null ? { q } : { q, le };
 }
 
 /** Totaux arrondis au millionième, familles positives seulement. */

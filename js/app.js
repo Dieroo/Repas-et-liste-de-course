@@ -1439,12 +1439,12 @@ const actions = {
     const semaine = semaineCourante();
     if (!semaine) return { code: 'invalide' };
     const voulu = Boolean(oui);
-    // Clé de repli de la ligne (coeur/liste.js) : un « À racheter » rangé sous elle compte aussi, et s'efface avec.
+    // Clés de repli de la ligne (coeur/liste.js) : un « À racheter » rangé sous l'une d'elles compte aussi, et s'efface avec.
     const liste = listeCourante();
-    const repli = [...liste.lignes, ...liste.maison].find((l) => l.cle === cle)?.repli ?? null;
+    const replis = [...liste.lignes, ...liste.maison].find((l) => l.cle === cle)?.replis ?? [];
     const pose = (c) => typeof c === 'string' && Object.hasOwn(semaine.racheter, c) && semaine.racheter[c] === true;
-    if ((pose(cle) || pose(repli)) === voulu) return { code: 'ok' };
-    const ecritures = ecrituresRachat(semaine, cle, voulu, { repli });
+    if ([cle, ...replis].some(pose) === voulu) return { code: 'ok' };
+    const ecritures = ecrituresRachat(semaine, cle, voulu, { replis });
     if (ecritures.code) return ecritures;
     if (!ecrireDansLaSemaine(ecritures, 'La liste n’a pas pu être mise à jour. Réessayez.')) return { code: 'echec' };
     rendre();
