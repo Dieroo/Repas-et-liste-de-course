@@ -159,10 +159,10 @@ test('dansLePlacard : sans seuil → toujours ; seuil compris ; au-dessus → su
   assert.equal(dansLePlacard({ masse: 10, cs: 1.5 }, beurre), false, '10 g + 22,5 g');
 });
 
-test('dansLePlacard : laurier en feuilles, ail en g, bouillon en cl, muscade en pincées ; sans équivalence → sur la liste', () => {
-  assert.equal(dansLePlacard({ pc: 4 }, { seuil: 4, unite: 'pc' }), true, 'laurier');
+test('dansLePlacard : seuil en pièces, gousses en g, cubes en cl, pincées et cuillères ; sans équivalence → sur la liste', () => {
+  assert.equal(dansLePlacard({ pc: 4 }, { seuil: 4, unite: 'pc' }), true, 'seuil en pièces');
   assert.equal(dansLePlacard({ pc: 5 }, { seuil: 4, unite: 'pc' }), false);
-  assert.equal(dansLePlacard({ cc: 1 }, { seuil: 4, unite: 'pc' }), false, 'laurier en cuillère : rien ne les relie');
+  assert.equal(dansLePlacard({ cc: 1 }, { seuil: 4, unite: 'pc' }), false, 'pièces contre cuillère : rien ne les relie');
   const ail = { pc: { qte: 5, unite: 'g' } };
   assert.equal(dansLePlacard({ masse: 10 }, { seuil: 2, unite: 'pc' }, ail), true);
   assert.equal(dansLePlacard({ masse: 15 }, { seuil: 2, unite: 'pc' }, ail), false);
@@ -170,9 +170,9 @@ test('dansLePlacard : laurier en feuilles, ail en g, bouillon en cl, muscade en 
   const cube = { pc: { qte: 500, unite: 'ml' } };
   assert.equal(dansLePlacard({ volume: 500 }, { seuil: 2, unite: 'pc' }, cube), true);
   assert.equal(dansLePlacard({ volume: 1500 }, { seuil: 2, unite: 'pc' }, cube), false);
-  assert.equal(dansLePlacard({ pincee: 3 }, { seuil: 2, unite: 'cc' }), true, 'muscade : 1,5 g pour 10 g');
+  assert.equal(dansLePlacard({ pincee: 3 }, { seuil: 2, unite: 'cc' }), true, 'pincées : 1,5 g pour 10 g');
   assert.equal(dansLePlacard({ masse: 50 }, { seuil: 2, unite: 'cs' }), false, 'chapelure : 50 g pour 30 g');
-  assert.equal(dansLePlacard({ volume: 50 }, { seuil: 4, unite: 'cs' }), true, 'vinaigre : 50 ml pour 60 ml');
+  assert.equal(dansLePlacard({ volume: 50 }, { seuil: 4, unite: 'cs' }), true, '50 ml pour 60 ml');
   assert.equal(dansLePlacard({ sachet: 1 }, { seuil: 1, unite: 'sachet' }, { sachet: { qte: 11, unite: 'g' } }), true);
   assert.equal(dansLePlacard({ masse: 12 }, { seuil: 1, unite: 'sachet' }, { sachet: { qte: 11, unite: 'g' } }), false);
 });
@@ -248,7 +248,7 @@ test('liste : gratin (tout le monde, 2 repas, 5 portions) et salade ; version me
 test('liste : forme d’une ligne (clé = produit, recherche = nom, ni coche ni placard)', () => {
   const pates = ligne(calculer(SEMAINE), 'pate');
   assert.deepEqual(pates, {
-    type: 'ligne', cle: 'pate', produitId: 'pate', repli: null, nom: 'Pâtes', libelle: 'pâtes', rayon: 'epicerie_salee',
+    type: 'ligne', cle: 'pate', produitId: 'pate', repli: null, replis: [], nom: 'Pâtes', libelle: 'pâtes', rayon: 'epicerie_salee',
     totaux: { masse: 750 }, quantite: '750\u00A0g', sources: pates.sources, placard: false, rachetee: false,
     cochee: false, dejaPris: null, reste: null, recherche: 'pâtes',
   });
@@ -355,7 +355,7 @@ test('liste : quantité ou unité illisible → la ligne existe sans quantité, 
   assert.deepEqual(sansBase.aVerifier.map((v) => [v.plat.id, v.produit]), [['b', null]]);
 });
 
-test('liste : placard (sel toujours, beurre au seuil compris, laurier, ail, bouillon, eau) ; racheté → sur la liste', () => {
+test('liste : placard (sel, laurier, bouillon et eau toujours ; beurre et ail au seuil compris) ; racheté → sur la liste', () => {
   const placard = (ingredients, semaineExtra = {}) => listeDeCourses(semaineAvec({ p: dans(1) }, semaineExtra), { tousLesPlats: [telle('p', ingredients)], profils: SOLO });
   assert.deepEqual(placard([ing('sel', 40, 'pincee', 'epicerie_salee')]).maison.map((l) => l.produitId), ['sel']);
   assert.deepEqual(placard([ing('beurre', 30, 'g', 'cremerie')]).maison.map((l) => l.produitId), ['beurre']);
@@ -363,14 +363,106 @@ test('liste : placard (sel toujours, beurre au seuil compris, laurier, ail, boui
   assert.deepEqual(placard([ing('laurier', 2, 'pc', 'epicerie_salee'), ing('feuille de laurier', 2, 'pc', 'epicerie_salee')]).maison.map((l) => l.produitId), ['laurier']);
   assert.deepEqual(placard([ing('ail', 10, 'g', 'fruits_legumes')]).maison.map((l) => l.produitId), ['ail']);
   assert.deepEqual(placard([ing('bouillon de volaille', 50, 'cl', 'epicerie_salee', ['bouillon_viande'])]).maison.map((l) => l.produitId), ['bouillon-de-volaille']);
-  assert.deepEqual(placard([ing('bouillon de volaille', 150, 'cl', 'epicerie_salee', ['bouillon_viande'])]).lignes.map((l) => l.produitId), ['bouillon-de-volaille']);
+  // Décision du 2026-10-11 : un bouillon est toujours à la maison, quelle que soit la quantité (avant : sur la liste
+  // au-delà de 2 cubes).
+  assert.deepEqual(placard([ing('bouillon de volaille', 150, 'cl', 'epicerie_salee', ['bouillon_viande'])]).maison.map((l) => l.produitId), ['bouillon-de-volaille']);
   assert.deepEqual(placard([ing('eau', 2, 'l', 'boissons')]).maison.map((l) => l.produitId), ['eau']);
-  assert.deepEqual(placard([ing('laurier', 1, 'cc', 'epicerie_salee')]).lignes.map((l) => l.produitId), ['laurier'], 'sans équivalence');
+  assert.deepEqual(placard([ing('laurier', 1, 'cc', 'epicerie_salee')]).maison.map((l) => l.produitId), ['laurier'], 'toujours, même en cuillère');
+  assert.deepEqual(placard([ing('beurre', 1, 'boite', 'cremerie')]).lignes.map((l) => l.produitId), ['beurre'], 'seuil gardé, sans équivalence : on l’achète');
+  assert.deepEqual(placard([ing('ail', 3, 'pc', 'fruits_legumes', ['legume'], { role: 'incorpore' })]).lignes.map((l) => l.produitId), ['ail'], 'au-delà de 2 gousses');
   const rachete = placard([ing('sel', 1, 'pincee', 'epicerie_salee')], { racheter: { sel: true } });
   assert.deepEqual(rachete.maison, []);
   assert.deepEqual(rachete.lignes.map((l) => [l.produitId, l.placard, l.rachetee]), [['sel', true, true]]);
   const maison = placard([ing('sel', 1, 'pincee', 'epicerie_salee')]).maison[0];
   assert.deepEqual([maison.placard, maison.rachetee, maison.cochee], [true, false, false]);
+});
+
+test('liste : constat de l’essai du 2026-10-11 rejoué : produits durables dans « Déjà à la maison ? », beurre au-delà de 30 g sur la liste', () => {
+  // Recette pour 5, un adulte seul : 5 repas, la recette telle quelle.
+  const p = plat('p', 'Plat p', [
+    ing('cannelle moulue', 3.5, 'cc', 'epicerie_salee'), ing('fleur de sel', 1, 'pincee', 'epicerie_salee'),
+    ing("moutarde à l'ancienne", 1.5, 'cs', 'epicerie_salee'), ing('paprika fumé', 1.5, 'cc', 'epicerie_salee'),
+    ing("huile d'olive", 10.5, 'cs', 'epicerie_salee'), ing('bouillon de légumes', 1.6, 'l', 'epicerie_salee'),
+    ing('poivre du moulin', 2, 'pincee', 'epicerie_salee'), ing('thym séché', 1, 'cc', 'epicerie_salee'),
+    ing('huile végétale', 2, 'cs', 'epicerie_salee'), ing('beurre', 40, 'g', 'cremerie', ['laitier']),
+  ], { portionsBase: 5 });
+  const liste = listeDeCourses(semaineAvec({ p: dans(1) }), { tousLesPlats: [p], profils: SOLO });
+  assert.deepEqual(liste.maison.map((l) => l.produitId).sort(), ['bouillon-de-legume', 'cannelle', 'fleur-de-sel',
+    'huile-d-olive', 'huile-neutre', 'moutarde-a-l-ancienne', 'paprika-fume', 'poivre', 'thym'].sort());
+  assert.deepEqual(liste.lignes.map((l) => [l.produitId, l.quantite]), [['beurre', '40\u00A0g']]);
+  assert.equal(ligne(liste, 'huile-d-olive').quantite, '10,5\u00A0c. à soupe', 'au-delà de 6 c. à soupe');
+  assert.equal(ligne(liste, 'bouillon-de-legume').quantite, '1,6\u00A0l', 'en litres, au-delà de 2 cubes');
+  // Le nom affiché reste celui des recettes ; aucune écriture : une coche posée sous l'ancien identifiant
+  // (« cannelle-moulue ») est ignorée en maison, et relue par la clé de repli si la ligne est rachetée.
+  assert.equal(ligne(liste, 'cannelle').nom, 'Cannelle moulue');
+  const coches = { 'cannelle-moulue': { q: { cc: 3.5 }, le: 1 } };
+  const rachetee = listeDeCourses(semaineAvec({ p: dans(1) }, { coches, racheter: { cannelle: true } }), { tousLesPlats: [p], profils: SOLO });
+  assert.deepEqual([ligne(rachetee, 'cannelle').repli, ligne(rachetee, 'cannelle').cochee], ['cannelle-moulue', true]);
+  const enMaison = listeDeCourses(semaineAvec({ p: dans(1) }, { coches }), { tousLesPlats: [p], profils: SOLO });
+  assert.equal(ligne(enMaison, 'cannelle').cochee, false);
+});
+
+test('liste : écriture nouvellement reconnue hors placard : la coche posée sous l’ancien identifiant reste lue (clé de repli)', () => {
+  // Avant le 2026-10-11, « farine t55 » était inconnue : sa ligne avait l’identifiant « farine-t55 ».
+  const p = telle('p', [ing('farine t55', 200, 'g', 'epicerie_sucree')]);
+  const semaine = semaineAvec({ p: dans(1) }, { coches: { 'farine-t55': { q: { masse: 200 }, le: 1 } } });
+  const liste = listeDeCourses(semaine, { tousLesPlats: [p], profils: SOLO });
+  const farine = ligne(liste, 'farine');
+  assert.deepEqual([farine.nom, farine.repli, farine.cochee, farine.placard], ['Farine t55', 'farine-t55', true, false]);
+  assert.deepEqual(liste.maison, []);
+  // Décocher efface aussi la clé de repli : aucune coche orpheline.
+  assert.deepEqual(Object.keys(ecrituresCoche(semaine, farine, false).champs).sort(), ['coches.farine', 'coches.farine-t55']);
+  // Recocher l'efface aussi : la nouvelle coche dit tout ce qui a été pris.
+  assert.deepEqual(ecrituresCoche(semaine, farine, true, { maintenant: 5 }).champs,
+    { 'coches.farine': { q: { masse: 200 }, le: 5 }, 'coches.farine-t55': EFFACER });
+  // Une autre recette du foyer, hors de la semaine, écrit « farine » : le nom affiché devient « Farine », et la coche
+  // posée sous « farine-t55 » reste lue (clé de chaque écriture de la semaine, pas seulement du nom affiché).
+  const q = telle('q', [ing('farine', 100, 'g', 'epicerie_sucree')]);
+  const autre = ligne(listeDeCourses(semaine, { tousLesPlats: [p, q], profils: SOLO }), 'farine');
+  assert.deepEqual([autre.nom, autre.replis, autre.cochee], ['Farine', ['farine-t55'], true]);
+  // Même chose pour le sucre (« sucre semoule » coché, une recette « sucre » ailleurs).
+  const s1 = telle('s1', [ing('sucre semoule', 100, 'g', 'epicerie_sucree')]);
+  const s2 = telle('s2', [ing('sucre', 50, 'g', 'epicerie_sucree')]);
+  const sucre = ligne(listeDeCourses(semaineAvec({ s1: dans(1) }, { coches: { 'sucre-semoule': { q: { masse: 100 }, le: 1 } } }),
+    { tousLesPlats: [s1, s2], profils: SOLO }), 'sucre');
+  assert.deepEqual([sucre.nom, sucre.cochee], ['Sucre', true]);
+});
+
+test('liste : deux écritures réunies en une ligne, cochées chacune avant : ce qui a été pris s’additionne', () => {
+  // « farine » (déjà reconnue, id « farine ») et « farine t55 » (id « farine-t55 » avant le 2026-10-11), cochées toutes
+  // les deux : une seule ligne de 300 g, cochée en entier.
+  const p = telle('p', [ing('farine', 100, 'g', 'epicerie_sucree'), ing('farine t55', 200, 'g', 'epicerie_sucree')]);
+  const coches = { farine: { q: { masse: 100 }, le: 1 }, 'farine-t55': { q: { masse: 200 }, le: 2 } };
+  const semaine = semaineAvec({ p: dans(1) }, { coches });
+  const farine = ligne(listeDeCourses(semaine, { tousLesPlats: [p], profils: SOLO }), 'farine');
+  assert.deepEqual([farine.totaux, farine.replis, farine.cochee, farine.dejaPris], [{ masse: 300 }, ['farine-t55'], true, null]);
+  // Une seule des deux cochée : « Déjà pris » le dit.
+  const moitie = ligne(listeDeCourses(semaineAvec({ p: dans(1) }, { coches: { 'farine-t55': coches['farine-t55'] } }),
+    { tousLesPlats: [p], profils: SOLO }), 'farine');
+  assert.deepEqual([moitie.cochee, moitie.dejaPris, moitie.reste], [false, { masse: 200 }, { masse: 100 }]);
+  // « Beurre fondu » coché et « beurre » à la maison avant : une ligne de 70 g, cochée pour ce qui a été pris (50 g).
+  const b = telle('b', [ing('beurre fondu', 50, 'g', 'cremerie', ['laitier']), ing('beurre', 20, 'g', 'cremerie', ['laitier'])]);
+  const beurre = ligne(listeDeCourses(semaineAvec({ b: dans(1) }, { coches: { 'beurre-fondu': { q: { masse: 50 }, le: 1 } } }),
+    { tousLesPlats: [b], profils: SOLO }), 'beurre');
+  assert.deepEqual([beurre.totaux, beurre.dejaPris, beurre.reste], [{ masse: 70 }, { masse: 50 }, { masse: 20 }]);
+  // Décocher efface toutes les clés.
+  assert.deepEqual(Object.keys(ecrituresCoche(semaine, farine, false).champs).sort(), ['coches.farine', 'coches.farine-t55']);
+});
+
+test('liste : une herbe en bottes ou en branches s’achète ; en cuillères, elle est à la maison', () => {
+  const p = telle('p', [ing('thym', 1, 'botte', 'fruits_legumes')]);
+  const q = telle('q', [ing('thym', 2, 'pc', 'fruits_legumes')]);
+  const r = telle('r', [ing('thym', 1, 'cc', 'epicerie_salee'), ing('laurier', 2, 'pc', 'epicerie_salee'),
+    ing('origan', 1, 'cc', 'epicerie_salee')]);
+  const t = telle('t', [ing('laurier', 1, 'botte', 'fruits_legumes'), ing('origan', 1, 'botte', 'fruits_legumes')]);
+  const enMaison = (plats) => listeDeCourses(semaineAvec(Object.fromEntries(plats.map((x, i) => [x.id, dans(i + 1)]))),
+    { tousLesPlats: plats, profils: SOLO });
+  assert.deepEqual(enMaison([p]).lignes.map((l) => l.produitId), ['thym']);
+  assert.deepEqual(enMaison([q]).lignes.map((l) => l.produitId), ['thym']);
+  assert.deepEqual(enMaison([r]).maison.map((l) => l.produitId), ['laurier', 'origan', 'thym']);
+  assert.deepEqual(enMaison([t]).lignes.map((l) => l.produitId).sort(), ['laurier', 'origan']);
+  // Thym en cuillère et en botte la même semaine : sur la liste (dans le doute, on l'achète).
+  assert.deepEqual(enMaison([p, r]).lignes.map((l) => l.produitId), ['thym']);
 });
 
 test('liste : produits/{id} du foyer (T3b, T3d) : mot cherché, placard éteint', () => {
@@ -729,6 +821,10 @@ test('ecrituresCocheArticle et ecrituresRachat : un seul champ chacun', () => {
     { 'racheter.oignon-jaune': EFFACER, 'racheter.oignon': EFFACER });
   assert.deepEqual(ecrituresRachat(SEMAINE, 'oignon-jaune', false, { repli: 'oignon' }).champs, { 'racheter.oignon-jaune': EFFACER });
   assert.deepEqual(ecrituresRachat(rangee, 'oignon-jaune', true, { repli: 'oignon' }).champs, { 'racheter.oignon-jaune': true });
+  // Plusieurs clés de repli : éteindre efface chacune de celles qui sont posées.
+  const deux = { ...SEMAINE, racheter: { 'farine-t55': true, 'farine-fluide': true } };
+  assert.deepEqual(ecrituresRachat(deux, 'farine', false, { replis: ['farine-t55', 'farine-fluide', 'farine-blanche'] }).champs,
+    { 'racheter.farine': EFFACER, 'racheter.farine-t55': EFFACER, 'racheter.farine-fluide': EFFACER });
 });
 
 test('liste calculée, jamais écrite : calculer la liste ne produit aucune écriture ni ne modifie la semaine', () => {

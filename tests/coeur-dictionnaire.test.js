@@ -1,7 +1,8 @@
 // T3-0 « Produits courants » : vérifications automatiques du dictionnaire (js/coeur/dictionnaire.js), plan §6.2, points
 // 1 à 12 : validité, forme et rôle, repères de préparation, unicité des clés, homographes, cohérence avec les mots qui
 // annoncent un repère (reperesAttendus), garde-fous de l'adulte sans viande, faux amis, lait cru, ids figés, couverture
-// (exemples, fixtures, corpus figé), budget. Données génériques : aucune donnée du foyer.
+// (exemples, fixtures, corpus figé), budget ; T3a : 13, placard de départ (familles « toujours à la maison », seuils
+// gardés) ; 14, écritures courantes. Données génériques : aucune donnée du foyer.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -15,11 +16,12 @@ import {
   MARQUEURS_PREPARATION, UNITES_EDITION, ingredientSaisi, natureProposee, reperesProposes,
 } from '../js/coeur/edition.js';
 import { DICTIONNAIRE } from '../js/coeur/dictionnaire.js';
-import { HOMOGRAPHES, natureDe, reconnaitre } from '../js/coeur/produits.js';
+import { HOMOGRAPHES, idProduit, natureDe, reconnaitre } from '../js/coeur/produits.js';
 import { VOCABULAIRES } from '../js/coeur/vocabulaire.js';
 import { dansLePlacard, listeDeCourses, versBase } from '../js/coeur/liste.js';
 import { IDS_DICTIONNAIRE } from './donnees/ids-dictionnaire.js';
 import { CORPUS_INGREDIENTS } from './donnees/corpus-ingredients.js';
+import { AJOUTEES_AVANT, FORMES_AVANT } from './donnees/formes-avant-placard.js';
 
 const lire = (chemin) => readFileSync(fileURLToPath(new URL(`../${chemin}`, import.meta.url)), 'utf8');
 
@@ -148,9 +150,10 @@ test('4. les noms ambigus ne sont jamais une forme du dictionnaire', () => {
 
 /**
  * Mots dont deux accentuations ont le même sens, sans produit à confondre : jamais à ajouter à HOMOGRAPHES (la
- * saisie sans accent reste reconnue). « Sucre vanillé » / « extrait de vanille ».
+ * saisie sans accent reste reconnue, et l'identifiant d'un nom inconnu qui les contient ne change pas). « Sucre
+ * vanillé » / « extrait de vanille » ; « pâtes sèches » / « thym séché » (sec, dans les deux cas).
  */
-const ACCENTUATIONS_SANS_RISQUE = new Set(['vanille']);
+const ACCENTUATIONS_SANS_RISQUE = new Set(['vanille', 'seche']);
 /**
  * Saisies hors du dictionnaire dont la clé, accents ôtés, serait celle d'un autre produit : comptées comme des formes
  * pour le calcul des homographes, elles font échouer le point 5 si ce produit entre au dictionnaire sans que sa clé
@@ -238,6 +241,11 @@ const LISTE_BLANCHE_CARNEE = new Map([
   ['bouillon de bœuf', 'bouillon_viande'], ['cube de bouillon de bœuf', 'bouillon_viande'], ['bouillon de poulet', 'bouillon_viande'],
   ['fond de veau', 'bouillon_viande'], ['graisse de canard', 'graisse_animale'], ['gélatine de porc', 'gelatine_animale'],
   ['gélatine de bœuf', 'gelatine_animale'],
+  // Écritures courantes du 2026-10-11 : des bouillons, jamais de la viande.
+  ['cube de bouillon de poulet', 'bouillon_viande'], ['bouillon de poulet en cube', 'bouillon_viande'],
+  ['bouillon de bœuf en cube', 'bouillon_viande'], ['bouillon cube de bœuf', 'bouillon_viande'],
+  ['bouillon de bœuf déshydraté', 'bouillon_viande'], ['bouillon de bœuf en poudre', 'bouillon_viande'],
+  ['fond de veau déshydraté', 'bouillon_viande'], ['fond de veau en poudre', 'bouillon_viande'],
 ]);
 /** Mots de poisson ou de fruits de mer (clés de mots, sans accents ni pluriel). */
 const MOTS_POISSON = ['poisson', 'saumon', 'thon', 'cabillaud', 'colin', 'lieu', 'merlu', 'lotte', 'sole', 'dorade', 'daurade',
@@ -513,33 +521,89 @@ test('12. budget : le fichier reste léger ; les deux modules sont dans le préc
 // ——— 13. Placard de départ et équivalences (T3a) ———
 
 /**
- * Placard de départ (CLAUDE.md §9.9, plan T3 §4.1.a) : id → seuil attendu ({} : toujours mis de côté). Le laurier est
- * compté en feuilles (4) : un seuil en cuillère ne s'y comparerait jamais.
+ * Placard de départ (CLAUDE.md §9.9 ; décision du propriétaire du 2026-10-11, qui remplace les seuils de T3a pour ces
+ * familles) : les produits qui durent plusieurs semaines sont TOUJOURS à la maison (`{}`), par familles entières :
+ * jamais ajoutés d'eux-mêmes à la liste, listés dans « Déjà à la maison ? », « À racheter » d'un toucher.
  */
-const PLACARD_DE_DEPART = {
-  sel: {}, poivre: {}, eau: {},
-  huile: { seuil: 6, unite: 'cs' }, 'huile-d-olive': { seuil: 6, unite: 'cs' }, 'huile-neutre': { seuil: 6, unite: 'cs' },
-  'huile-de-tournesol': { seuil: 6, unite: 'cs' }, 'huile-de-colza': { seuil: 6, unite: 'cs' },
-  'gro-sel': { seuil: 2, unite: 'cs' },
-  paprika: { seuil: 2, unite: 'cc' }, cumin: { seuil: 2, unite: 'cc' }, curry: { seuil: 2, unite: 'cc' },
-  curcuma: { seuil: 2, unite: 'cc' }, cannelle: { seuil: 2, unite: 'cc' }, 'noi-de-muscade': { seuil: 2, unite: 'cc' },
-  'piment-d-espelette': { seuil: 2, unite: 'cc' }, 'quatre-epice': { seuil: 2, unite: 'cc' },
-  'gingembre-moulu': { seuil: 2, unite: 'cc' }, 'herbe-de-provence': { seuil: 2, unite: 'cc' }, thym: { seuil: 2, unite: 'cc' },
-  origan: { seuil: 2, unite: 'cc' }, laurier: { seuil: 4, unite: 'pc' },
-  vinaigre: { seuil: 4, unite: 'cs' }, 'vinaigre-de-vin': { seuil: 4, unite: 'cs' }, 'vinaigre-de-vin-rouge': { seuil: 4, unite: 'cs' },
-  'vinaigre-de-vin-blanc': { seuil: 4, unite: 'cs' }, 'vinaigre-balsamique': { seuil: 4, unite: 'cs' },
-  'vinaigre-de-cidre': { seuil: 4, unite: 'cs' }, 'sauce-soja': { seuil: 4, unite: 'cs' },
-  moutarde: { seuil: 2, unite: 'cs' }, 'concentre-de-tomate': { seuil: 2, unite: 'cs' }, 'fecule-de-mai': { seuil: 2, unite: 'cs' },
-  miel: { seuil: 2, unite: 'cs' }, chapelure: { seuil: 2, unite: 'cs' },
-  'bouillon-de-volaille': { seuil: 2, unite: 'pc' }, 'bouillon-de-boeuf': { seuil: 2, unite: 'pc' },
-  'bouillon-de-legume': { seuil: 2, unite: 'pc' }, 'fond-de-veau': { seuil: 2, unite: 'cs' },
-  'fumet-de-poisson': { seuil: 2, unite: 'cs' },
-  sucre: { seuil: 30, unite: 'g' }, 'sucre-rou': { seuil: 30, unite: 'g' }, farine: { seuil: 50, unite: 'g' },
-  'levure-chimique': { seuil: 1, unite: 'sachet' }, 'sucre-vanille': { seuil: 1, unite: 'sachet' },
-  'extrait-de-vanille': { seuil: 1, unite: 'cc' }, ail: { seuil: 2, unite: 'pc' }, beurre: { seuil: 30, unite: 'g' },
+const TOUJOURS = {
+  huiles: ['huile', 'huile-d-olive', 'huile-neutre', 'huile-de-tournesol', 'huile-de-colza', 'huile-de-sesame', 'huile-de-noi',
+    'huile-d-arachide', 'huile-de-pepin-de-raisin', 'huile-de-coco', 'huile-de-noisette'],
+  vinaigres: ['vinaigre', 'vinaigre-de-vin', 'vinaigre-de-vin-rouge', 'vinaigre-de-vin-blanc', 'vinaigre-balsamique',
+    'vinaigre-balsamique-blanc', 'vinaigre-de-cidre', 'vinaigre-de-xere', 'vinaigre-de-riz', 'vinaigre-blanc',
+    'vinaigre-de-framboise'],
+  'sauces en bouteille': ['sauce-soja', 'tamari', 'nuoc-mam', 'sauce-worcestershire', 'sauce-d-huitre', 'mirin',
+    'sauce-piquante'],
+  moutardes: ['moutarde', 'moutarde-a-l-ancienne', 'moutarde-douce'],
+  'bouillons, fonds et fumets': ['bouillon-de-volaille', 'bouillon-de-boeuf', 'bouillon-de-legume', 'fond-de-veau',
+    'fond-de-volaille', 'fumet-de-poisson'],
+  'sels et poivres': ['sel', 'gro-sel', 'fleur-de-sel', 'poivre', 'poivre-blanc', 'baie-rose'],
+  épices: ['paprika', 'paprika-fume', 'paprika-fort', 'cumin', 'graine-de-cumin', 'curry', 'curcuma', 'cannelle',
+    'baton-de-cannelle', 'noi-de-muscade', 'piment-d-espelette', 'piment-de-cayenne', 'piment-en-poudre', 'gingembre-moulu',
+    'quatre-epice', 'ra-el-hanout', 'garam-masala', 'cardamome', 'clou-de-girofle', 'ani-etoile', 'coriandre-moulue',
+    'graine-de-coriandre', 'graine-de-moutarde', 'safran', 'ail-en-poudre', 'baie-de-genievre', 'carvi', 'cinq-epice',
+    'poivre-de-sichuan', 'melange-cinq-baie', 'piment-seche', 'flocon-de-piment', 'graine-de-fenouil'],
+  'herbes sèches': ['herbe-de-provence', 'laurier', 'basilic-seche', 'persil-seche', 'romarin-seche', 'menthe-sechee',
+    'estragon-seche', 'aneth-seche', 'ciboulette-sechee', 'sauge-sechee'],
+  eau: ['eau'],
+};
+/** Seuils gardés (tableau du §9 inchangé pour eux) : id → seuil exact. */
+const SEUILS_GARDES = {
+  beurre: { seuil: 30, unite: 'g' },
   lait: { seuil: 10, unite: 'cl' }, 'lait-entier': { seuil: 10, unite: 'cl' }, 'lait-demi-ecreme': { seuil: 10, unite: 'cl' },
   'lait-ecreme': { seuil: 10, unite: 'cl' },
+  farine: { seuil: 50, unite: 'g' }, sucre: { seuil: 30, unite: 'g' }, 'sucre-rou': { seuil: 30, unite: 'g' },
+  ail: { seuil: 2, unite: 'pc' },
+  'concentre-de-tomate': { seuil: 2, unite: 'cs' }, 'fecule-de-mai': { seuil: 2, unite: 'cs' }, chapelure: { seuil: 2, unite: 'cs' },
+  miel: { seuil: 2, unite: 'cs' },
+  'levure-chimique': { seuil: 1, unite: 'sachet' }, 'sucre-vanille': { seuil: 1, unite: 'sachet' },
+  'extrait-de-vanille': { seuil: 1, unite: 'cc' },
 };
+/**
+ * Herbes sèches dont le nom seul se dit aussi de l'herbe fraîche (« thym, 2 pc » : deux branches) : un seuil en
+ * cuillères si large qu'en cuillères ou en pincées elles sont toujours à la maison, mais en pièces (branches) ou en
+ * bottes, impossibles à comparer, elles s'achètent (dans le doute, on l'achète ; jamais une herbe fraîche).
+ */
+const HERBES_NOM_NU = {
+  thym: { seuil: 4, unite: 'cs' }, origan: { seuil: 4, unite: 'cs' }, sarriette: { seuil: 4, unite: 'cs' },
+  marjolaine: { seuil: 4, unite: 'cs' },
+};
+/**
+ * Jamais de placard : herbes fraîches et aromates frais, produits consommés à la quantité, et faux voisins des
+ * familles (« fond de tarte » est une pâte, « thon à l'huile » une conserve, « lait cru » s'achète exprès).
+ */
+const JAMAIS = ['coriandre-fraiche', 'thym-frai', 'gingembre-frai', 'romarin', 'basilic-frai', 'menthe-fraiche', 'persil',
+  'bouquet-garni', 'piment-rouge', 'sauce-tomate', 'couli-de-tomate', 'pesto', 'ketchup', 'mayonnaise', 'tahini',
+  'lait-de-coco', 'creme-de-coco', 'capre', 'cornichon', 'olive-noire', 'olive-verte', 'fond-de-tarte', 'thon-a-l-huile',
+  'sardine-a-l-huile', 'lait-cru'];
+/**
+ * Cas limites laissés SANS placard (dans le doute, on l'achète), en attente d'une décision du propriétaire : chacun
+ * avec sa raison. Un changement ici est une décision, jamais un ajustement de test.
+ */
+const DOUTEUX = new Map([
+  ['sauce-soja-sucree', 'souvent employée en quantité pour laquer'],
+  ['sauce-hoisin', 'souvent employée en quantité pour laquer, comme la sauce soja sucrée'],
+  ['creme-de-balsamique', 'sauce de finition, pas un vinaigre'],
+  ['harissa', 'pâte en tube ou en pot, au frigo une fois ouverte'],
+  ['graine-de-sesame', 'parfois en garniture abondante'],
+  ['gousse-de-vanille', 'chère, souvent achetée pour une recette'],
+  ['eau-de-fleur-d-oranger', 'arôme hors des familles'],
+  ['bicarbonate-de-soude', 'hors des familles et du tableau'],
+  ['levure-de-boulanger', 'la levure fraîche ne se garde pas'],
+  ['fecule-de-pomme-de-terre', 'hors du tableau'],
+  ['panko', 'souvent en quantité pour paner'],
+  ['sucre-glace', 'hors du tableau (sucre blanc et roux seulement)'],
+  ['vergeoise', 'hors du tableau'],
+  ['beurre-demi-sel', 'le seuil du beurre ne vise que le beurre doux'],
+  ['beurre-sale', 'le seuil du beurre ne vise que le beurre doux'],
+  ['beurre-clarifie', 'hors du tableau'],
+  ['graisse-de-canard', 'graisse, pas une huile'],
+  ['graisse-d-oie', 'graisse, pas une huile'],
+  ['saindou', 'graisse, pas une huile'],
+  ['miso', 'pâte, pas une sauce en bouteille'],
+  ['miso-blanc', 'pâte, pas une sauce en bouteille'],
+  ['cacao-en-poudre', 'hors des familles et du tableau'],
+]);
+const TOUS_TOUJOURS = Object.values(TOUJOURS).flat();
 
 test('13. placard : un seuil > 0 et une unité du vocabulaire, ou aucun des deux ; équivalences vers g ou ml', () => {
   for (const entree of DICTIONNAIRE) {
@@ -565,10 +629,28 @@ test('13. placard : un seuil > 0 et une unité du vocabulaire, ou aucun des deux
   }
 });
 
-test('13. placard : chaque produit du tableau du §9 porte son seuil de départ, et rien d’autre n’est mis de côté', () => {
+test('13. placard : familles « toujours à la maison » ({}), seuils gardés exacts, et rien d’autre n’est mis de côté', () => {
+  assert.equal(new Set(TOUS_TOUJOURS).size, TOUS_TOUJOURS.length, 'id listé deux fois');
   const avecPlacard = DICTIONNAIRE.filter((entree) => 'placard' in entree);
-  assert.deepEqual(avecPlacard.map((e) => e.id).sort(), Object.keys(PLACARD_DE_DEPART).sort());
-  for (const entree of avecPlacard) assert.deepEqual(entree.placard, PLACARD_DE_DEPART[entree.id], entree.id);
+  assert.deepEqual(avecPlacard.map((e) => e.id).sort(),
+    [...TOUS_TOUJOURS, ...Object.keys(SEUILS_GARDES), ...Object.keys(HERBES_NOM_NU)].sort());
+  for (const id of TOUS_TOUJOURS) assert.deepEqual(DICTIONNAIRE.find((e) => e.id === id).placard, {}, `${id} : toujours à la maison`);
+  for (const [id, seuil] of Object.entries({ ...SEUILS_GARDES, ...HERBES_NOM_NU })) {
+    assert.deepEqual(DICTIONNAIRE.find((e) => e.id === id).placard, seuil, id);
+  }
+  // Herbes au nom nu : toujours à la maison en cuillères ou en pincées (bien au-delà d'un usage réel), achetées en
+  // branches ou en bottes.
+  for (const id of Object.keys(HERBES_NOM_NU)) {
+    const { placard } = DICTIONNAIRE.find((e) => e.id === id);
+    for (const [quantite, unite] of [[1, 'cc'], [6, 'cc'], [3, 'cs'], [4, 'pincee']]) {
+      const { famille, qte } = versBase(quantite, unite);
+      assert.equal(dansLePlacard({ [famille]: qte }, placard), true, `${id} ${quantite} ${unite}`);
+    }
+    for (const unite of ['pc', 'botte']) {
+      const { famille, qte } = versBase(2, unite);
+      assert.equal(dansLePlacard({ [famille]: qte }, placard), false, `${id} 2 ${unite}`);
+    }
+  }
   // Seuils comparables à l'unité courante du produit (sinon il serait toujours sur la liste).
   for (const entree of avecPlacard.filter((e) => 'seuil' in e.placard)) {
     const recette = { [versBase(1, entree.unite).famille]: versBase(1, entree.unite).qte };
@@ -576,13 +658,44 @@ test('13. placard : chaque produit du tableau du §9 porte son seuil de départ,
     assert.ok(dansLePlacard({ [versBase(entree.placard.seuil, entree.placard.unite).famille]: versBase(entree.placard.seuil, entree.placard.unite).qte },
       entree.placard, entree.equivalences ?? null), `${entree.id} : le seuil lui-même est à la maison`);
   }
-  // Équivalences propres : bouillons (un cube fait 500 ml), levure (11 g), sucre vanillé (7,5 g), ail (5 g la gousse).
+  // Toujours à la maison : quelle que soit la quantité, même illisible ; jamais en bottes (une botte est fraîche).
+  for (const id of TOUS_TOUJOURS) {
+    const { placard } = DICTIONNAIRE.find((e) => e.id === id);
+    assert.equal(dansLePlacard({ volume: 1600, cs: 10.5, pc: 12 }, placard), true, id);
+    assert.equal(dansLePlacard({}, placard), true, id);
+    assert.equal(dansLePlacard({ [versBase(1, 'botte').famille]: 1 }, placard), false, `${id} en botte`);
+    assert.equal(dansLePlacard({ [versBase(1, 'botte').famille]: 1, cc: 1 }, placard), false, `${id} en botte et en cuillère`);
+  }
+  // Équivalences propres, seulement là où un seuil les utilise : levure (11 g), sucre vanillé (7,5 g), ail (5 g la gousse).
   const equivalences = Object.fromEntries(DICTIONNAIRE.filter((e) => 'equivalences' in e).map((e) => [e.id, e.equivalences]));
   assert.deepEqual(equivalences, {
-    'bouillon-de-volaille': { pc: { qte: 500, unite: 'ml' } }, 'bouillon-de-boeuf': { pc: { qte: 500, unite: 'ml' } },
-    'bouillon-de-legume': { pc: { qte: 500, unite: 'ml' } }, 'levure-chimique': { sachet: { qte: 11, unite: 'g' } },
-    'sucre-vanille': { sachet: { qte: 7.5, unite: 'g' } }, ail: { pc: { qte: 5, unite: 'g' } },
+    'levure-chimique': { sachet: { qte: 11, unite: 'g' } }, 'sucre-vanille': { sachet: { qte: 7.5, unite: 'g' } },
+    ail: { pc: { qte: 5, unite: 'g' } },
   });
+  for (const id of Object.keys(equivalences)) assert.ok('seuil' in DICTIONNAIRE.find((e) => e.id === id).placard, `${id} : équivalences sans seuil`);
+});
+
+test('13. placard : familles complètes ; jamais une herbe fraîche ni un produit consommé à la quantité ; cas douteux sans placard', () => {
+  const parId = new Map(DICTIONNAIRE.map((e) => [e.id, e]));
+  for (const id of [...JAMAIS, ...DOUTEUX.keys()]) {
+    assert.ok(parId.has(id), `${id} : id inconnu`);
+    assert.equal('placard' in parId.get(id), false, `${id} : jamais de placard${DOUTEUX.has(id) ? ` (${DOUTEUX.get(id)})` : ''}`);
+  }
+  // Familles par le DÉBUT du nom, jamais par un mot (« beurre demi-sel », « pain d'épices », « fond de tarte »,
+  // « thon à l'huile ») : toute entrée d'épicerie salée qui en relève est toujours à la maison.
+  const debut = /^(huile|vinaigre|moutarde|bouillon |fumet|fond de |sel( |$)|gros sel|fleur de sel|poivre( |$)|sauce (soja|worcestershire|d'huître)( |$))/;
+  const horsFamille = DICTIONNAIRE.filter((e) => e.rayon === 'epicerie_salee' && debut.test(e.nom))
+    .filter((e) => !TOUS_TOUJOURS.includes(e.id) && !DOUTEUX.has(e.id)).map((e) => e.id);
+  assert.deepEqual(horsFamille, [], 'famille incomplète : toujours à la maison, ou cas douteux avec sa raison');
+  // Épicerie salée mesurée à la pincée ou à la cuillère à café : épices, herbes sèches, sels et poivres, sauf exceptions.
+  const petites = DICTIONNAIRE.filter((e) => e.rayon === 'epicerie_salee' && ['pincee', 'cc'].includes(e.unite))
+    .filter((e) => !TOUS_TOUJOURS.includes(e.id) && !Object.hasOwn(HERBES_NOM_NU, e.id)).map((e) => e.id).sort();
+  assert.deepEqual(petites, ['capre', 'harissa'], 'épice ou herbe sèche oubliée');
+  // Aucune herbe fraîche ni aucun légume n'est « toujours » (l'ail garde son seuil de 2 gousses).
+  assert.deepEqual(DICTIONNAIRE.filter((e) => e.rayon === 'fruits_legumes' && 'placard' in e).map((e) => e.id), ['ail']);
+  for (const id of [...TOUS_TOUJOURS, ...Object.keys(HERBES_NOM_NU)]) {
+    assert.ok(['epicerie_salee', 'boissons'].includes(parId.get(id).rayon), id);
+  }
 });
 
 test('13. entrées neuves : « eau » (toujours à la maison), « vinaigre de vin », « fumet » ; ids figés', () => {
@@ -616,3 +729,183 @@ test('13. une recette avec « eau 1 l » ne met une ligne que dans « Déjà à 
   assert.deepEqual(liste.maison[0].totaux, { volume: 1200 });
 });
 
+// ——— 14. Écritures courantes (2026-10-11) ———
+
+/**
+ * Écritures ajoutées le 2026-10-11 (constat de l'essai : « cannelle moulue », « thym séché », « huile végétale »…) :
+ * id visé → formes. Noms exacts seulement, jamais de ressemblance. « bouillon cube » et « cube de bouillon » restent
+ * dehors (bouillon non dit : la question « C'est… ? » reste, point 8).
+ */
+const ECRITURES_AJOUTEES = [
+  ['ail', ['ail écrasé', 'ail émincé', 'ail frais', 'ail râpé', "gousse d'ail écrasée", "gousse d'ail hachée",
+    "gousse d'ail émincée"]],
+  ['beurre', ['beurre mou', 'beurre fondu', 'beurre pommade', 'beurre froid', 'beurre ramolli', 'beurre noisette']],
+  ['lait', ['lait froid', 'lait tiède', 'lait chaud', 'lait de vache']],
+  ['moutarde', ['moutarde forte', 'moutarde forte de dijon', 'moutarde de dijon forte']],
+  ['moutarde-a-l-ancienne', ['moutarde en grains', 'moutarde à grains', 'moutarde de meaux']],
+  ['moutarde-douce', ['moutarde douce']],
+  ['sauce-soja', ['sauce de soja', 'sauce soja claire', 'sauce soja légère']],
+  ['sauce-soja-sucree', ['sauce de soja sucrée', 'kecap manis']],
+  ['tamari', ['tamari', 'sauce tamari']],
+  ['sauce-worcestershire', ['sauce worcester', 'worcestershire']],
+  ['sauce-d-huitre', ["sauce d'huître", 'sauce huître']],
+  ['huile-d-olive', ["huile d'olive vierge extra", "huile d'olive extra vierge", "huile d'olive vierge"]],
+  ['huile-neutre', ['huile végétale', 'huile de cuisson']],
+  ['huile-de-sesame', ['huile de sésame grillé', 'huile de sésame toasté']],
+  ['huile-d-arachide', ["huile d'arachide"]],
+  ['huile-de-pepin-de-raisin', ['huile de pépins de raisin']],
+  ['huile-de-coco', ['huile de coco', 'huile de noix de coco']],
+  ['vinaigre-balsamique', ['vinaigre balsamique de modène', 'vinaigre de modène']],
+  ['vinaigre-balsamique-blanc', ['vinaigre balsamique blanc']],
+  ['vinaigre-de-cidre', ['vinaigre de cidre de pomme']],
+  ['vinaigre-de-xere', ['vinaigre de vin de xérès', 'vinaigre de jerez']],
+  ['vinaigre-blanc', ["vinaigre d'alcool blanc"]],
+  ['sel', ['sel de mer', 'sel marin', 'sel fin de mer', 'sel iodé', 'sel de guérande', 'sel gris']],
+  ['gro-sel', ['gros sel de mer', 'gros sel marin', 'gros sel de guérande', 'gros sel gris']],
+  ['fleur-de-sel', ['fleur de sel de guérande']],
+  ['poivre', ['poivre du moulin', 'poivre noir du moulin', 'poivre noir moulu', 'poivre en grains',
+    'poivre noir en grains', 'grain de poivre', 'poivre concassé', 'poivre noir concassé', 'poivre mignonnette',
+    'poivre en poudre', 'poivre noir en poudre', 'poivre fraîchement moulu', 'poivre noir fraîchement moulu']],
+  ['poivre-blanc', ['poivre blanc', 'poivre blanc moulu']],
+  ['paprika', ['paprika doux', 'paprika en poudre', 'paprika moulu']],
+  ['paprika-fume', ['paprika fumé doux']],
+  ['paprika-fort', ['paprika fort', 'paprika piquant']],
+  ['cumin', ['cumin moulu', 'cumin en poudre']],
+  ['graine-de-cumin', ['graine de cumin', 'cumin en grains', 'cumin en graines']],
+  ['curry', ['poudre de curry', 'curry doux']],
+  ['curcuma', ['curcuma moulu', 'curcuma en poudre']],
+  ['cannelle', ['cannelle moulue']],
+  ['baton-de-cannelle', ['bâton de cannelle', 'cannelle en bâton']],
+  ['noi-de-muscade', ['muscade râpée', 'noix de muscade râpée', 'muscade moulue', 'muscade en poudre',
+    'noix de muscade moulue', 'noix de muscade en poudre']],
+  ['piment-d-espelette', ["piment d'espelette en poudre", "piment d'espelette moulu", 'espelette']],
+  ['piment-de-cayenne', ['poivre de cayenne', 'cayenne', 'piment de cayenne en poudre', 'piment de cayenne moulu']],
+  ['piment-en-poudre', ['piment en poudre', 'piment moulu']],
+  ['cardamome', ['cardamome moulue', 'cardamome en poudre', 'gousse de cardamome', 'cardamome verte']],
+  ['clou-de-girofle', ['girofle']],
+  ['graine-de-coriandre', ['graine de coriandre', 'coriandre en grains']],
+  ['graine-de-moutarde', ['graine de moutarde']],
+  ['safran', ['safran en poudre', 'pistil de safran', 'filament de safran', 'dose de safran']],
+  ['ail-en-poudre', ['ail en poudre', 'ail semoule']],
+  ['herbe-de-provence', ['herbes de provence séchées']],
+  ['thym', ['thym séché', 'thym sec']],
+  ['laurier', ['laurier sauce', 'laurier séché', 'feuille de laurier séchée']],
+  ['origan', ['origan séché']],
+  ['basilic-seche', ['basilic séché']],
+  ['persil-seche', ['persil séché']],
+  ['romarin-seche', ['romarin séché']],
+  ['menthe-sechee', ['menthe séchée']],
+  ['estragon-seche', ['estragon séché']],
+  ['aneth-seche', ['aneth séché']],
+  ['ciboulette-sechee', ['ciboulette séchée']],
+  ['sauge-sechee', ['sauge séchée']],
+  ['sarriette', ['sarriette', 'sarriette séchée']],
+  ['marjolaine', ['marjolaine', 'marjolaine séchée']],
+  ['baie-de-genievre', ['baie de genièvre', 'baie de genévrier']],
+  ['carvi', ['carvi', 'graine de carvi']],
+  ['cinq-epice', ['cinq-épices', '5 épices']],
+  ['poivre-de-sichuan', ['poivre de sichuan', 'poivre du sichuan', 'baie de sichuan']],
+  ['melange-cinq-baie', ['mélange cinq baies', 'mélange 5 baies', 'cinq baies', '5 baies', 'poivre cinq baies',
+    'poivre 5 baies']],
+  ['piment-seche', ['piment séché', 'piment sec']],
+  ['flocon-de-piment', ['flocon de piment', 'piment en flocons']],
+  ['graine-de-fenouil', ['graine de fenouil', 'fenouil en graines']],
+  ['huile-de-noisette', ['huile de noisette']],
+  ['vinaigre-de-framboise', ['vinaigre de framboise']],
+  ['mirin', ['mirin']],
+  ['sauce-piquante', ['sauce piquante', 'sauce pimentée', 'sauce au piment']],
+  ['sauce-hoisin', ['sauce hoisin']],
+  ['bouillon-de-volaille', ['bouillon de volaille en cube', 'bouillon cube de volaille',
+    'bouillon de volaille déshydraté', 'bouillon de volaille en poudre', 'cube de bouillon de poulet',
+    'bouillon de poulet en cube']],
+  ['bouillon-de-boeuf', ['bouillon de bœuf en cube', 'bouillon cube de bœuf', 'bouillon de bœuf déshydraté',
+    'bouillon de bœuf en poudre']],
+  ['fond-de-veau', ['fond de veau déshydraté', 'fond de veau en poudre']],
+  ['bouillon-de-legume', ['bouillon de légumes en cube', 'bouillon cube de légumes', 'bouillon de légumes déshydraté',
+    'bouillon de légumes en poudre']],
+  ['fond-de-volaille', ['fond de volaille déshydraté']],
+  ['fumet-de-poisson', ['fumet de poisson déshydraté', 'fumet de poisson en poudre']],
+  ['sucre', ['sucre semoule', 'sucre cristal', 'sucre cristallisé']],
+  ['sucre-rou', ['sucre blond', 'sucre roux de canne', 'sucre brun']],
+  ['sucre-vanille', ['sucre vanilliné']],
+  ['farine', ['farine t45', 'farine t55', 'farine de blé t45', 'farine de blé t55', 'farine type 45',
+    'farine type 55', 'farine fluide', 'farine blanche', 'farine de froment']],
+  ['levure-chimique', ['levure chimique en poudre']],
+  ['extrait-de-vanille', ['arôme vanille', 'arôme de vanille', 'vanille liquide', 'extrait de vanille liquide',
+    'essence de vanille']],
+  ['miel', ['miel liquide', "miel d'acacia", 'miel de fleurs', 'miel crémeux']],
+];
+/** Entrées neuves du 2026-10-11 (autre article acheté : autre pot, autre bouteille, herbe sèche dont le nom seul est frais). */
+const ENTREES_NEUVES = new Set(['poivre-blanc', 'paprika-fort', 'graine-de-cumin', 'baton-de-cannelle', 'piment-en-poudre',
+  'graine-de-coriandre', 'graine-de-moutarde', 'ail-en-poudre', 'basilic-seche', 'persil-seche', 'romarin-seche',
+  'menthe-sechee', 'huile-d-arachide', 'huile-de-pepin-de-raisin', 'huile-de-coco', 'vinaigre-balsamique-blanc', 'tamari',
+  'sauce-d-huitre', 'moutarde-douce', 'estragon-seche', 'aneth-seche', 'ciboulette-sechee', 'sauge-sechee', 'sarriette',
+  'marjolaine', 'baie-de-genievre', 'carvi', 'cinq-epice', 'poivre-de-sichuan', 'melange-cinq-baie', 'piment-seche',
+  'flocon-de-piment', 'graine-de-fenouil', 'huile-de-noisette', 'vinaigre-de-framboise', 'mirin', 'sauce-piquante',
+  'sauce-hoisin']);
+
+test('14. écritures d’avant : chaque forme du dictionnaire au 2026-10-10 garde son idProduit (table figée)', () => {
+  assert.ok(FORMES_AVANT.size >= 700, `${FORMES_AVANT.size} formes`);
+  const changees = [...FORMES_AVANT].filter(([forme, id]) => idProduit(forme) !== id).map(([forme, id]) => `${forme} : ${id} → ${idProduit(forme)}`);
+  assert.deepEqual(changees, [], 'une coche, un « à racheter » ou un produit du foyer rangé sous l’ancien id serait perdu');
+  // Le corpus figé ne change pas d'identité non plus (aucun de ses noms n'est une écriture ajoutée).
+  const ajoutees = new Set(ECRITURES_AJOUTEES.flatMap(([, formesAjoutees]) => formesAjoutees));
+  for (const nom of CORPUS_INGREDIENTS) {
+    if (FORMES_AVANT.has(nom)) assert.equal(idProduit(nom), FORMES_AVANT.get(nom), nom);
+    assert.equal(ajoutees.has(nom), false, `${nom} : nom du corpus réécrit`);
+  }
+});
+
+test('14. écritures courantes : avant, un nom inconnu (sa propre clé, jamais un autre produit) ; après, l’id de l’entrée', () => {
+  const ancienIds = new Set(IDS_DICTIONNAIRE.filter((id) => !ENTREES_NEUVES.has(id)));
+  for (const id of ENTREES_NEUVES) assert.ok(IDS_DICTIONNAIRE.includes(id), `${id} : id figé`);
+  // ECRITURES_AJOUTEES est exactement la liste des formes ajoutées depuis la table figée, et la table d'avant les
+  // donnait toutes inconnues (calculée avec le code d'alors : sa propre clé, jamais un autre produit).
+  const actuelles = TOUTES.map(({ forme }) => forme).filter((forme) => !FORMES_AVANT.has(forme)).sort();
+  assert.deepEqual(ECRITURES_AJOUTEES.flatMap(([, formesAjoutees]) => formesAjoutees).sort(), actuelles, 'ECRITURES_AJOUTEES à jour');
+  assert.deepEqual([...AJOUTEES_AVANT.keys()].sort(), actuelles, 'AJOUTEES_AVANT (tests/donnees/formes-avant-placard.js) à jour');
+  for (const [forme, avant] of AJOUTEES_AVANT) assert.equal(avant, cleProduit(forme), `${forme} : était déjà « ${avant} » avant`);
+  const vues = new Set();
+  for (const [id, formesAjoutees] of ECRITURES_AJOUTEES) {
+    const entree = DICTIONNAIRE.find((e) => e.id === id);
+    assert.ok(entree, id);
+    for (const forme of formesAjoutees) {
+      assert.ok(formes(entree).includes(forme), `${forme} : forme de ${id}`);
+      assert.equal(vues.has(forme), false, forme);
+      vues.add(forme);
+      // Avant : clé seule (aucun mot homographe), qui n'était l'id d'aucun produit courant ni d'une autre entrée.
+      const avant = cleProduit(forme);
+      assert.equal(avant.split('-').some((mot) => HOMOGRAPHES.has(mot)), false, `${forme} : touche un homographe`);
+      assert.equal(ancienIds.has(avant) && avant !== id, false, `${forme} : était déjà « ${avant} »`);
+      // Après : l'entrée visée, sans question de nature.
+      assert.equal(idProduit(forme), id, forme);
+      const r = reconnaitre(forme);
+      assert.equal(r?.entree?.id, id, forme);
+      assert.notEqual(r?.ambigu, true, forme);
+    }
+  }
+  assert.ok(vues.size >= 150, `${vues.size} écritures`);
+  // Le constat de l'essai, nom par nom (avant → après).
+  for (const [nom, avant, apres] of [
+    ['Cannelle moulue', 'cannelle-moulue', 'cannelle'], ['poivre du moulin', 'poivre-du-moulin', 'poivre'],
+    ['poivre noir du moulin', 'poivre-noir-du-moulin', 'poivre'],
+    ['huile d’olive vierge extra', 'huile-d-olive-vierge-extra', 'huile-d-olive'],
+    ['HUILE D\'OLIVE EXTRA-VIERGE', 'huile-d-olive-extra-vierge', 'huile-d-olive'], ['huile végétale', 'huile-vegetale', 'huile-neutre'],
+    ['thym séché', 'thym-seche', 'thym'], ['Thyms séchés', 'thym-seche', 'thym'], ['cumin moulu', 'cumin-moulu', 'cumin'],
+    ['origan séché', 'origan-seche', 'origan'],
+  ]) {
+    assert.equal(cleProduit(nom), avant, nom);
+    assert.equal(idProduit(nom), apres, nom);
+  }
+  // Rien ne bouge pour les noms voisins : « pâtes sèches » reste des pâtes ; les herbes fraîches restent fraîches.
+  assert.equal(idProduit('pâtes sèches'), 'pate');
+  assert.equal(idProduit('pates seches'), 'pate');
+  assert.equal(idProduit('coriandre'), 'coriandre-fraiche');
+  assert.equal(idProduit('gingembre'), 'gingembre-frai');
+  assert.equal(idProduit('romarin'), 'romarin');
+  assert.equal(idProduit('basilic'), 'basilic-frai');
+  assert.equal(idProduit('crème de balsamique'), 'creme-de-balsamique');
+  // Un bouillon non dit reste une question ; la sauce d'huître est un fruit de mer (version végétale).
+  assert.equal(reconnaitre('bouillon cube'), null);
+  assert.deepEqual(DICTIONNAIRE.find((e) => e.id === 'sauce-d-huitre').marqueurs, ['fruits_de_mer']);
+});
