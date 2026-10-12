@@ -58,14 +58,17 @@ import { annonceRelecture, bilanRelecture, platsARelire } from './coeur/relectur
 import {
   lireSemaine, semaineAPreparer, semaineEnCours, appliquerChamps, estDansLaSemaine, texteDates, aDesPlats,
   ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage, EFFACER, statutSemaine,
-  validerDates, texteErreurDates,
+  validerDates, texteErreurDates, cheminSur,
 } from './coeur/semaine.js';
 import {
   listeDeCourses, ecrituresCoche, ecrituresCocheArticle, ecrituresRachat, preparerAjout, texteAjoutArticle,
   ERREURS_ARTICLE, phraseRestesAjoutes, ecrituresRecherche, preparerFinDesCourses, ecrituresDernieresFois,
   TEXTES_FIN_DES_COURSES, articleGardeDeLaLigne, ecrituresRouvrirListe,
+  ecrituresRayon, ecrituresPlacard, ecrituresHabituel, ecrituresSansHabituel, ecrituresSansHebdo, ecrituresPrecision,
+  ecrituresRayons, ERREURS_HABITUEL, ERREURS_PRECISION, TEXTES_T3D, texteRayon, textePlacard, ordreRayons,
+  placardDuFoyer, cleRecents, lireRecents as lireRecentsStockes, ajouterAuxRecents,
 } from './coeur/liste.js';
-import { indexDesRecettes } from './coeur/produits.js';
+import { indexDesRecettes, ficheProduit } from './coeur/produits.js';
 import { modeleDrive, ecrituresDrive, ERREURS_DRIVE, texteMotNote } from './coeur/drive.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
@@ -441,6 +444,15 @@ function produitsFoyerCourants() {
   return memoProduits.parId;
 }
 
+// Noms et rayons des recettes par produit (coeur/produits.js › indexDesRecettes), gardés tant que `etat.plats` est le
+// même tableau : la liste et la carte « 🏠 Placard » (T3d) le partagent.
+let memoIndex = { plats: null, index: null };
+
+function indexCourant() {
+  if (memoIndex.plats !== etat.plats || !memoIndex.index) memoIndex = { plats: etat.plats, index: indexDesRecettes(etat.plats) };
+  return memoIndex.index;
+}
+
 // Liste de courses (coeur/liste.js › listeDeCourses), calculée sur le téléphone, jamais écrite. Gardée tant que la
 // semaine montrée, les plats, les profils, les articles, les produits du foyer (T3b), les réglages du foyer
 // (`etat.donnees.reglages`, nouvel objet à chaque instantané : ordre des rayons, `frigoJoursDefaut`…) et le jour sont
@@ -461,12 +473,39 @@ function listeCourante(aujourdhui = dateDuJour()) {
         articles: etat.articles,
         reglages,
         evaluer: compat,
-        index: indexDesRecettes(etat.plats),
+        index: indexCourant(),
         maintenant: Date.now(),
       }),
     };
   }
   return memoListe.liste;
+}
+
+// Ordre des rayons du foyer (T3d, coeur/liste.js › ordreRayons : `reglages/foyer.rayons`, sinon l'ordre de départ), gardé
+// tant que `etat.donnees.reglages` est le même objet : `ctx.rayons` reste le même tableau d'un rendu à l'autre.
+let memoRayons = { reglages: undefined, rayons: null };
+
+function rayonsCourants() {
+  const reglages = etat.donnees.reglages ?? null;
+  if (memoRayons.reglages !== reglages || !memoRayons.rayons) {
+    memoRayons = { reglages, rayons: Object.freeze(ordreRayons(reglages)) };
+  }
+  return memoRayons.rayons;
+}
+
+// Carte « 🏠 Placard » de Réglages (T3d, coeur/liste.js › placardDuFoyer : produits que le foyer a mis de côté ou
+// éteints), gardée tant que les produits du foyer et les plats sont les mêmes tableaux.
+let memoPlacard = { produits: null, plats: null, placard: [] };
+
+function placardCourant() {
+  if (memoPlacard.produits !== etat.produits || memoPlacard.plats !== etat.plats) {
+    memoPlacard = {
+      produits: etat.produits,
+      plats: etat.plats,
+      placard: placardDuFoyer(produitsFoyerCourants(), { index: indexCourant() }),
+    };
+  }
+  return memoPlacard.placard;
 }
 
 /** Semaine lue par son identifiant (`semaineId`), ou la semaine montrée sans identifiant ; null si elle est inconnue. */
@@ -523,6 +562,12 @@ function instructionsAJour() {
  * même objet tant qu'ils ne changent pas : `produitsFoyer` de coeur/liste.js › ecrituresRecherche) ; `produitsCharges`,
  * `produitsDepuisCache`. Le drive du foyer se lit dans `reglages` (coeur/liste.js › reglagesCourses) ; le mode Drive /
  * Magasin est retenu par l'écran Courses sur ce téléphone.
+ * Placard, habituels et rayons (T3d) : `rayons`, l'ordre des 14 rayons du foyer (coeur/liste.js › ordreRayons :
+ * `reglages/foyer.rayons`, sinon l'ordre de départ ; tableau figé, même objet tant que les réglages ne changent pas) ;
+ * `placardFoyer`, la carte « 🏠 Placard » de Réglages (coeur/liste.js › placardDuFoyer : [{ produitId, nom, actif,
+ * deDepart, texte }], produits que le foyer a mis de côté ou éteints, triés par nom ; même objet tant que produits et
+ * plats ne changent pas). Habituels et préparations de chaque semaine se lisent dans `liste` (`liste.habituels`,
+ * `liste.preparations`, sautés compris) ; les récents de « Ajouter à la liste » par actions.lireRecents.
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -571,6 +616,8 @@ function contexteCourant() {
     produitsFoyer: produitsFoyerCourants(),
     produitsCharges: etat.produitsCharges,
     produitsDepuisCache: etat.produitsDepuisCache,
+    rayons: rayonsCourants(),
+    placardFoyer: placardCourant(),
     actions,
   };
 }
@@ -1549,8 +1596,10 @@ const actions = {
   /**
    * « Ajouter à la liste » : nouvel article `articles/{id}` ({ libelle, creePar, creeLe }), indépendant des semaines.
    * N'annonce rien : la feuille montre `message` dans sa zone `aria-live` (« ✓ « Piles » ajouté. » ; même produit déjà
-   * dans la liste, l'ajout restant fait : « ✓ « Lait » ajouté. Il y en a aussi 6 l pour vos plats. », `aussi` non nul :
-   * la feuille offre alors « Retirer », c'est-à-dire retirerArticle(id, { silencieux: true })).
+   * dans la liste, l'ajout restant fait : « ✓ « Lait » ajouté. Il y en a aussi 6 l pour vos plats. », T3d « … 6 l chaque
+   * semaine. » pour une ligne « Comme chaque semaine » ; `aussi` non nul : la feuille offre alors « Retirer »,
+   * c'est-à-dire retirerArticle(id, { silencieux: true })). T3d : le libellé rejoint les récents de ce compte sur ce
+   * téléphone (puces « Récents », actions.lireRecents).
    * → { code: 'ok', id, message, aussi } | { code: 'vide' | 'long', message } (« Écrivez le nom d'un article. »,
    *   « 60 caractères au plus. ») | { code: 'echec', message } (lot impossible à construire) | { code: 'refuse' }.
    */
@@ -1573,6 +1622,7 @@ const actions = {
     }
     ecrire(resultat.envoi, echec);
     etat.articles = [...etat.articles, { ...article, id: resultat.id }];
+    noterRecent(article.libelle);
     rendre();
     return { code: 'ok', id: resultat.id, message: texteAjoutArticle(article.libelle, prepare.aussi), aussi: prepare.aussi };
   },
@@ -1748,6 +1798,222 @@ const actions = {
     annoncer(TEXTES_FIN_DES_COURSES.rouverte);
     return { code: 'ok' };
   },
+
+  // ——— Placard, habituels et rayons (T3d, les deux membres, aperçu compris) ———
+  // Comme en T3a et T3b : chaque geste part par un lot (hors ligne : plus tard ; aucune transaction, rien ne doit être
+  // refusé en magasin), appliqué tout de suite sur ce téléphone, puis l'écran est redessiné. Les réglages d'un produit
+  // (`produits/{id}` : rayon, placard, habituel) s'écrivent par `set` + `mergeFields` du seul champ, sous le produit de la
+  // ligne, et s'effacent sous chacune de ses clés de repli qui en porte un (comme une coche et le mot cherché) ; ils
+  // servent les semaines suivantes. Rien n'est écrit à l'ouverture d'une feuille. Un échec est annoncé ; sinon aucune
+  // annonce : l'action rend `message` quand un texte du plan existe, que la feuille annonce après s'être fermée ;
+  // `annoncer: true` : l'action l'annonce elle-même.
+
+  /**
+   * « Rayon : Épicerie salée · Changer » (feuille ⋮ d'une ligne, d'un produit de « Déjà à la maison ? » ou d'un article ;
+   * feuille des 14 rayons) : `cle` (`ligne.cle`, `article:<id>` ou l'identifiant d'un article) ; `rayon`, un des 14
+   * (LIBELLES_RAYON). Le rayon de départ de la ligne (`ligne.rayonDeDepart`) efface le réglage du foyer ; un autre rayon
+   * est écrit sous son produit (`produits/{id}.rayon`) ; le même rayon : rien n'est écrit. La ligne change de rayon
+   * aussitôt, dans les deux modes.
+   * → { code: 'ok', rayon, message } (« Rayon : Épicerie salée. Il servira les semaines suivantes. ») | { code:
+   *   'chargement' (semaines, articles, plats, profils ou produits pas encore lus) | 'inutile' (clé inconnue de la
+   *   liste) | 'invalide' (rayon inconnu) | 'echec' (lot impossible à construire : annoncé) | 'refuse' }.
+   */
+  changerRayon(cle, rayon, { annoncer: annoncerMessage = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues() || !etat.produitsCharges) return { code: 'chargement' };
+    const ligne = ligneDeLaListe(cle);
+    if (!ligne) return { code: 'inutile' };
+    const resultat = ecrituresRayon(ligne, rayon, { produitsFoyer: produitsFoyerCourants() });
+    if (resultat.code) return resultat;
+    if (!ecrireLesProduits(resultat.ecritures, 'Le rayon n’a pas pu être enregistré. Réessayez.')) return { code: 'echec' };
+    const message = `${texteRayon(resultat.rayon)}. ${TEXTES_T3D.suivantes}`;
+    if (annoncerMessage) annoncer(message);
+    return { code: 'ok', rayon: resultat.rayon, message };
+  },
+  /**
+   * Interrupteur « Toujours dans mon placard » (feuille ⋮ d'une ligne, d'un produit de « Déjà à la maison ? » ou d'un
+   * article ; carte « 🏠 Placard » de Réglages) : `cle`, la clé d'une ligne ou d'un article de la liste, sinon
+   * l'identifiant d'un produit (`produitId` de ctx.placardFoyer, qui n'est pas forcément sur la liste) ; `oui` : allumé.
+   * Revenir au départ (allumer un produit du placard de départ, éteindre un produit qui n'en est pas) efface le réglage
+   * du foyer ; éteindre un produit du placard de départ écrit `produits/{id}.placard { actif: false }` (il revient sur la
+   * liste) ; allumer un autre produit écrit `{ actif: true }` (toujours mis de côté ; un produit à seuil garde son seuil
+   * de départ) ; rien qui change : rien n'est écrit. Décision du placard du 2026-10-11.
+   * → { code: 'ok', actif, message } (allumé : « Toujours mis de côté. » ou « Mis de côté si la semaine en demande 30 g
+   *   au plus. », coeur/liste.js › textePlacard ; éteint : null) | { code: 'chargement' | 'inutile' | 'invalide' |
+   *   'echec' | 'refuse' }.
+   */
+  reglerPlacard(cle, oui, { annoncer: annoncerMessage = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.produitsCharges) return { code: 'chargement' };
+    const cible = cibleDuProduit(cle, { parIdentifiant: true });
+    if (!cible) return { code: semainesLues() ? 'inutile' : 'chargement' };
+    const resultat = ecrituresPlacard(cible, oui, { produitsFoyer: produitsFoyerCourants() });
+    if (resultat.code) return resultat;
+    if (!ecrireLesProduits(resultat.ecritures, 'Ce réglage n’a pas pu être enregistré. Réessayez.')) return { code: 'echec' };
+    const placard = ficheProduit(cible.produitId, {
+      produitsFoyer: produitsFoyerCourants(), index: indexCourant(), saisie: cible.libelle ?? '', replis: cible.replis ?? [],
+    }).placard.valeur;
+    const message = resultat.actif ? textePlacard(placard, { produitId: cible.produitId }) || TEXTES_T3D.toujours : null;
+    if (annoncerMessage && message) annoncer(message);
+    return { code: 'ok', actif: resultat.actif, message };
+  },
+  /**
+   * Interrupteur « À acheter chaque semaine » et sa « Quantité (facultatif) » (feuille ⋮ d'une ligne ou d'un article) :
+   * `cle`, la clé de la ligne ou de l'article, sinon l'identifiant de son produit (une ligne qui n'existait que par son
+   * habituel part de la liste quand on l'éteint ou qu'on le saute ; la feuille restée ouverte le règle encore) ; `reglage` : { actif,
+   * qte (nombre, ou texte tapé : « 0,5 » ; vide : sans quantité), unite (LIBELLES_UNITE, avec une quantité) }. Allumé :
+   * `produits/{id}.habituel { actif: true, qte?, unite?, libelle }` (la ligne passe dans « Comme chaque semaine », ou sa
+   * quantité s'ajoute à la ligne de la semaine ; jamais mise de côté) ; éteint : `{ actif: false }`, quantité et nom
+   * gardés pour le rallumer ; rien qui change : rien n'est écrit. Allumé depuis un article ajouté à la main pas coché :
+   * l'article est retiré dans le même lot (il devient l'habituel : jamais deux lignes pour le même produit), et le
+   * résultat porte `converti: { article, cle }` (l'article tel qu'il était ; `cle`, celle de la ligne de l'habituel) ;
+   * éteint avec `remettre` (cet article), il revient dans le même lot (même identifiant) et le résultat porte `remis` (sa
+   * clé `article:<id>`).
+   * → { code: 'ok', habituel (la valeur écrite ; null : rien de réglé), converti?, remis? } | { code: 'quantite' | 'grande' | 'unite',
+   *   message } (ERREURS_HABITUEL : « Écrivez un nombre plus grand que 0. », « 999 au plus. », « Choisissez une
+   *   unité. » ; rien n'est écrit) | { code: 'chargement' | 'inutile' | 'invalide' | 'echec' | 'refuse' }.
+   */
+  reglerHabituel(cle, { actif = true, qte = null, unite = null, remettre = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues() || !etat.produitsCharges) return { code: 'chargement' };
+    // Une ligne qui n'existait que par son habituel part de la liste quand on l'éteint : la feuille, restée ouverte,
+    // le rallume par l'identifiant de son produit (le nom gardé avec l'habituel éteint le nomme encore).
+    const cible = cibleDuProduit(cle, { parIdentifiant: true });
+    if (!cible) return { code: 'inutile' };
+    const resultat = ecrituresHabituel(cible, { actif: Boolean(actif), qte, unite }, { produitsFoyer: produitsFoyerCourants() });
+    if (resultat.erreur) return { code: resultat.erreur, message: ERREURS_HABITUEL[resultat.erreur] ?? null };
+    if (resultat.code) return resultat;
+    // Allumé depuis un article ajouté à la main pas coché (relecture de T3d) : l'article devient l'habituel, retiré dans
+    // le même lot (jamais deux « Lait » sur la liste) ; la feuille garde l'article et le remet si on l'éteint aussitôt
+    // (`remettre`, même lot).
+    const article = cible.type === 'article' && !cible.cochee && Boolean(actif) && !cible.habituel
+      ? etat.articles.find((a) => a?.id === cible.articleId) ?? null : null;
+    const aRemettre = !actif && remettre && typeof remettre === 'object' && typeof remettre.id === 'string'
+      && !etat.articles.some((a) => a?.id === remettre.id) ? remettre : null;
+    const articles = { supprimer: article ? [article.id] : [], remettre: aRemettre ? [aRemettre] : [] };
+    if (!ecrireLesProduits(resultat.ecritures, 'Ce réglage n’a pas pu être enregistré. Réessayez.', { articles })) {
+      return { code: 'echec' };
+    }
+    return {
+      code: 'ok',
+      habituel: resultat.habituel,
+      ...(article ? { converti: { article, cle: cible.produitId } } : {}),
+      ...(aRemettre ? { remis: `article:${aRemettre.id}` } : {}),
+    };
+  },
+  /**
+   * « Pas cette semaine » d'un produit « À acheter chaque semaine » (feuille ⋮ ; les deux membres) : `cle`, l'identifiant
+   * du produit (`liste.habituels[].produitId`, un habituel sauté n'ayant plus forcément de ligne) ou la clé de sa
+   * ligne ; `oui` : sauté. Écrit `sansHabituel.<produitId>` de la semaine montrée (`update` d'un seul chemin), ou
+   * l'efface ; la semaine suivante, il revient de lui-même. Déjà dans l'état voulu : rien n'est écrit.
+   * → { code: 'ok' } | { code: 'chargement' | 'invalide' (aucune semaine montrée) | 'inutile' (pas un habituel actif) |
+   *   'echec' | 'refuse' }.
+   */
+  sauterHabituel(cle, oui) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues() || !etat.produitsCharges) return { code: 'chargement' };
+    const semaine = semaineCourante();
+    if (!semaine) return { code: 'invalide' };
+    const liste = listeCourante();
+    const produitId = liste.habituels.some((h) => h.produitId === cle) ? cle : ligneDeLaListe(cle)?.produitId;
+    const habituel = liste.habituels.find((h) => h.produitId === produitId);
+    if (!habituel) return { code: 'inutile' };
+    if (habituel.saute === Boolean(oui)) return { code: 'ok' };
+    const ecritures = ecrituresSansHabituel(semaine, habituel.produitId, Boolean(oui), { cles: habituel.cles });
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'La liste n’a pas pu être mise à jour. Réessayez.')) return { code: 'echec' };
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * « Pas cette semaine » d'une préparation de chaque semaine (Semaine, « Chaque semaine aussi : Yaourts maison » ;
+   * les deux membres) : `platId` (`liste.preparations[].platId`) ; `oui` : sautée. Écrit `sansHebdo.<platId>` de la
+   * semaine montrée (`update` d'un seul chemin), ou l'efface ; la semaine suivante, elle revient d'elle-même. Déjà dans
+   * l'état voulu : rien n'est écrit.
+   * → { code: 'ok' } | { code: 'chargement' | 'invalide' (aucune semaine montrée) | 'inutile' (pas une préparation de
+   *   chaque semaine) | 'echec' | 'refuse' }.
+   */
+  sauterPreparation(platId, oui) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineCourante();
+    if (!semaine) return { code: 'invalide' };
+    const preparation = listeCourante().preparations.find((p) => p.platId === platId);
+    if (!preparation) return { code: 'inutile' };
+    if (preparation.saute === Boolean(oui)) return { code: 'ok' };
+    const ecritures = ecrituresSansHebdo(semaine, platId, Boolean(oui));
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'La semaine n’a pas pu être mise à jour. Réessayez.')) return { code: 'echec' };
+    rendre();
+    return { code: 'ok' };
+  },
+  /**
+   * « Précision (facultatif) » d'un article ajouté à la main (feuille ⋮ ; les deux membres) : `cle` (`article:<id>` ou
+   * son identifiant) ; `saisie` (40 caractères au plus ; vide : effacée). `update` du seul champ `precision` (un article
+   * supprimé entre-temps n'est jamais recréé : refus silencieux). Aucune annonce : la ligne montre la précision aussitôt.
+   * → { code: 'ok', precision (null : effacée) } | { code: 'inchange' } (rien n'est écrit) | { code: 'long', message }
+   *   (ERREURS_PRECISION : « 40 caractères au plus. ») | { code: 'chargement' | 'inutile' | 'invalide' | 'echec' |
+   *   'refuse' }.
+   */
+  changerPrecision(cle, saisie) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.articlesCharges) return { code: 'chargement' };
+    const article = listeCourante().articles.find((a) => a.cle === cle || a.articleId === cle);
+    if (!article) return { code: 'inutile' };
+    const resultat = ecrituresPrecision(article, saisie);
+    if (resultat.erreur) return { code: resultat.erreur, message: ERREURS_PRECISION[resultat.erreur] ?? null };
+    if (resultat.code) return resultat;
+    const echec = `La précision de «\u00A0${article.nom}\u00A0» n’a pas pu être enregistrée. Réessayez.`;
+    let envoi;
+    try {
+      envoi = donnees.modifierArticle(resultat.articleId, resultat.champs);
+    } catch {
+      annoncer(echec);
+      return { code: 'echec' };
+    }
+    ecrire(envoi, echec);
+    etat.articles = etat.articles.map((a) => (a?.id === resultat.articleId ? appliquerChamps(a, resultat.champs) : a));
+    rendre();
+    const precision = resultat.champs.precision;
+    return { code: 'ok', precision: precision === EFFACER ? null : precision };
+  },
+  /**
+   * « Enregistrer » de « Ordre des rayons » (Courses, mode Magasin ; carte de Réglages ; les deux membres) : `ordre`,
+   * les rayons dans l'ordre voulu (« ↑ » et « ↓ » : coeur/liste.js › monterRayon, descendreRayon ; « Remettre l’ordre
+   * de départ » : RAYONS_DE_DEPART). `update` du seul champ `reglages/foyer.rayons` (la liste entière des 14 : rare ;
+   * jamais un `set` du document) ; l'ordre de départ l'efface ; le même ordre : rien n'est écrit. Appliqué tout de
+   * suite (ctx.rayons, mode Magasin).
+   * → { code: 'ok', rayons (l'ordre des 14), message } (« Ordre des rayons enregistré. ») | { code: 'inchange' } |
+   *   { code: 'chargement' (réglages pas encore lus) | 'invalide' | 'echec' | 'refuse' }.
+   */
+  enregistrerOrdreRayons(ordre, { annoncer: annoncerMessage = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.donnees.reglages) return { code: 'chargement' };
+    const ecritures = ecrituresRayons(ordre, { reglages: etat.donnees.reglages });
+    if (ecritures.code) return ecritures;
+    if (!ecrireLesReglages(ecritures.champs, 'L’ordre des rayons n’a pas pu être enregistré. Réessayez.')) {
+      return { code: 'echec' };
+    }
+    rendre();
+    const message = 'Ordre des rayons enregistré.';
+    if (annoncerMessage) annoncer(message);
+    return { code: 'ok', rayons: [...rayonsCourants()], message };
+  },
+  /**
+   * Puces « Récents » de « Ajouter à la liste » : les RECENTS_MAX (8) derniers articles ajoutés sur ce téléphone par ce
+   * compte (`localStorage`, clé coeur/liste.js › cleRecents), le plus récent d'abord, un par produit. Un toucher sur une
+   * puce l'ajoute par actions.ajouterArticle. Stockage bloqué ou illisible : [] (rien ne casse).
+   * → [libellé].
+   */
+  lireRecents() {
+    const cle = cleRecents(etat.utilisateur?.uid);
+    if (!cle) return [];
+    try {
+      return lireRecentsStockes(localStorage.getItem(cle));
+    } catch {
+      return [];
+    }
+  },
 };
 
 // ——— Semaine et liste de courses (T3a) ———
@@ -1867,7 +2133,78 @@ function appliquerProduits(ecritures) {
 }
 
 /**
- * Réglages des courses (`drive`, préparés par coeur/drive.js › ecrituresDrive) : envoyés par un lot (donnees.js ›
+ * Produit visé par un réglage de la feuille ⋮ (T3d) : la ligne ou l'article de la liste (`cle` : `ligne.cle`, placard
+ * compris ; `article:<id>` ou `<id>`), sinon un habituel de la semaine par l'identifiant de son produit (sauté, il n'a
+ * plus forcément de ligne : { produitId, libelle, replis }), sinon, avec `parIdentifiant` (carte « 🏠 Placard » de
+ * Réglages ; feuille ⋮ restée ouverte sur une ligne partie de la liste), l'identifiant d'un produit (`^[a-z0-9-]+$` :
+ * { produitId, libelle: '', replis: [] }). → l'objet lu par coeur/liste.js (ecrituresRayon, ecrituresPlacard,
+ * ecrituresHabituel), ou null.
+ */
+function cibleDuProduit(cle, { parIdentifiant = false } = {}) {
+  if (typeof cle !== 'string' || !cle) return null;
+  if (semainesLues()) {
+    const ligne = ligneDeLaListe(cle);
+    if (ligne) return ligne;
+    const habituel = listeCourante().habituels.find((h) => h.produitId === cle);
+    if (habituel) {
+      return {
+        produitId: habituel.produitId,
+        libelle: habituel.libelle,
+        replis: habituel.cle !== habituel.produitId ? [habituel.cle] : [],
+      };
+    }
+  }
+  return parIdentifiant && cheminSur(cle) ? { produitId: cle, libelle: '', replis: [] } : null;
+}
+
+/**
+ * Réglages de produits du foyer ([{ id, champs }], coeur/liste.js : mot cherché, rayon, placard, habituel) : envoyés par
+ * un lot (donnees.js › ecrireProduits : `set` + `mergeFields` des seuls champs ; hors ligne : plus tard ; un refus du
+ * serveur est annoncé avec `echec`), puis appliqués tout de suite sur ce téléphone et l'écran redessiné. `articles` :
+ * { supprimer: [id], remettre: [article] } dans le même lot (« À acheter chaque semaine » d'un article à la main). Rien à
+ * écrire : vrai, sans rien envoyer. Lot impossible à construire : `echec` annoncé, rien d'appliqué. → vrai si tout est
+ * fait.
+ */
+function ecrireLesProduits(ecritures, echec, { articles = null } = {}) {
+  const produits = Array.isArray(ecritures) ? ecritures : [];
+  const supprimer = Array.isArray(articles?.supprimer) ? articles.supprimer : [];
+  const remettre = Array.isArray(articles?.remettre) ? articles.remettre : [];
+  if (!produits.length && !supprimer.length && !remettre.length) return true;
+  let envoi;
+  try {
+    envoi = donnees.ecrireProduits(produits, { supprimerArticles: supprimer, remettreArticles: remettre });
+  } catch {
+    annoncer(echec);
+    return false;
+  }
+  ecrire(envoi, echec);
+  appliquerProduits(produits);
+  if (supprimer.length || remettre.length) {
+    const retires = new Set([...supprimer, ...remettre.map((a) => a.id)]);
+    etat.articles = [...etat.articles.filter((a) => !retires.has(a?.id)), ...remettre];
+  }
+  rendre();
+  return true;
+}
+
+/**
+ * Retient `libelle` parmi les récents de « Ajouter à la liste » (T3d) pour ce compte sur ce téléphone (`localStorage`,
+ * coeur/liste.js › cleRecents, ajouterAuxRecents : lui d'abord, RECENTS_MAX au plus). Stockage plein ou bloqué : rien
+ * (les récents ne sont qu'une commodité).
+ */
+function noterRecent(libelle) {
+  const cle = cleRecents(etat.utilisateur?.uid);
+  if (!cle) return;
+  try {
+    localStorage.setItem(cle, JSON.stringify(ajouterAuxRecents(localStorage.getItem(cle), libelle)));
+  } catch {
+    // Stockage plein ou bloqué : les récents ne sont pas retenus cette fois.
+  }
+}
+
+/**
+ * Réglages des courses (`drive`, préparés par coeur/drive.js › ecrituresDrive ; T3d : `rayons`, coeur/liste.js ›
+ * ecrituresRayons) : envoyés par un lot (donnees.js ›
  * ecrireReglages ; hors ligne : plus tard ; un refus du serveur est annoncé avec `echec`), puis appliqués tout de suite
  * sur ce téléphone. Lot impossible à construire : `echec` annoncé, rien d'appliqué. → vrai si le lot est parti.
  */
@@ -2388,6 +2725,9 @@ function oublierDonnees() {
   memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
   memoListe = { cles: null, liste: null };
   memoProduits = { produits: null, parId: Object.freeze({}) };
+  memoIndex = { plats: null, index: null };
+  memoRayons = { reglages: undefined, rayons: null };
+  memoPlacard = { produits: null, plats: null, placard: [] };
 }
 
 async function seDeconnecter() {

@@ -21,7 +21,7 @@ import { VERSION_REPERES } from './coeur/vocabulaire.js';
 import { lireIdDemande } from './coeur/demandes.js';
 import { EFFACER, cheminSur, champsValides, jourValide, ecartJours, DUREE_MAX_JOURS } from './coeur/semaine.js';
 import { ARTICLE_MAX, PRECISION_MAX } from './coeur/liste.js';
-import { CHAMPS_PRODUIT } from './coeur/sauvegarde.js';
+import { CHAMPS_PRODUIT, lireChampProduit, lireOrdreRayons } from './coeur/sauvegarde.js';
 import { RECHERCHE_MAX, lireDrive } from './coeur/drive.js';
 
 let arreterSuiviReglages = null;
@@ -583,25 +583,29 @@ function versFirestore(valeur) {
 }
 
 const COLLECTIONS_RESTAUREES = new Set(['plats', 'profils', 'produits', 'reglages']);
-// Réglages du foyer qu'une restauration peut écrire (T3b : le drive), par `update` de ces seuls champs : jamais un `set`
-// du document, le gestionnaire, le sujet des notifications ni la date de sauvegarde ne sont touchés.
-const REGLAGES_RESTAURES = new Set(['drive']);
+// Réglages du foyer qu'une restauration peut écrire (T3b : le drive ; T3d : l'ordre des rayons), par `update` de ces
+// seuls champs : jamais un `set` du document, le gestionnaire, le sujet des notifications ni la date de sauvegarde ne
+// sont touchés.
+const REGLAGES_RESTAURES = new Set(['drive', 'rayons']);
 
 /**
- * Vrai si une écriture de restauration sur `produits` ou `reglages` reste dans ce qui est permis (T3b) : un produit
- * d'identifiant `^[a-z0-9-]+$` et de champs CHAMPS_PRODUIT seulement ; `reglages/foyer` par `update` des seuls champs
- * REGLAGES_RESTAURES (un drive lisible : { nom, urlRecherche }), sans rien effacer. Les autres collections ne sont pas
+ * Vrai si une écriture de restauration sur `produits` ou `reglages` reste dans ce qui est permis (T3b, T3d) : un
+ * produit d'identifiant `^[a-z0-9-]+$`, de champs CHAMPS_PRODUIT seulement, chacun lisible tel quel (lireChampProduit :
+ * mot cherché, rayon, placard, habituel) ; `reglages/foyer` par `update` des seuls champs REGLAGES_RESTAURES (un drive
+ * lisible : { nom, urlRecherche } ; un ordre des 14 rayons), sans rien effacer. Les autres collections ne sont pas
  * vérifiées ici.
  */
 function ecritureRestaurablePermise({ collection: nom, id, mode, donnees, effacer }) {
   const champs = Object.keys(estTable(donnees) ? donnees : {});
   if (nom === 'produits') {
-    return cheminSur(id) !== null && champs.length > 0 && champs.every((champ) => CHAMPS_PRODUIT.includes(champ))
-      && !(effacer ?? []).length;
+    return cheminSur(id) !== null && champs.length > 0
+      && champs.every((champ) => CHAMPS_PRODUIT.includes(champ) && valeurDeProduitSure(champ, donnees[champ]))
+      && !champs.some((champ) => donnees[champ] === EFFACER) && !(effacer ?? []).length;
   }
   if (nom === 'reglages') {
     return id === 'foyer' && mode === 'update' && champs.length > 0 && champs.every((champ) => REGLAGES_RESTAURES.has(champ))
-      && (!champs.includes('drive') || driveSur(donnees.drive)) && !(effacer ?? []).length;
+      && (!champs.includes('drive') || driveSur(donnees.drive))
+      && (!champs.includes('rayons') || rayonsSurs(donnees.rayons)) && !(effacer ?? []).length;
   }
   return true;
 }
@@ -925,8 +929,9 @@ function verifierNouvelArticle(donnees) {
 
 /**
  * Écritures d'un geste sur une semaine, préparées par coeur/semaine.js (ecrituresAjout, ecrituresRetrait,
- * ecrituresRemise, ecrituresStyle, ecrituresReglage) ou coeur/liste.js (ecrituresCoche, ecrituresRachat), ou par
- * app.js › changerDates (coeur/semaine.js › validerDates), en un lot :
+ * ecrituresRemise, ecrituresStyle, ecrituresReglage) ou coeur/liste.js (ecrituresCoche, ecrituresRachat ; T3d :
+ * ecrituresSansHabituel, ecrituresSansHebdo, « Pas cette semaine » : `sansHabituel.<produitId>`, `sansHebdo.<platId>`),
+ * ou par app.js › changerDates (coeur/semaine.js › validerDates), en un lot :
  * - `creation` ({ id, donnees: { debut, fin, creePar?, creeLe } }, seulement au premier plat) : `set` fusionné de ces
  *   champs seulement (jamais de statut : deux téléphones qui créent la même semaine le même jour se fusionnent) ;
  * - `champs` : `update` des chemins pointés (`plats.<id>.ajouteLe`, `plats.<id>.mange.<p>`,
@@ -1001,7 +1006,8 @@ export function ajouterArticle(donnees) {
 }
 
 /**
- * Coche (`coche: { le }` ou EFFACER) ou précision (texte de PRECISION_MAX caractères au plus, ou EFFACER) d'un article :
+ * Coche (`coche: { le }` ou EFFACER) ou précision (T3d, « Précision (facultatif) » : texte de PRECISION_MAX caractères au
+ * plus, ou EFFACER ; coeur/liste.js › ecrituresPrecision) d'un article :
  * `update` de ces seuls champs. Un article supprimé entre-temps par l'autre téléphone n'est jamais recréé à moitié :
  * le refus `not-found` est silencieux (promesse résolue). Lève une erreur avant tout envoi si l'identifiant ou un champ
  * est refusé. → promesse de l'envoi (rejetée pour un autre refus).
@@ -1063,25 +1069,44 @@ export function remettreArticles(docs) {
 // Toujours par lot (appliqué tout de suite sur le téléphone, envoyé au retour du réseau ; aucune transaction : rien ne
 // doit être refusé en magasin), seulement sur un geste.
 
-/** Vrai pour une valeur de champ d'un produit (`produits/{id}`) : EFFACER, ou mot cherché de 1 à RECHERCHE_MAX caractères. */
+/**
+ * Vrai pour une valeur de champ d'un produit (`produits/{id}`) : EFFACER, un mot cherché de 1 à RECHERCHE_MAX caractères
+ * (T3b), ou (T3d) un rayon, un placard { actif } ou un habituel { actif, qte?, unite?, libelle? } écrits tels que
+ * coeur/sauvegarde.js › lireChampProduit les relit à l'identique (aucun champ de plus, aucune valeur illisible).
+ */
 function valeurDeProduitSure(champ, valeur) {
   if (valeur === EFFACER) return true;
   if (champ === 'rechercheDrive') return typeof valeur === 'string' && valeur.trim() !== '' && valeur.length <= RECHERCHE_MAX;
-  return !contientIndefini(valeur) && !effacerImbrique(valeur);
+  if (contientIndefini(valeur) || effacerImbrique(valeur)) return false;
+  const lu = lireChampProduit(champ, valeur);
+  return lu !== null && texteStable(lu) === texteStable(valeur);
 }
 
 /**
- * Différences voulues par le foyer sur des produits (« Au drive, je cherche », T3b ; préparées par coeur/liste.js ›
- * ecrituresRecherche : [{ id, champs }]), en un seul lot : pour chacun, `set` + `mergeFields` des seuls champs donnés
+ * Différences voulues par le foyer sur des produits (« Au drive, je cherche », T3b ; T3d : « Rayon : … · Changer »,
+ * « Toujours dans mon placard », « À acheter chaque semaine » ; préparées par coeur/liste.js › ecrituresRecherche,
+ * ecrituresRayon, ecrituresPlacard, ecrituresHabituel : [{ id, champs }]), en un seul lot : pour chacun, `set` +
+ * `mergeFields` des seuls champs donnés
  * (EFFACER → deleteField() : retour au défaut) ; les autres champs du produit restent, et un produit absent est créé
  * avec ce seul champ. Jamais une valeur recopiée des produits courants ni des recettes.
+ * Dans le même lot (T3d, « À acheter chaque semaine » allumé depuis un article ajouté à la main : l'article devient
+ * l'habituel, jamais deux « Lait » ; éteint aussitôt, il revient) : `supprimerArticles` (identifiants d'articles) et
+ * `remettreArticles` (articles tels qu'ils étaient, { id, ...champs }, `set` sans fusion, même identifiant).
  * Lève une erreur avant tout envoi si un identifiant n'est pas `^[a-z0-9-]+$`, si un champ n'est pas un champ de produit
- * (coeur/sauvegarde.js › CHAMPS_PRODUIT) ou si une valeur est refusée, ou s'il n'y a rien à écrire. Hors ligne : part
- * plus tard. → promesse de l'envoi.
+ * (coeur/sauvegarde.js › CHAMPS_PRODUIT) ou si une valeur est refusée, si un article est refusé, ou s'il n'y a rien à
+ * écrire. Hors ligne : part plus tard. → promesse de l'envoi.
  */
-export function ecrireProduits(ecritures) {
+export function ecrireProduits(ecritures, { supprimerArticles: aSupprimer = [], remettreArticles: aRemettre = [] } = {}) {
   const liste = Array.isArray(ecritures) ? ecritures : [];
-  if (!liste.length) throw new Error('Rien à écrire dans les produits.');
+  const supprimes = [...new Set((Array.isArray(aSupprimer) ? aSupprimer : []).filter(idDocumentSur))];
+  if (supprimes.length !== (Array.isArray(aSupprimer) ? new Set(aSupprimer).size : 0)) throw new Error('Article refusé.');
+  const remis = (Array.isArray(aRemettre) ? aRemettre : []).map((article) => {
+    if (!estTable(article) || !idDocumentSur(article.id)) throw new Error('Article refusé.');
+    const { id, ...champs } = article;
+    if (contientIndefini(champs) || effacerImbrique(champs)) throw new Error('Article refusé : valeur indéfinie.');
+    return { id, champs };
+  });
+  if (!liste.length && !supprimes.length && !remis.length) throw new Error('Rien à écrire dans les produits.');
   const preparees = liste.map((ecriture) => {
     const id = ecriture?.id;
     const champs = ecriture?.champs;
@@ -1096,6 +1121,8 @@ export function ecrireProduits(ecritures) {
   for (const { id, document } of preparees) {
     lot.set(doc(db, 'produits', id), document, { mergeFields: Object.keys(document) });
   }
+  for (const id of supprimes) lot.delete(doc(db, 'articles', id));
+  for (const { id, champs } of remis) lot.set(doc(db, 'articles', id), champs);
   return lot.commit();
 }
 
@@ -1104,9 +1131,9 @@ export function ecrireProduit(id, champs) {
   return ecrireProduits([{ id, champs }]);
 }
 
-// Réglages du foyer que les deux membres écrivent depuis les écrans des courses (T3b : le drive ; T3d : rayons ; T3e :
-// apéro), par `update` de ces chemins seulement.
-const REGLAGES_COURSES = new Set(['drive']);
+// Réglages du foyer que les deux membres écrivent depuis les écrans des courses (T3b : le drive ; T3d : l'ordre des
+// rayons ; T3e : apéro), par `update` de ces chemins seulement.
+const REGLAGES_COURSES = new Set(['drive', 'rayons']);
 
 /** Vrai pour un drive écrit tel que coeur/drive.js › lireDrive le relit : { nom, urlRecherche } exactement. */
 function driveSur(valeur) {
@@ -1116,16 +1143,28 @@ function driveSur(valeur) {
 }
 
 /**
- * Réglages des courses du foyer (T3b : `drive`, préparé par coeur/drive.js › ecrituresDrive) : `update` de
- * `reglages/foyer`, chemins validés (`drive` seulement en T3b ; EFFACER → deleteField()). Jamais un `set` du document :
- * le gestionnaire, le sujet des notifications et les autres réglages restent. Lève une erreur avant tout envoi si un
- * chemin ou une valeur est refusé (drive illisible). Hors ligne : part plus tard. → promesse de l'envoi.
+ * Vrai pour un ordre des rayons écrit tel que coeur/sauvegarde.js › lireOrdreRayons le relit (T3d) : les 14 rayons,
+ * chacun une fois, rien d'autre (coeur/liste.js › ecrituresRayons écrit toujours la liste entière).
+ */
+function rayonsSurs(valeur) {
+  if (!Array.isArray(valeur)) return false;
+  const lu = lireOrdreRayons(valeur);
+  return Boolean(lu) && lu.length === valeur.length && lu.every((rayon, i) => rayon === valeur[i]);
+}
+
+/**
+ * Réglages des courses du foyer (T3b : `drive`, préparé par coeur/drive.js › ecrituresDrive ; T3d : `rayons`, l'ordre
+ * des 14 rayons, préparé par coeur/liste.js › ecrituresRayons) : `update` de `reglages/foyer`, chemins validés (`drive`
+ * et `rayons` seulement ; EFFACER → deleteField() : retour au défaut). Jamais un `set` du document : le gestionnaire, le
+ * sujet des notifications et les autres réglages restent. Lève une erreur avant tout envoi si un chemin ou une valeur
+ * est refusé (drive illisible, ordre qui n'a pas les 14 rayons une fois chacun). Hors ligne : part plus tard.
+ * → promesse de l'envoi.
  */
 export function ecrireReglages(champs) {
   const entrees = estTable(champs) ? Object.entries(champs) : [];
   const ok = entrees.length > 0 && entrees.every(([chemin, valeur]) => REGLAGES_COURSES.has(chemin)
-    && (valeur === EFFACER || (chemin === 'drive' && driveSur(valeur))));
-  if (!ok) throw new Error('Réglage refusé : seulement le drive du foyer.');
+    && (valeur === EFFACER || (chemin === 'drive' && driveSur(valeur)) || (chemin === 'rayons' && rayonsSurs(valeur))));
+  if (!ok) throw new Error('Réglage refusé : seulement le drive ou l’ordre des rayons du foyer.');
   const lot = writeBatch(db);
   lot.update(doc(db, 'reglages', 'foyer'), Object.fromEntries(entrees.map(([chemin, valeur]) => [chemin, versChamp(valeur)])));
   return lot.commit();

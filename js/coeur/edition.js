@@ -329,6 +329,7 @@ export function catalogueProduits(plats) {
 }
 
 const memoireAvecDictionnaire = new WeakMap();
+const memoireAvecHorsCuisine = new WeakMap();
 
 /**
  * Catalogue des suggestions de « Modifier » (T3-0) : celui du foyer (catalogueProduits), puis les produits courants
@@ -337,14 +338,17 @@ const memoireAvecDictionnaire = new WeakMap();
  * l'emporte en bloc. Éléments des produits courants : `origine: 'dictionnaire'`, `id`, `nomCourant`, `alias`, sans
  * quantité. Seulement pour `suggestions` : la reconnaissance part du catalogue du foyer seul. Même tableau `plats` →
  * même résultat (identité), sans recalcul.
+ * Sans les produits hors cuisine (T3d : piles, lessive), jamais proposés pour une recette ; `horsCuisine: true` les
+ * ajoute (élément marqué `horsCuisine: true`) : suggestions de « Ajouter à la liste » (Courses).
  */
-export function catalogueAvecDictionnaire(plats) {
-  if (Array.isArray(plats) && memoireAvecDictionnaire.has(plats)) return memoireAvecDictionnaire.get(plats);
+export function catalogueAvecDictionnaire(plats, { horsCuisine = false } = {}) {
+  const memoire = horsCuisine ? memoireAvecHorsCuisine : memoireAvecDictionnaire;
+  if (Array.isArray(plats) && memoire.has(plats)) return memoire.get(plats);
   const foyer = catalogueProduits(plats);
-  const courants = elementsDuDictionnaire()
+  const courants = elementsDuDictionnaire({ horsCuisine })
     .filter((element) => !formesDe(element).some((forme) => connuDuFoyer(forme, foyer)));
   const catalogue = [...foyer, ...courants];
-  if (Array.isArray(plats)) memoireAvecDictionnaire.set(plats, catalogue);
+  if (Array.isArray(plats)) memoire.set(plats, catalogue);
   return catalogue;
 }
 

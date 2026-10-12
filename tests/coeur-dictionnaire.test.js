@@ -31,7 +31,7 @@ const lire = (chemin) => readFileSync(fileURLToPath(new URL(`../${chemin}`, impo
  */
 const BUDGET_OCTETS = 90_000;
 
-const CHAMPS = ['id', 'nom', 'rayon', 'unite', 'marqueurs', 'forme', 'role', 'alias', 'placard', 'equivalences'];
+const CHAMPS = ['id', 'nom', 'rayon', 'unite', 'marqueurs', 'forme', 'role', 'alias', 'placard', 'equivalences', 'recette'];
 /** Charcuteries qui ne sont pas de porc (point 2) : bœuf séché, merguez (bœuf et mouton), volaille. */
 const CHARCUTERIE_SANS_PORC = new Set(['bresaola', 'viande des grisons', 'merguez', 'saucisse de volaille', 'blanc de dinde']);
 /** Noms ambigus, jamais une forme du dictionnaire (la question « C'est… ? » reste). */
@@ -77,7 +77,8 @@ test('1. chaque entrée est un ingrédient valide, sans erreur ni avertissement'
     // Apostrophes droites, comme Claude les écrit ; jamais d'espace insécable.
     for (const forme of formes(entree)) assert.equal(/[’\u00A0\u202F]/.test(forme), false, `« ${forme} » : apostrophe droite, espaces simples`);
     assert.deepEqual(Object.keys(entree).filter((cle) => !CHAMPS.includes(cle)), [], entree.id);
-    // Listes vides omises.
+    // Listes vides omises ; `recette` (T3d) : `false` seulement (produit hors cuisine), omis sinon.
+    if ('recette' in entree) assert.equal(entree.recette, false, `${entree.id} : recette: false ou rien`);
     if ('marqueurs' in entree) assert.ok(entree.marqueurs.length > 0, `${entree.id} : marqueurs vides à omettre`);
     if ('alias' in entree) assert.ok(entree.alias.length > 0, `${entree.id} : alias vides à omettre`);
     assert.ok(Object.isFrozen(entree), entree.id);
@@ -459,6 +460,7 @@ const HORS_FIXTURES = new Map([
   ['pâte', 'homographe exprès (T3a : clé de repli)'], ['pâté', 'homographe exprès (T3a : clé de repli)'],
   ['pate', 'homographe exprès (T3a : clé de repli)'], ['the', 'thé sans accent, exprès (T3a : clé de repli)'],
   ['pate brisee', 'pâte brisée sans accents, exprès (T3a : clé de repli)'],
+  ['tofu fumé maison', 'produit du foyer inconnu exprès (T3d : nom gardé avec le placard)'],
 ]);
 
 /**
@@ -860,8 +862,11 @@ test('14. écritures courantes : avant, un nom inconnu (sa propre clé, jamais u
   const ancienIds = new Set(IDS_DICTIONNAIRE.filter((id) => !ENTREES_NEUVES.has(id)));
   for (const id of ENTREES_NEUVES) assert.ok(IDS_DICTIONNAIRE.includes(id), `${id} : id figé`);
   // ECRITURES_AJOUTEES est exactement la liste des formes ajoutées depuis la table figée, et la table d'avant les
-  // donnait toutes inconnues (calculée avec le code d'alors : sa propre clé, jamais un autre produit).
-  const actuelles = TOUTES.map(({ forme }) => forme).filter((forme) => !FORMES_AVANT.has(forme)).sort();
+  // donnait toutes inconnues (calculée avec le code d'alors : sa propre clé, jamais un autre produit). Les produits hors
+  // cuisine (T3d, `recette: false`, jamais reconnus dans une recette) ont leur propre table figée :
+  // tests/coeur-t3d-produits.test.js.
+  const actuelles = TOUTES.filter(({ entree }) => entree.recette !== false).map(({ forme }) => forme)
+    .filter((forme) => !FORMES_AVANT.has(forme)).sort();
   assert.deepEqual(ECRITURES_AJOUTEES.flatMap(([, formesAjoutees]) => formesAjoutees).sort(), actuelles, 'ECRITURES_AJOUTEES à jour');
   assert.deepEqual([...AJOUTEES_AVANT.keys()].sort(), actuelles, 'AJOUTEES_AVANT (tests/donnees/formes-avant-placard.js) à jour');
   for (const [forme, avant] of AJOUTEES_AVANT) assert.equal(avant, cleProduit(forme), `${forme} : était déjà « ${avant} » avant`);

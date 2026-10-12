@@ -1,8 +1,12 @@
 // Liste de courses (T3a, CLAUDE.md §9 « Liste ») : calculée sur chaque téléphone, jamais écrite. On n'écrit que les
 // gestes : les coches (`coches.<cle>` : ce qui a été pris), « À racheter » (`racheter.<cle>`), les articles ajoutés à
 // la main (`articles/{id}`), et en T3b le mot cherché au drive (`produits/{id}.rechercheDrive`) et « Courses
-// terminées » (statut de la semaine, articles achetés retirés, `derniereFois` des plats). Logique pure : ni DOM ni
+// terminées » (statut de la semaine, articles achetés retirés, `derniereFois` des plats) ; en T3d, les réglages d'un
+// produit (`produits/{id}.rayon`, `.placard`, `.habituel`), « Pas cette semaine » (`sansHabituel.<id>`,
+// `sansHebdo.<id>`), la précision d'un article et l'ordre des rayons (`reglages/foyer.rayons`). Logique pure : ni DOM ni
 // Firebase.
+// - T3d : habituels (« À acheter chaque semaine ») et préparations de chaque semaine entrent d'eux-mêmes dans la liste
+//   de la semaine montrée (« Comme chaque semaine » en mode Drive) ; un habituel n'est jamais mis de côté.
 // - Une ligne par produit (produits.js › idProduit), unités réunies (« Beurre · 230 g + 2 c. à soupe »).
 // - Seule la version servie compte : ses ajouts pour les portions de ce profil ; ce qu'elle retire n'est pas acheté
 //   pour sa part (décision 16).
@@ -10,14 +14,18 @@
 //   dépend ni de l'ordre des plats ni de celui des ingrédients, au bit près.
 // - Arrondi d'achat au supérieur, tolérant (jamais 120 g pour 110,000…01 g) ; une coche retient la quantité affichée.
 import { slug } from './slug.js';
-import { cleDeRepli, ficheProduit, idProduit, indexDesRecettes } from './produits.js';
-import { quantiteLisible } from './plats.js';
+import {
+  HABITUEL_LIBELLE_MAX, HABITUEL_QTE_MAX, cleDeRepli, clesDuProduit, entreeParId, ficheProduit, idProduit,
+  indexDesRecettes, lireHabituel, lirePlacardFoyer, lireRayonFoyer, rayonDeDepart, reglageDuFoyer,
+} from './produits.js';
+import { aSaRecette, quantiteLisible, typeDe } from './plats.js';
+import { estDansCorbeille } from './corbeille.js';
 import { deNom } from './notes.js';
 import {
   EFFACER, RANGS_STATUT, articlesDesRestes, cheminSur, coefDe, ecrituresRouvrir, idGarde, jourValide, lireSemaine,
   peutPreparerLaSuivante, platsDeLaSemaine, semaineSuivante, semaineVisee, statutSemaine, texteDates, texteJour,
 } from './semaine.js';
-import { LIBELLES_RAYON } from './edition.js';
+import { LIBELLES_RAYON, UNITES_EDITION } from './edition.js';
 import { LIBELLES_STYLE } from './vocabulaire.js';
 import { RECHERCHE_MAX, lireDrive } from './drive.js';
 
@@ -295,21 +303,40 @@ const portionsBaseDe = (plat) => (estNombre(plat?.portionsBase) && plat.portions
 
 /**
  * Liste calculée (jamais écrite) de la semaine montrée → { lignes, maison, articles, sansRecette, horsListe,
- * sansPortion, aVerifier } :
+ * sansPortion, aVerifier, habituels, preparations } :
  * - `lignes` : une par produit (idProduit), à acheter ou cochées, rangées par rayon (ordreRayons), puis par nom ;
- * - `maison` : produits du placard sous leur seuil (« Déjà à la maison ? »), sauf rachetés (`racheter.<cle>`) ;
+ * - `maison` : produits du placard sous leur seuil (« Déjà à la maison ? »), sauf rachetés (`racheter.<cle>`) et sauf
+ *   un produit « À acheter chaque semaine » (T3d : l'habituel l'emporte sur le placard) ;
  * - `articles` : articles ajoutés à la main (`articles/{id}` avec `id`), cachés s'ils ont été cochés avant
  *   min(creeLe, minuit du début) de la semaine (sans semaine : cochés depuis plus de 2 jours, d'après `maintenant`) ;
  *   jamais dans le placard ; un article « lait » et une ligne « lait » restent deux lignes ;
  * - `sansRecette` : plats ⏳ (fiches) ; `horsListe` : [{ platId, plat (null si introuvable), etat }] (corbeille ou
  *   introuvable) ; `sansPortion` : plats que personne ne mange (fiches) ; `aVerifier` : [{ plat, produit }] (portions de
- *   base illisibles : `produit` null ; quantité ou unité illisible : le nom, la ligne existe sans quantité).
- * Ligne : { type: 'ligne', cle, produitId, repli (la première de `replis`), replis (clés de repli), nom (majuscule), libelle (minuscules), rayon, totaux (exacts, par
- *   famille, en unités de base), quantite (affichée), sources: [{ type: 'plat', platId, nom, pour?, style?, totaux }],
- *   placard (produit du placard sous son seuil), rachetee, cochee, dejaPris, reste, recherche, rechercheFoyer }.
- * Article : { type: 'article', cle: 'article:<id>', articleId, produitId, nom, libelle, precision, rayon, totaux: {},
- *   quantite (la précision), sources: [], placard: false, rachetee: false, cochee, cocheLe, creeLe, dejaPris: null,
- *   reste: null, recherche, rechercheFoyer }.
+ *   base illisibles : `produit` null ; quantité ou unité illisible : le nom, la ligne existe sans quantité) ;
+ * - `habituels` (T3d) : produits « À acheter chaque semaine » du foyer (habituelsDuFoyer), sautés compris (`saute` :
+ *   « Pas cette semaine », pour pouvoir les remettre) ; [] sans semaine ;
+ * - `preparations` (T3d) : préparations de chaque semaine (preparationsChaqueSemaine), sautées et sans recette
+ *   comprises ; [] sans semaine.
+ * Contributions, dans un ordre fixe : plats de la semaine (recette, versions servies), puis préparations de chaque
+ * semaine (T3d : recette telle qu'elle est écrite, facteur 1, sauf `sansHebdo.<platId>`, source { type: 'hebdo',
+ * platId, nom }), puis habituels (T3d : leur quantité, ou aucune, sauf `sansHabituel.<produitId>`, source { type:
+ * 'habituel', produitId }) ; un habituel ou une préparation d'un produit déjà dans la liste s'ajoute à sa ligne. Rien de
+ * tout cela sans semaine (une coche s'écrit dans la semaine).
+ * Ligne : { type: 'ligne', cle, produitId, repli (la première de `replis`), replis (clés de repli), nom (majuscule),
+ *   libelle (minuscules), rayon, totaux (exacts, par famille, en unités de base), quantite (affichée), sources: [{ type:
+ *   'plat', platId, nom, pour?, style?, totaux } | { type: 'hebdo', platId, nom, totaux } | { type: 'habituel',
+ *   produitId, totaux }], placard (produit du placard sous son seuil), rachetee, cochee, dejaPris, reste, recherche,
+ *   rechercheFoyer, chaqueSemaine (T3d : toutes ses sources sont des habituels ou des préparations de chaque semaine :
+ *   « Comme chaque semaine »), rayonDeDepart (T3d : le rayon sans réglage du foyer, produits.js › rayonDeDepart),
+ *   rayonDuFoyer (T3d : le rayon vient de produits/{id}), placardProduit (T3d : ficheProduit().placard.valeur : null,
+ *   {} ou { seuil, unite } ; l'interrupteur « Toujours dans mon placard » est allumé s'il n'est pas null), placardDuFoyer
+ *   (T3d : réglé par le foyer), habituel (T3d : null, ou { actif: true, qte?, unite?, libelle? } du foyer, actif), habituelSaute
+ *   (T3d : « Pas cette semaine » pour cet habituel) }.
+ * Article : { type: 'article', cle: 'article:<id>', articleId, produitId, repli, replis, nom, libelle, precision, rayon,
+ *   totaux: {}, quantite (la précision), sources: [], placard: false, rachetee: false, cochee, cocheLe, creeLe,
+ *   dejaPris: null, reste: null, recherche, rechercheFoyer, chaqueSemaine: false, rayonDeDepart, rayonDuFoyer,
+ *   placardProduit, placardDuFoyer, habituel, habituelSaute }. T3d : clé de repli (cleDeRepli du libellé) comme une
+ *   ligne : « papier hygiénique », devenu « papier toilette » pour l'app, garde son mot cherché et son rayon.
  * `recherche` (T3b) : le mot cherché au drive, celui que le foyer a écrit (`rechercheFoyer` : `produits/{id}
  * .rechercheDrive` de la ligne, sinon de sa première clé de repli qui en a un, comme une coche), sinon `libelle` ;
  * `rechercheFoyer` : ce mot, ou null (« Revenir à « pâtes courtes » » seulement s'il existe).
@@ -324,10 +351,27 @@ export function listeDeCourses(semaine, {
   const idx = index instanceof Map ? index : indexDesRecettes(Array.isArray(tousLesPlats) ? tousLesPlats : []);
   const options = { tousLesPlats, profils, reglages, ...(typeof evaluer === 'function' ? { evaluer } : {}) };
   const elements = lue ? platsDeLaSemaine(lue, options) : [];
-  const sortie = { lignes: [], maison: [], articles: [], sansRecette: [], horsListe: [], sansPortion: [], aVerifier: [] };
+  const sortie = {
+    lignes: [], maison: [], articles: [], sansRecette: [], horsListe: [], sansPortion: [], aVerifier: [], habituels: [],
+    preparations: [],
+  };
 
   // 1 à 3. Contributions de chaque plat retenu : recette (moins ce que les versions retirent), puis versions servies.
   const contributions = [];
+  const noter = (brut, quantite, facteur, rang, rangProfil, source, plat) => {
+    const nom = reduire(brut?.produit);
+    const produitId = idProduit(nom);
+    if (!produitId) {
+      sortie.aVerifier.push({ plat, produit: nom });
+      return;
+    }
+    const lu = versBase(quantite, brut.unite);
+    if (!lu) sortie.aVerifier.push({ plat, produit: nom });
+    contributions.push({
+      rangPlat: rang, rangProfil, produitId, nom: nom.toLocaleLowerCase('fr-FR'),
+      famille: lu?.famille ?? null, qte: lu ? lu.qte * facteur : null, source,
+    });
+  };
   elements.forEach((element, rangPlat) => {
     const { plat } = element;
     if (element.etat === 'sansRecette') {
@@ -351,39 +395,52 @@ export function listeDeCourses(semaine, {
         retires.set(produit, (retires.get(produit) ?? 0) + coefDe(version.profil) * element.repas);
       }
     }
-    const ajouter = (brut, quantite, facteur, rangProfil, version) => {
-      const nom = reduire(brut?.produit);
-      const produitId = idProduit(nom);
-      if (!produitId) {
-        sortie.aVerifier.push({ plat, produit: nom });
-        return;
-      }
-      const lu = versBase(quantite, brut.unite);
-      if (!lu) sortie.aVerifier.push({ plat, produit: nom });
-      contributions.push({
-        rangPlat, rangProfil, produitId, nom: nom.toLocaleLowerCase('fr-FR'),
-        famille: lu?.famille ?? null, qte: lu ? lu.qte * facteur : null,
-        source: {
-          platId: element.platId, nom: reduire(plat.nom),
-          // Style seulement s'il s'affiche (semaine.js › versionServie, `nomme`) : « pour vous (votre version) » sinon.
-          ...(version ? { pour: version.profil.id, ...(version.nomme === false ? {} : { style: version.style }) } : {}),
-        },
-      });
-    };
+    const sourceDe = (version) => ({
+      type: 'plat', cle: `${element.platId}|${version?.profil.id ?? ''}`, platId: element.platId, nom: reduire(plat.nom),
+      // Style seulement s'il s'affiche (semaine.js › versionServie, `nomme`) : « pour vous (votre version) » sinon.
+      ...(version ? { pour: version.profil.id, ...(version.nomme === false ? {} : { style: version.style }) } : {}),
+    });
     for (const ingredient of listeDe(plat.ingredients)) {
       if (!estObjet(ingredient)) continue;
       const retire = retires.get(slug(ingredient.produit)) ?? 0;
       const facteur = base === null ? 1 : Math.max(0, total - retire) / base;
       if (facteur <= TOLERANCE) continue; // personne ne mange cet ingrédient (toutes les parts le retirent)
-      ajouter(ingredient, ingredient.qte, facteur, 0, null);
+      noter(ingredient, ingredient.qte, facteur, rangPlat, 0, sourceDe(null), plat);
     }
     element.versions.forEach((version, i) => {
       const parts = coefDe(version.profil) * element.repas;
       for (const ajout of listeDe(version.variante?.ajouter)) {
-        if (estObjet(ajout)) ajouter(ajout, ajout.qtePortion, parts, i + 1, version);
+        if (estObjet(ajout)) noter(ajout, ajout.qtePortion, parts, rangPlat, i + 1, sourceDe(version), plat);
       }
     });
   });
+
+  // 4. Préparations de chaque semaine (T3d) : la recette telle qu'elle est écrite ; puis habituels du foyer.
+  let rang = elements.length;
+  if (lue) {
+    sortie.preparations = preparationsChaqueSemaine(lue, { tousLesPlats });
+    for (const preparation of [...sortie.preparations].sort((a, b) => parId(a.platId, b.platId))) {
+      const rangPrep = rang;
+      rang += 1;
+      if (preparation.saute || preparation.sansRecette) continue;
+      const source = { type: 'hebdo', cle: `hebdo:${preparation.platId}`, platId: preparation.platId, nom: preparation.nom };
+      for (const ingredient of listeDe(preparation.plat.ingredients)) {
+        if (estObjet(ingredient)) noter(ingredient, ingredient.qte, 1, rangPrep, 0, source, preparation.plat);
+      }
+    }
+    sortie.habituels = habituelsDuFoyer(produitsFoyer, lue, { index: idx });
+    for (const habituel of sortie.habituels) {
+      const rangHabituel = rang;
+      rang += 1;
+      if (habituel.saute) continue;
+      const lu = versBase(habituel.habituel.qte, habituel.habituel.unite);
+      contributions.push({
+        rangPlat: rangHabituel, rangProfil: 0, produitId: habituel.produitId,
+        nom: (habituel.habituel.libelle ?? '').toLocaleLowerCase('fr-FR'), famille: lu?.famille ?? null, qte: lu?.qte ?? null,
+        source: { type: 'habituel', cle: `habituel:${habituel.produitId}`, produitId: habituel.produitId },
+      });
+    }
+  }
 
   // 5. Agrégation par produit, dans un ordre fixe, puis arrondi au millionième.
   contributions.sort((a, b) => a.rangPlat - b.rangPlat || a.rangProfil - b.rangProfil || parId(a.produitId, b.produitId)
@@ -392,19 +449,20 @@ export function listeDeCourses(semaine, {
   for (const c of contributions) {
     if (!produits.has(c.produitId)) produits.set(c.produitId, { noms: [], totaux: {}, sources: new Map() });
     const produit = produits.get(c.produitId);
-    if (!produit.noms.includes(c.nom)) produit.noms.push(c.nom);
-    const cleSource = `${c.source.platId}|${c.source.pour ?? ''}`;
-    if (!produit.sources.has(cleSource)) produit.sources.set(cleSource, { type: 'plat', ...c.source, totaux: {} });
+    if (c.nom && !produit.noms.includes(c.nom)) produit.noms.push(c.nom);
+    const { cle: cleSource, ...source } = c.source;
+    if (!produit.sources.has(cleSource)) produit.sources.set(cleSource, { ...source, totaux: {} });
     if (c.famille && c.qte > 0) {
       produit.totaux[c.famille] = (produit.totaux[c.famille] ?? 0) + c.qte;
-      const source = produit.sources.get(cleSource);
-      source.totaux[c.famille] = (source.totaux[c.famille] ?? 0) + c.qte;
+      const sourceLue = produit.sources.get(cleSource);
+      sourceLue.totaux[c.famille] = (sourceLue.totaux[c.famille] ?? 0) + c.qte;
     }
   }
 
   // 6 à 9. Fiche du produit, placard, coches.
   const coches = lue?.coches ?? {};
   const racheter = lue?.racheter ?? {};
+  const sautes = new Set(sortie.habituels.filter((h) => h.saute).map((h) => h.produitId));
   for (const [produitId, produit] of produits) {
     const totaux = arrondirTotaux(produit.totaux);
     const sources = [...produit.sources.values()].map((s) => ({ ...s, totaux: arrondirTotaux(s.totaux) }));
@@ -420,17 +478,21 @@ export function listeDeCourses(semaine, {
       if (cle && !produits.has(cle) && !replis.includes(cle)) replis.push(cle);
     }
     const repli = replis[0] ?? null;
-    if (repli) fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie, repli });
-    const placard = fiche.placard.valeur !== null && dansLePlacard(totaux, fiche.placard.valeur, fiche.equivalences.valeur);
+    if (repli) fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie, replis });
+    // Un produit « À acheter chaque semaine » n'est jamais mis de côté (T3d) : il est sur la liste.
+    const avecHabituel = sources.some((s) => s.type === 'habituel');
+    const placard = !avecHabituel && fiche.placard.valeur !== null
+      && dansLePlacard(totaux, fiche.placard.valeur, fiche.equivalences.valeur);
     const rachetee = placard && [produitId, ...replis].some((cle) => racheter[cle] === true);
     const coche = cocheReunie([produitId, ...replis].filter((cle) => Object.hasOwn(coches, cle)).map((cle) => coches[cle]));
     const etat = placard && !rachetee ? { cochee: false, dejaPris: null, reste: null } : etatCoche(totaux, coche);
-    const libelle = fiche.nom.valeur || saisie;
+    const libelle = fiche.nom.valeur || saisie || nomDeRepli(produitId);
     const rechercheFoyer = motDuFoyer(produitsFoyer, [produitId, ...replis]);
     const ligne = {
       type: 'ligne', cle: produitId, produitId, repli, replis, nom: majuscule(libelle), libelle, rayon: fiche.rayon.valeur,
       totaux, quantite: texteQuantites(totaux), sources, placard, rachetee, ...etat, recherche: rechercheFoyer ?? libelle,
-      rechercheFoyer,
+      rechercheFoyer, chaqueSemaine: sources.length > 0 && sources.every((s) => s.type !== 'plat'),
+      ...reglagesDeLaFiche(fiche, produitId, idx, sautes),
     };
     (placard && !rachetee ? sortie.maison : sortie.lignes).push(ligne);
   }
@@ -447,14 +509,16 @@ export function listeDeCourses(semaine, {
     const cocheLe = cochee && estNombre(article.coche.le) ? article.coche.le : null;
     if (cocheLe !== null && borne !== null && Number.isFinite(borne) && cocheLe < borne) continue;
     const produitId = idProduit(libelle);
-    const fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie: libelle });
+    const replis = [cleDeRepli(libelle, produitId)].filter(Boolean);
+    const fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie: libelle, replis });
     const precision = reduireQuantite(article.precision) || null;
-    const rechercheFoyer = motDuFoyer(produitsFoyer, [produitId]);
+    const rechercheFoyer = motDuFoyer(produitsFoyer, [produitId, ...replis]);
     sortie.articles.push({
-      type: 'article', cle: `article:${article.id}`, articleId: article.id, produitId, nom: majuscule(libelle), libelle,
-      precision, rayon: fiche.rayon.valeur, totaux: {}, quantite: precision ?? '', sources: [], placard: false,
-      rachetee: false, cochee, cocheLe, creeLe: estNombre(article.creeLe) ? article.creeLe : null, dejaPris: null,
-      reste: null, recherche: rechercheFoyer ?? libelle, rechercheFoyer,
+      type: 'article', cle: `article:${article.id}`, articleId: article.id, produitId, repli: replis[0] ?? null, replis,
+      nom: majuscule(libelle), libelle, precision, rayon: fiche.rayon.valeur, totaux: {}, quantite: precision ?? '',
+      sources: [], placard: false, rachetee: false, cochee, cocheLe, creeLe: estNombre(article.creeLe) ? article.creeLe : null,
+      dejaPris: null, reste: null, recherche: rechercheFoyer ?? libelle, rechercheFoyer, chaqueSemaine: false,
+      ...reglagesDeLaFiche(fiche, produitId, idx, sautes),
     });
   }
 
@@ -466,6 +530,117 @@ export function listeDeCourses(semaine, {
   sortie.articles.sort(parRayon);
   sortie.maison.sort((a, b) => comparerNoms(a.nom, b.nom) || parId(a.cle, b.cle));
   return sortie;
+}
+
+/**
+ * Réglages du produit d'une ligne ou d'un article, pour la feuille ⋮ (T3d) : rayonDeDepart, rayonDuFoyer,
+ * placardProduit, placardDuFoyer, habituel (actif du foyer, ou null), habituelSaute.
+ */
+function reglagesDeLaFiche(fiche, produitId, index, sautes) {
+  return {
+    rayonDeDepart: rayonDeDepart(produitId, { index }).valeur,
+    rayonDuFoyer: fiche.rayon.source === 'foyer',
+    placardProduit: fiche.placard.valeur,
+    placardDuFoyer: fiche.placard.source === 'foyer',
+    habituel: fiche.habituel.valeur,
+    habituelSaute: sautes.has(produitId),
+  };
+}
+
+/** Nom lisible d'un identifiant de produit sans autre nom connu (« croquette-pour-chat » → « croquette pour chat »). */
+function nomDeRepli(id) {
+  return typeof id === 'string' ? id.split('--')[0].replace(/-/g, ' ').trim() : '';
+}
+
+// ——— Chaque semaine (T3d) : préparations de chaque semaine et habituels ———
+
+const ID_PRODUIT = /^[a-z0-9-]+$/;
+
+/**
+ * Vrai pour une préparation de chaque semaine (T3d) : type `preparation`, `recurrence: 'hebdo'`, identifiant sûr, hors
+ * corbeille. Les mêmes plats que semaine.js › peutAllerDansLaSemaine écarte de « Ajouter à la semaine » : ils entrent
+ * d'eux-mêmes dans chaque semaine.
+ */
+export function estPreparationHebdo(plat) {
+  return estObjet(plat) && typeof plat.id === 'string' && ID_PRODUIT.test(plat.id) && typeDe(plat) === 'preparation'
+    && plat.recurrence === 'hebdo' && !estDansCorbeille(plat);
+}
+
+/**
+ * Préparations de chaque semaine (T3d, Semaine : « Chaque semaine aussi : Yaourts maison ») → [{ platId, plat, nom,
+ * saute, sansRecette }], triées par nom puis identifiant : `saute` : « Pas cette semaine » (`sansHebdo.<platId>` de la
+ * semaine vaut true) ; `sansRecette` : pas encore d'ingrédients (elle n'apporte rien à la liste). Une préparation déjà
+ * dans les plats de la semaine (donnée d'une autre version) n'est pas reprise ici : jamais comptée deux fois. Sans
+ * semaine, aucune n'est sautée.
+ */
+export function preparationsChaqueSemaine(semaine, { tousLesPlats = [] } = {}) {
+  const lue = lireSemaine(semaine);
+  const sans = estObjet(lue?.sansHebdo) ? lue.sansHebdo : {};
+  const dansLaSemaine = new Set(Object.keys(lue?.plats ?? {}).filter((id) => estObjet(lue.plats[id])
+    && estNombre(lue.plats[id].ajouteLe) && lue.plats[id].retire !== true));
+  const vues = new Set();
+  const preparations = [];
+  for (const plat of listeDe(tousLesPlats)) {
+    if (!estPreparationHebdo(plat) || vues.has(plat.id) || dansLaSemaine.has(plat.id)) continue;
+    vues.add(plat.id);
+    preparations.push({
+      platId: plat.id, plat, nom: reduire(plat.nom) || 'Préparation sans nom', saute: sans[plat.id] === true,
+      sansRecette: !aSaRecette(plat),
+    });
+  }
+  return preparations.sort((a, b) => comparerNoms(a.nom, b.nom) || parId(a.platId, b.platId));
+}
+
+/** Documents `produits/{id}` du foyer (objet par id ou Map) → [[id, document]], identifiants sûrs, triés par id. */
+function documentsDuFoyer(produitsFoyer) {
+  let entrees = [];
+  if (produitsFoyer instanceof Map) entrees = [...produitsFoyer];
+  else if (estObjet(produitsFoyer)) entrees = Object.entries(produitsFoyer);
+  return entrees.filter(([id, doc]) => typeof id === 'string' && ID_PRODUIT.test(id) && estObjet(doc))
+    .sort(([a], [b]) => parId(a, b));
+}
+
+/**
+ * Produits « À acheter chaque semaine » du foyer (T3d) → [{ produitId, cle, cles, nom, libelle, habituel, quantite,
+ * totaux, saute }], triés par identifiant :
+ * - `habituel` : `produits/{cle}.habituel` lu (produits.js › lireHabituel), actif seulement ; `cle` : le document qui le
+ *   porte ; `produitId` : l'identifiant de la ligne, celui du nom gardé avec l'habituel (`libelle`, idProduit : un id
+ *   changé par les produits courants rejoint la bonne ligne), sinon `cle`. Deux documents pour le même produit (son id
+ *   et une clé de repli) : celui de l'id l'emporte, éteint ou pas ;
+ * - `nom` : nom affiché (ficheProduit, sinon le nom gardé, sinon l'identifiant) ; `quantite` : « 1 l » ('' sans
+ *   quantité) ; `totaux` : en unités de base ;
+ * - `saute` : « Pas cette semaine » (`sansHabituel.<k>` de la semaine vaut true sous une de ses `cles` : `produitId`,
+ *   `cle` et la clé de repli du nom gardé, comme une coche ; ecrituresSansHabituel les efface toutes au « remettre »).
+ * `index` : indexDesRecettes (noms des recettes).
+ */
+export function habituelsDuFoyer(produitsFoyer, semaine = null, { index = new Map() } = {}) {
+  const lue = lireSemaine(semaine);
+  const sans = estObjet(lue?.sansHabituel) ? lue.sansHabituel : {};
+  const parProduit = new Map();
+  for (const [cle, doc] of documentsDuFoyer(produitsFoyer)) {
+    const habituel = lireHabituel(doc.habituel);
+    if (!habituel) continue;
+    const produitId = (habituel.libelle && idProduit(habituel.libelle)) || cle;
+    const deja = parProduit.get(produitId);
+    if (!deja || (cle === produitId && deja.cle !== produitId)) parProduit.set(produitId, { cle, habituel });
+  }
+  const habituels = [];
+  for (const [produitId, { cle, habituel }] of parProduit) {
+    if (!habituel.actif) continue;
+    const lu = versBase(habituel.qte, habituel.unite);
+    const totaux = lu ? { [lu.famille]: arrondi(lu.qte) } : {};
+    const fiche = ficheProduit(produitId, { produitsFoyer, index, saisie: habituel.libelle ?? '' });
+    const libelle = fiche.nom.valeur || nomDeRepli(produitId);
+    // « Pas cette semaine » se lit comme une coche : sous l'identifiant, le document qui porte l'habituel et la clé de
+    // repli du nom gardé (un identifiant changé par une mise à jour de l'app ne fait pas revenir un habituel sauté).
+    const cles = [...new Set([produitId, cle, cleDeRepli(habituel.libelle ?? '', produitId)])]
+      .filter((k) => typeof k === 'string' && ID_PRODUIT.test(k));
+    habituels.push({
+      produitId, cle, cles, nom: majuscule(libelle), libelle, habituel, quantite: texteQuantites(totaux), totaux,
+      saute: cles.some((k) => sans[k] === true),
+    });
+  }
+  return habituels.sort((a, b) => parId(a.produitId, b.produitId));
 }
 
 /** `produits/{id}` du foyer (objet par id ou Map), ou null. */
@@ -550,9 +725,10 @@ export function grouperParRayon(liste, { rayons = null } = {}) {
 /**
  * Écran Courses en mode Drive (T3b, décision 17) → { pourCetteSemaine, commeChaqueSemaine, panier, maison, total,
  * pris, vide } : trois listes à plat, sans en-têtes de rayon, chacune rangée par rayon (ordre du foyer) puis par nom :
- * `pourCetteSemaine` (lignes des plats et articles ajoutés à la main, à acheter), `commeChaqueSemaine` (habituels et
- * préparations de chaque semaine : vide jusqu'à T3d), `panier` (cochés, « Dans le panier ») ; `maison`, `total`,
- * `pris` et `vide` comme grouperParRayon (mêmes comptes dans les deux modes).
+ * `pourCetteSemaine` (lignes des plats et articles ajoutés à la main, à acheter ; une ligne d'un habituel ou d'une
+ * préparation qui sert aussi un plat de la semaine en fait partie), `commeChaqueSemaine` (T3d : lignes à acheter dont
+ * toutes les sources sont des habituels ou des préparations de chaque semaine, `chaqueSemaine`), `panier` (cochés,
+ * « Dans le panier ») ; `maison`, `total`, `pris` et `vide` comme grouperParRayon (mêmes comptes dans les deux modes).
  */
 export function grouperDrive(liste, { rayons = null } = {}) {
   const rang = rangeurDeRayons(rayons);
@@ -560,8 +736,8 @@ export function grouperDrive(liste, { rayons = null } = {}) {
   const elements = [...listeDe(liste?.lignes), ...listeDe(liste?.articles)];
   const panier = elements.filter((e) => e.cochee).sort(ordre);
   return {
-    pourCetteSemaine: elements.filter((e) => !e.cochee).sort(ordre),
-    commeChaqueSemaine: [],
+    pourCetteSemaine: elements.filter((e) => !e.cochee && e.chaqueSemaine !== true).sort(ordre),
+    commeChaqueSemaine: elements.filter((e) => !e.cochee && e.chaqueSemaine === true).sort(ordre),
     panier,
     maison: listeDe(liste?.maison),
     total: elements.length,
@@ -596,6 +772,362 @@ export function ecrituresRecherche(ligne, saisie, { produitsFoyer = {} } = {}) {
   return { terme: null, ecritures };
 }
 
+// ——— Réglages d'un produit (T3d) : rayon, placard, habituel ; chacun `set` + `mergeFields` du seul champ ———
+
+/** Clés d'une ligne ou d'un article où lire et effacer les réglages de son produit : son id, puis ses clés de repli. */
+const clesDeLaLigne = (ligne) => clesDuProduit(ligne?.produitId, { replis: clesDeRepli(ligne) })
+  .filter((cle) => cheminSur('produits', cle));
+
+/** Écritures qui effacent un champ sous chaque clé qui en porte un lisible (`lire`), sauf `sauf`. */
+function effacerSous(produitsFoyer, cles, champ, lire, sauf = null) {
+  return cles.filter((cle) => cle !== sauf && lire(produitDuFoyer(produitsFoyer, cle)?.[champ]) !== null)
+    .map((cle) => ({ id: cle, champs: { [champ]: EFFACER } }));
+}
+
+/**
+ * « Rayon : Épicerie salée · Changer » (feuille ⋮, T3d) → { rayon, ecritures: [{ id, champs: { rayon: r | EFFACER } }] }
+ * (`produits/{id}` : `set` + `mergeFields` du seul champ, donnees.js) | { code: 'invalide' } (rayon hors des 14, ou
+ * produit illisible) :
+ * - le rayon de départ de la ligne (`ligne.rayonDeDepart`, produits.js › rayonDeDepart : recettes, produit courant,
+ *   Divers) : le réglage du foyer est effacé sous chaque clé qui en porte un (son produit et ses clés de repli) ;
+ *   produits/{id} ne garde que des différences ;
+ * - un autre rayon : écrit sous le produit de la ligne (`produitId`), sauf s'il y est déjà (aucune écriture).
+ * `ecritures` vide : rien à envoyer. Le rayon sert les semaines suivantes, dans les deux modes.
+ */
+export function ecrituresRayon(ligne, rayon, { produitsFoyer = {} } = {}) {
+  const produitId = ligne?.produitId;
+  if (!lireRayonFoyer(rayon) || !cheminSur('produits', typeof produitId === 'string' ? produitId : '')) return { code: 'invalide' };
+  const cles = clesDeLaLigne(ligne);
+  const depart = lireRayonFoyer(ligne.rayonDeDepart) ?? lireRayonFoyer(entreeParId(produitId)?.rayon) ?? 'divers';
+  if (rayon === depart) return { rayon, ecritures: effacerSous(produitsFoyer, cles, 'rayon', lireRayonFoyer) };
+  if (lireRayonFoyer(produitDuFoyer(produitsFoyer, produitId)?.rayon) === rayon) return { rayon, ecritures: [] };
+  return { rayon, ecritures: [{ id: produitId, champs: { rayon } }] };
+}
+
+/**
+ * Interrupteur « Toujours dans mon placard » (feuille ⋮ ; carte « 🏠 Placard » de Réglages, T3d ; décision du placard
+ * du 2026-10-11) → { actif, ecritures: [{ id, champs: { placard: { actif } | EFFACER } }] } | { code: 'invalide' } :
+ * - revenir au départ (allumer un produit du placard de départ, éteindre un produit qui n'en est pas) : le réglage du
+ *   foyer est effacé sous chaque clé qui en porte un ;
+ * - éteindre un produit du placard de départ : `{ actif: false }` (il revient sur la liste) ; allumer un autre produit
+ *   (beurre demi-sel, harissa…) : `{ actif: true }` (toujours mis de côté ; un produit à seuil garde son seuil de
+ *   départ), sous son produit, et effacé sous ses clés de repli ;
+ * - rien qui change : `ecritures` vide.
+ * `ligne` : une ligne, un article ou { produitId } (Réglages).
+ */
+export function ecrituresPlacard(ligne, oui, { produitsFoyer = {} } = {}) {
+  const produitId = ligne?.produitId;
+  if (!cheminSur('produits', typeof produitId === 'string' ? produitId : '')) return { code: 'invalide' };
+  const actif = Boolean(oui);
+  const cles = clesDeLaLigne(ligne);
+  const deDepart = estObjet(entreeParId(produitId)?.placard);
+  if (actif === deDepart) return { actif, ecritures: effacerSous(produitsFoyer, cles, 'placard', lirePlacardFoyer) };
+  const avant = reglageDuFoyer(produitsFoyer, cles, 'placard', lirePlacardFoyer)?.valeur ?? null;
+  const ecrit = lirePlacardFoyer(produitDuFoyer(produitsFoyer, produitId)?.placard);
+  const autres = effacerSous(produitsFoyer, cles, 'placard', lirePlacardFoyer, produitId);
+  if (ecrit?.actif === actif) return { actif, ecritures: autres };
+  // Le nom de la ligne nomme le produit dans la carte « 🏠 Placard », même si plus aucune recette ne le porte.
+  const libelle = libelleDuProduit(ligne, produitId, avant?.libelle);
+  return { actif, ecritures: [{ id: produitId, champs: { placard: { actif, ...(libelle ? { libelle } : {}) } } }, ...autres] };
+}
+
+/**
+ * Nom gardé avec un réglage du foyer (habituel, placard) : celui de la ligne, sinon celui d'avant, seulement s'il redonne
+ * le même identifiant (idProduit) ; HABITUEL_LIBELLE_MAX caractères au plus ; '' sinon.
+ */
+function libelleDuProduit(ligne, produitId, avant = '') {
+  const nomDeLaLigne = reduire(ligne?.libelle).slice(0, HABITUEL_LIBELLE_MAX).trim();
+  return [nomDeLaLigne, reduire(avant)].find((nom) => nom && idProduit(nom) === produitId) ?? '';
+}
+
+/** Erreurs de la quantité de « À acheter chaque semaine » (T3d). */
+export const ERREURS_HABITUEL = Object.freeze({
+  quantite: 'Écrivez un nombre plus grand que 0.',
+  grande: `${HABITUEL_QTE_MAX}\u00A0au plus.`,
+  unite: 'Choisissez une unité.',
+});
+
+/**
+ * Nombre tapé (« 0,5 », « 2 », « 1.5 ») → nombre ; null si rien n'est tapé ; NaN s'il est illisible. Un nombre déjà
+ * lu passe tel quel.
+ */
+export function lireNombreSaisi(saisie) {
+  if (saisie === null || saisie === undefined) return null;
+  if (typeof saisie === 'number') return Number.isFinite(saisie) ? saisie : Number.NaN;
+  const texte = String(saisie).replace(/[\s\u00A0\u202F]/g, '').replace(',', '.');
+  if (!texte) return null;
+  return /^\d+(\.\d+)?$|^\.\d+$/.test(texte) ? Number(texte) : Number.NaN;
+}
+
+/**
+ * Interrupteur « À acheter chaque semaine » et sa « Quantité (facultatif) » (feuille ⋮, T3d) → { habituel, ecritures:
+ * [{ id, champs: { habituel: valeur | EFFACER } }] } | { erreur: 'quantite' | 'grande' | 'unite' } (ERREURS_HABITUEL) |
+ * { code: 'invalide' } :
+ * - allumer : `{ actif: true, qte?, unite?, libelle }` sous le produit de la ligne (`libelle` : son nom, qui nomme le
+ *   produit même hors des recettes et des produits courants, gardé seulement s'il redonne le même identifiant
+ *   (idProduit) ; `qte` arrondie au centième, plus grande que 0,
+ *   HABITUEL_QTE_MAX au plus, avec une unité de l'écran ; sans quantité tapée : sans quantité) ;
+ * - éteindre : `{ actif: false }` avec la quantité et le nom d'avant (rallumé, il les retrouve) ;
+ * - un habituel rangé sous une clé de repli est effacé là (jamais deux habituels pour un produit) ;
+ * - rien qui change : `ecritures` vide.
+ * `habituel` rendu : la valeur écrite (lireHabituel la relit telle quelle).
+ */
+export function ecrituresHabituel(ligne, { actif = true, qte = null, unite = null } = {}, { produitsFoyer = {} } = {}) {
+  const produitId = ligne?.produitId;
+  if (!cheminSur('produits', typeof produitId === 'string' ? produitId : '')) return { code: 'invalide' };
+  const cles = clesDeLaLigne(ligne);
+  const avant = reglageDuFoyer(produitsFoyer, cles, 'habituel', lireHabituel)?.valeur ?? null;
+  // Le nom gardé retrouve le produit (habituelsDuFoyer) : seulement s'il donne bien cet identifiant.
+  const libelle = libelleDuProduit(ligne, produitId, avant?.libelle);
+  let habituel;
+  if (actif) {
+    const nombre = lireNombreSaisi(qte);
+    let quantite = null;
+    if (nombre !== null) {
+      const arrondie = Math.round(nombre * 100) / 100;
+      if (!Number.isFinite(arrondie) || arrondie <= 0) return { erreur: 'quantite' };
+      if (arrondie > HABITUEL_QTE_MAX) return { erreur: 'grande' };
+      if (!UNITES_EDITION.includes(unite)) return { erreur: 'unite' };
+      quantite = { qte: arrondie, unite };
+    }
+    habituel = { actif: true, ...(quantite ?? {}), ...(libelle ? { libelle } : {}) };
+  } else {
+    if (!avant) return { habituel: null, ecritures: effacerSous(produitsFoyer, cles, 'habituel', lireHabituel) };
+    habituel = { actif: false, ...(avant.qte !== undefined ? { qte: avant.qte, unite: avant.unite } : {}),
+      ...(libelle ? { libelle } : {}) };
+  }
+  const autres = effacerSous(produitsFoyer, cles, 'habituel', lireHabituel, produitId);
+  const ecrit = lireHabituel(produitDuFoyer(produitsFoyer, produitId)?.habituel);
+  if (ecrit && JSON.stringify(ecrit) === JSON.stringify(habituel)) return { habituel, ecritures: autres };
+  return { habituel, ecritures: [{ id: produitId, champs: { habituel } }, ...autres] };
+}
+
+// ——— Réglages de la semaine (T3d) : « Pas cette semaine » ———
+
+/**
+ * « Pas cette semaine » d'un habituel (feuille ⋮) → { id, champs: { sansHabituel.<produitId>: true | EFFACER } } |
+ * { code: 'invalide' } : un seul chemin de la semaine montrée, `update` en lot (aucune transaction) ; remettre efface le
+ * chemin, et celui de chacune des autres `cles` du même habituel qui en porte un (habituelsDuFoyer › cles). La semaine
+ * suivante, l'habituel revient de lui-même.
+ */
+export function ecrituresSansHabituel(semaine, produitId, oui, { cles = [] } = {}) {
+  const lue = lireSemaine(semaine);
+  const cle = cheminSur(typeof produitId === 'string' ? produitId : '');
+  const chemin = cle ? `sansHabituel.${cle}` : null;
+  if (!lue || !chemin) return { code: 'invalide' };
+  const champs = { [chemin]: oui ? true : EFFACER };
+  // Remettre : le saut posé sous une autre clé du même habituel (habituelsDuFoyer › cles) est effacé aussi.
+  if (!oui) {
+    const sans = estObjet(lue.sansHabituel) ? lue.sansHabituel : {};
+    for (const autre of listeDe(cles)) {
+      const autreChemin = typeof autre === 'string' && autre !== cle ? cheminSur(autre) : null;
+      if (autreChemin && sans[autre] === true) champs[`sansHabituel.${autreChemin}`] = EFFACER;
+    }
+  }
+  return { id: lue.id, champs };
+}
+
+/**
+ * « Pas cette semaine » d'une préparation de chaque semaine (Semaine, « Chaque semaine aussi ») → { id, champs: {
+ * sansHebdo.<platId>: true | EFFACER } } | { code: 'invalide' } ; même règle.
+ */
+export function ecrituresSansHebdo(semaine, platId, oui) {
+  const lue = lireSemaine(semaine);
+  const cle = cheminSur(typeof platId === 'string' ? platId : '');
+  const chemin = cle ? `sansHebdo.${cle}` : null;
+  if (!lue || !chemin) return { code: 'invalide' };
+  return { id: lue.id, champs: { [chemin]: oui ? true : EFFACER } };
+}
+
+// ——— Article : « Précision (facultatif) » (T3d) ———
+
+/** Erreur de la précision d'un article. */
+export const ERREURS_PRECISION = Object.freeze({ long: `${PRECISION_MAX}\u00A0caractères au plus.` });
+
+/**
+ * « Précision (facultatif) » d'un article ajouté à la main (feuille ⋮) → { articleId, champs: { precision: texte |
+ * EFFACER } } (`update` du seul champ ; un article supprimé entre-temps n'est jamais recréé) | { erreur: 'long' }
+ * (PRECISION_MAX caractères au plus) | { code: 'invalide' | 'inchange' } : espaces réduits (les insécables d'une
+ * quantité gardées) ; vide : la précision est effacée.
+ */
+export function ecrituresPrecision(article, saisie) {
+  if (article?.type !== 'article' || typeof article.articleId !== 'string' || article.articleId === '') return { code: 'invalide' };
+  const texte = reduireQuantite(typeof saisie === 'string' ? saisie : '');
+  if (texte.length > PRECISION_MAX) return { erreur: 'long' };
+  if (texte === (reduireQuantite(article.precision ?? '') || '')) return { code: 'inchange' };
+  return { articleId: article.articleId, champs: { precision: texte || EFFACER } };
+}
+
+// ——— Ordre des rayons (T3d) ———
+
+/** Ordre des rayons de départ (LIBELLES_RAYON) : celui d'un foyer qui n'a rien réglé. */
+export const RAYONS_DE_DEPART = Object.freeze(Object.keys(LIBELLES_RAYON));
+
+/** Ordre lu (reglagesCourses) ; `sens` : -1 monte, +1 descend ; un rayon inconnu ou au bord : l'ordre tel quel (copie). */
+export function deplacerRayon(ordre, rayon, sens) {
+  const lu = reglagesCourses({ rayons: Array.isArray(ordre) ? ordre : [] }).rayons;
+  const i = lu.indexOf(rayon);
+  const j = i + (sens < 0 ? -1 : 1);
+  if (i < 0 || j < 0 || j >= lu.length) return lu;
+  [lu[i], lu[j]] = [lu[j], lu[i]];
+  return lu;
+}
+
+/** « ↑ » : le rayon monte d'un cran. */
+export const monterRayon = (ordre, rayon) => deplacerRayon(ordre, rayon, -1);
+/** « ↓ » : le rayon descend d'un cran. */
+export const descendreRayon = (ordre, rayon) => deplacerRayon(ordre, rayon, 1);
+
+/**
+ * « Enregistrer » de l'écran « Ordre des rayons » (Courses, mode Magasin ; Réglages) → { champs: { rayons: [14 rayons] |
+ * EFFACER } } (`update` du seul champ de `reglages/foyer`, la liste entière : rare ; jamais un `set` du document) |
+ * { code: 'invalide' | 'inchange' } : l'ordre de départ efface le réglage (« Remettre l'ordre de départ » puis
+ * « Enregistrer ») ; le même ordre que celui du foyer : rien. `ordre` lu par reglagesCourses (inconnus et doublons
+ * ignorés, manquants ajoutés).
+ */
+export function ecrituresRayons(ordre, { reglages = null } = {}) {
+  if (!Array.isArray(ordre) || !ordre.length) return { code: 'invalide' };
+  const nouveau = reglagesCourses({ rayons: ordre }).rayons;
+  const ecrit = Array.isArray(reglages?.rayons);
+  const memeQue = (a, b) => a.length === b.length && a.every((r, i) => r === b[i]);
+  if (memeQue(nouveau, RAYONS_DE_DEPART)) return ecrit ? { champs: { rayons: EFFACER } } : { code: 'inchange' };
+  if (ecrit && memeQue(nouveau, reglagesCourses(reglages).rayons)
+    && memeQue(nouveau, reglages.rayons)) return { code: 'inchange' };
+  return { champs: { rayons: nouveau } };
+}
+
+/** « Monter « Crèmerie » », « Descendre « Crèmerie » » (`aria-label` des boutons « ↑ » et « ↓ »). */
+export function texteDeplacerRayon(rayon, sens) {
+  const libelle = LIBELLES_RAYON[rayon] ?? LIBELLES_RAYON.divers;
+  return `${sens < 0 ? 'Monter' : 'Descendre'} «\u00A0${libelle}\u00A0»`;
+}
+
+// ——— Récents de « Ajouter à la liste » (T3d, sur le téléphone) ———
+
+/** Nombre d'articles récents gardés (puces « Récents »). */
+export const RECENTS_MAX = 8;
+
+/** Clé `localStorage` des récents de ce compte sur ce téléphone ; '' sans compte. */
+export function cleRecents(uid) {
+  return typeof uid === 'string' && uid.trim() !== '' ? `repas-courses:recents:${uid.trim()}` : '';
+}
+
+/** Même article : même produit (idProduit), sinon même nom (casse ignorée). */
+const cleDeRecent = (libelle) => idProduit(libelle) || libelle.toLocaleLowerCase('fr-FR');
+
+/**
+ * Récents lus (`localStorage` : texte JSON ou tableau) → [libellé], le plus récent d'abord, RECENTS_MAX au plus, un seul
+ * par produit, chacun de 1 à ARTICLE_MAX caractères ; [] si illisible.
+ */
+export function lireRecents(valeur) {
+  let liste = valeur;
+  if (typeof valeur === 'string') {
+    try {
+      liste = JSON.parse(valeur);
+    } catch {
+      return [];
+    }
+  }
+  const vus = new Set();
+  const recents = [];
+  for (const brut of listeDe(liste)) {
+    const libelle = reduire(brut);
+    if (!libelle || libelle.length > ARTICLE_MAX || vus.has(cleDeRecent(libelle))) continue;
+    vus.add(cleDeRecent(libelle));
+    recents.push(libelle);
+    if (recents.length >= RECENTS_MAX) break;
+  }
+  return recents;
+}
+
+/** Récents après l'ajout d'un article : lui d'abord (le même produit tapé avant est retiré), RECENTS_MAX au plus. */
+export function ajouterAuxRecents(recents, libelle) {
+  const propre = reduire(libelle);
+  const avant = lireRecents(recents);
+  if (!propre || propre.length > ARTICLE_MAX) return avant;
+  return lireRecents([propre, ...avant]);
+}
+
+// ——— Placard du foyer (Réglages, T3d) ———
+
+/** Mot d'une pièce, par produit courant, quand ce n'est pas « pièce » : l'ail se compte en gousses (§9 : « 2 gousses »). */
+const PIECES = Object.freeze({ ail: Object.freeze(['gousse', 'gousses']) });
+
+/**
+ * « Toujours mis de côté. » (sans seuil) ; « Mis de côté si la semaine en demande 30 g au plus. » (seuil de départ :
+ * produits courants ; en pièces, le mot du produit : « 2 gousses » pour l'ail, `produitId`) ; '' si le produit n'est
+ * pas dans le placard (`placard` null).
+ */
+export function textePlacard(placard, { produitId = null } = {}) {
+  if (!estObjet(placard)) return '';
+  if (placard.seuil === undefined && placard.unite === undefined) return TEXTES_T3D.toujours;
+  const [une, plusieurs] = PIECES[produitId] ?? ['pièce', 'pièces'];
+  const quantite = placard.unite === 'pc'
+    ? `${new Intl.NumberFormat('fr-FR').format(placard.seuil)}\u00A0${placard.seuil > 1 ? plusieurs : une}`
+    : quantiteLisible(placard.seuil, placard.unite);
+  return `Mis de côté si la semaine en demande ${quantite} au plus.`;
+}
+
+/**
+ * Carte « 🏠 Placard » de Réglages → [{ produitId, nom, actif, deDepart, texte }] : les produits que le foyer a réglés
+ * (`produits/{id}.placard { actif }`), mis de côté (`actif`) ou éteints, triés par nom ; `deDepart` : du placard de
+ * départ ; `texte` : textePlacard (mis de côté), sinon ''. Pas la liste entière des produits du placard de départ.
+ * Nom : celui des recettes ou du produit courant, sinon celui gardé avec le réglage (`placard.libelle`), sinon
+ * l'identifiant. `index` : indexDesRecettes (noms des recettes).
+ */
+export function placardDuFoyer(produitsFoyer, { index = new Map() } = {}) {
+  const produits = [];
+  for (const [produitId, doc] of documentsDuFoyer(produitsFoyer)) {
+    const reglage = lirePlacardFoyer(doc.placard);
+    if (!reglage) continue;
+    const fiche = ficheProduit(produitId, { produitsFoyer, index });
+    const libelle = fiche.nom.valeur || reglage.libelle || nomDeRepli(produitId);
+    produits.push({
+      produitId, nom: majuscule(libelle), actif: reglage.actif, deDepart: estObjet(entreeParId(produitId)?.placard),
+      texte: reglage.actif ? textePlacard(fiche.placard.valeur, { produitId }) : '',
+    });
+  }
+  return produits.sort((a, b) => comparerNoms(a.nom, b.nom) || parId(a.produitId, b.produitId));
+}
+
+/** « Rayon : Épicerie salée » (feuille ⋮). */
+export function texteRayon(rayon) {
+  return `Rayon\u00A0: ${LIBELLES_RAYON[rayon] ?? LIBELLES_RAYON.divers}`;
+}
+
+/** « Chaque semaine aussi : Yaourts maison », « … : Yaourts maison et Pain de mie maison » ; '' sans préparation. */
+export function texteChaqueSemaineAussi(preparations) {
+  const noms = listeDe(preparations).map((p) => reduire(typeof p === 'string' ? p : p?.nom)).filter(Boolean);
+  return noms.length ? `${TEXTES_T3D.chaqueSemaineAussi}\u00A0: ${enumerer(noms)}` : '';
+}
+
+/** Textes fixes de T3d (feuille ⋮, Semaine, Courses, Ordre des rayons, Réglages), tels que le plan les écrit. */
+export const TEXTES_T3D = Object.freeze({
+  changer: 'Changer',
+  suivantes: 'Il servira les semaines suivantes.',
+  placard: 'Toujours dans mon placard',
+  toujours: 'Toujours mis de côté.',
+  habituel: 'À acheter chaque semaine',
+  quantite: 'Quantité (facultatif)',
+  pasCetteSemaine: 'Pas cette semaine',
+  precision: 'Précision (facultatif)',
+  commeChaqueSemaine: 'Comme chaque semaine',
+  chaqueSemaineAussi: 'Chaque semaine aussi',
+  ordreRayons: 'Ordre des rayons',
+  ordreDeDepart: 'Remettre l’ordre de départ',
+  enregistrer: 'Enregistrer',
+  recents: 'Récents',
+  placardReglages: '🏠 Placard',
+  // Relecture de T3d : mot visible de l'interrupteur de la carte « 🏠 Placard », et la ligne d'un produit éteint.
+  misDeCote: 'Mis de côté',
+  achete: 'Acheté quand vos plats en demandent.',
+  // Relecture de T3d : « Ordre des rayons », on choisit un rayon, puis « Monter » ou « Descendre » (en bas de la
+  // feuille, toujours à la même place : plusieurs touchers déplacent toujours le même rayon).
+  aideOrdre: 'Touchez un rayon, puis montez-le ou descendez-le.',
+  monter: 'Monter',
+  descendre: 'Descendre',
+});
+
 // ——— Textes ———
 
 const nomDe = (profil) => reduire(profil?.nom) || 'Sans prénom';
@@ -606,7 +1138,8 @@ const pluriel = (n, singulier, plurielDe = `${singulier}s`) => `${n}\u00A0${n > 
 /**
  * Origine d'une ligne (seconde ligne de Courses, après la quantité) : « Gratin, Salade de pâtes » ; une version :
  * « pour Adulte B (version mer) », « pour vous (version mer) » ; version d'un profil sans styles (source sans `style`) :
- * « pour Adulte A (sa version) », « pour vous (votre version) » ; article : « Ajouté à la main ». Mêmes mots pour les
+ * « pour Adulte A (sa version) », « pour vous (votre version) » ; article : « Ajouté à la main ». T3d : un habituel,
+ * « chaque semaine » ; une préparation de chaque semaine, « chaque semaine : Yaourts maison ». Mêmes mots pour les
  * deux rôles : jamais de croix.
  */
 export function texteOrigine(ligne, { profils = [], moi = null } = {}) {
@@ -614,7 +1147,9 @@ export function texteOrigine(ligne, { profils = [], moi = null } = {}) {
   const morceaux = [];
   for (const source of listeDe(ligne?.sources)) {
     let morceau;
-    if (source.pour) {
+    if (source?.type === 'habituel') morceau = 'chaque semaine';
+    else if (source?.type === 'hebdo') morceau = `chaque semaine\u00A0: ${reduire(source.nom) || 'Préparation sans nom'}`;
+    else if (source.pour) {
       const profil = listeDe(profils).find((p) => p?.id === source.pour);
       const pourMoi = Boolean(moi) && moi.id === source.pour;
       const style = LIBELLES_STYLE[source.style];
@@ -635,10 +1170,16 @@ export function texteDejaPris(ligne) {
 /**
  * Une source de la feuille d'un article (⋮) : « Gratin de pâtes · 400 g » ; « Version mer d'Adulte B · Gratin ·
  * 100 g » ; pour soi : « Votre version mer · Gratin · 100 g » ; profil sans styles : « Version d'Adulte A · … »,
- * « Votre version · … ». Sans quantité, le nom seul.
+ * « Votre version · … ». Sans quantité, le nom seul. T3d : « Chaque semaine · 1 l » (habituel), « Chaque semaine :
+ * Yaourts maison · 1 l » (préparation de chaque semaine).
  */
 export function texteSource(source, { profils = [], moi = null } = {}) {
   const quantite = texteQuantites(source?.totaux);
+  if (source?.type === 'habituel' || source?.type === 'hebdo') {
+    const quoi = source.type === 'habituel' ? 'Chaque semaine'
+      : `Chaque semaine\u00A0: ${reduire(source.nom) || 'Préparation sans nom'}`;
+    return quantite ? `${quoi} · ${quantite}` : quoi;
+  }
   const nom = reduire(source?.nom) || 'Plat sans nom';
   const morceaux = [];
   if (source?.pour) {
@@ -663,18 +1204,25 @@ export function preparerAjout(libelle, { liste = null } = {}) {
   if (propre.length > ARTICLE_MAX) return { erreur: 'long' };
   const produitId = idProduit(propre);
   const meme = produitId ? listeDe(liste?.lignes).find((ligne) => ligne?.produitId === produitId) : null;
-  return { donnees: { libelle: propre }, aussi: meme ? { nom: meme.nom, quantite: meme.quantite } : null };
+  if (!meme) return { donnees: { libelle: propre }, aussi: null };
+  // T3d : une ligne « Comme chaque semaine » (habituel, préparation) le dit, au lieu de « pour vos plats ».
+  return {
+    donnees: { libelle: propre },
+    aussi: { nom: meme.nom, quantite: meme.quantite, ...(meme.chaqueSemaine === true ? { chaqueSemaine: true } : {}) },
+  };
 }
 
 /**
  * Annonce de la feuille « Ajouter à la liste » : « ✓ « Piles » ajouté. » ; même produit déjà dans la liste (`aussi`,
- * preparerAjout) : « ✓ « Lait » ajouté. Il y en a aussi 6 l pour vos plats. ».
+ * preparerAjout) : « ✓ « Lait » ajouté. Il y en a aussi 6 l pour vos plats. » ; T3d, une ligne « Comme chaque
+ * semaine » : « ✓ « Lait » ajouté. Il y en a aussi 1 l chaque semaine. ».
  */
 export function texteAjoutArticle(libelle, aussi = null) {
   const nom = majuscule(reduire(libelle));
   if (!aussi) return `✓ «\u00A0${nom}\u00A0» ajouté.`;
   const quantite = typeof aussi.quantite === 'string' ? aussi.quantite.trim() : ''; // espaces insécables gardées
-  return `✓ «\u00A0${nom}\u00A0» ajouté. Il y en a aussi ${quantite ? `${quantite} ` : ''}pour vos plats.`;
+  const pour = aussi.chaqueSemaine === true ? 'chaque semaine' : 'pour vos plats';
+  return `✓ «\u00A0${nom}\u00A0» ajouté. Il y en a aussi ${quantite ? `${quantite} ` : ''}${pour}.`;
 }
 
 /**
@@ -705,20 +1253,65 @@ export function bandeauxCourses(liste) {
 /**
  * Lignes calculées restées à acheter → [{ libelle, precision, produitId }] (`precision` : le reste d'une ligne prise en
  * partie, sinon sa quantité, arrondis à l'achat, 40 caractères au plus ; '' sans quantité). Ni le placard (« Déjà à la
- * maison ? »), ni les articles à la main.
+ * maison ? »), ni les articles à la main. T3d : ni ce qui revient de soi-même la semaine suivante (habituels et
+ * préparations de chaque semaine) : une ligne « Comme chaque semaine » est omise, et une ligne qui sert aussi un plat ne
+ * garde que la part des plats qui manque (partDesPlats ; omise si rien ne manque pour les plats). Avec `chaqueSemaine`
+ * (la phrase de « Courses terminées ? ») : les lignes omises pour cette raison sont nommées aussi, avec ce qui manque et
+ * `chaqueSemaine: true` (jamais gardées pour la prochaine fois : elles reviendront).
  */
-function lignesRestantes(liste) {
-  return listeDe(liste?.lignes).filter((ligne) => !ligne.cochee).map((ligne) => ({
-    libelle: ligne.libelle, precision: texteQuantites(ligne.reste ?? ligne.totaux).slice(0, PRECISION_MAX),
-    produitId: ligne.produitId,
-  }));
+function lignesRestantes(liste, { chaqueSemaine = false } = {}) {
+  const restantes = [];
+  for (const ligne of listeDe(liste?.lignes)) {
+    if (ligne.cochee) continue;
+    const quantite = ligne.chaqueSemaine === true ? null : partDesPlats(ligne);
+    if (quantite === null) {
+      if (chaqueSemaine) {
+        restantes.push({
+          libelle: ligne.libelle, precision: texteQuantites(ligne.reste ?? ligne.totaux ?? {}).slice(0, PRECISION_MAX),
+          produitId: ligne.produitId, chaqueSemaine: true,
+        });
+      }
+      continue;
+    }
+    restantes.push({ libelle: ligne.libelle, precision: texteQuantites(quantite).slice(0, PRECISION_MAX), produitId: ligne.produitId });
+  }
+  return restantes;
+}
+
+/**
+ * Ce qui manque d'une ligne pour les plats seulement (T3d) : famille par famille, le plus petit de son reste (prise en
+ * partie, sinon son total) et de la part des plats (sources `plat`) ; ce qui a été pris compte d'abord pour les habituels
+ * et les préparations de chaque semaine, qui reviendront d'eux-mêmes (dans le doute, la part des plats est gardée :
+ * jamais perdue). Une ligne sans quantité de chaque semaine : son reste tel quel. null si rien ne manque pour les plats
+ * alors qu'il y avait une quantité (tout reviendra la semaine suivante).
+ */
+function partDesPlats(ligne) {
+  const base = ligne.reste ?? ligne.totaux ?? {};
+  const plats = {};
+  let chaque = false;
+  for (const source of listeDe(ligne.sources)) {
+    if (!estObjet(source?.totaux)) continue;
+    if (source.type !== 'plat') {
+      if (famillesDe(source.totaux).some((f) => source.totaux[f] > 0)) chaque = true;
+      continue;
+    }
+    for (const f of famillesDe(source.totaux)) plats[f] = (plats[f] ?? 0) + source.totaux[f];
+  }
+  if (!chaque) return base;
+  const reste = {};
+  for (const f of famillesDe(base)) {
+    const valeur = arrondi(Math.min(base[f], plats[f] ?? 0));
+    if (valeur > ecartTolere(base[f])) reste[f] = valeur;
+  }
+  return famillesDe(base).length && !Object.keys(reste).length ? null : reste;
 }
 
 /**
  * Lignes restées à acheter d'une semaine dont les courses ont commencé (au moins une coche : `coches` de la semaine
  * ou un article coché visible) et ne sont pas terminées (statut avant `courses_faites`) → [{ libelle, precision,
  * produitId }] (`precision` : le reste d'une ligne prise en partie, sinon sa quantité, arrondis à l'achat ; '' sans
- * quantité ; `produitId` : fixe l'identifiant de l'article, semaine.js › idReste). Ni
+ * quantité ; `produitId` : fixe l'identifiant de l'article, semaine.js › idReste). T3d : ni les habituels ni les
+ * préparations de chaque semaine, qui reviennent d'eux-mêmes (lignesRestantes). Ni
  * le placard (« Déjà à la maison ? »), ni les articles à la main (ils restent d'eux-mêmes), ni une ligne dont le produit
  * a déjà un article pas coché (il la rappellera : jamais deux « Beurre » sur la nouvelle liste). Une fois les courses
  * terminées (T3b), rien : ce qui manquait a été gardé, ou laissé, par « Courses terminées ».
@@ -786,8 +1379,10 @@ export function coursesFaites(semaine) {
 
 /**
  * Ce qui reste à acheter au moment de « Courses terminées » → [{ type: 'ligne' | 'article', libelle, precision,
- * produitId, articleId? }] : les lignes calculées pas cochées (avec la quantité qui manque : le reste d'une ligne prise
- * en partie), puis les articles ajoutés à la main pas cochés (leur précision). Un produit n'est nommé qu'une fois : une
+ * produitId, articleId?, chaqueSemaine? }] : les lignes calculées pas cochées (avec la quantité qui manque : le reste
+ * d'une ligne prise en partie ; T3d : une ligne « Comme chaque semaine » pas prise est nommée aussi, `chaqueSemaine:
+ * true`, pour qu'un lait oublié se voie avant de finir ; preparerFinDesCourses ne la garde jamais, elle reviendra),
+ * puis les articles ajoutés à la main pas cochés (leur précision). Un produit n'est nommé qu'une fois : une
  * ligne passe avant un article du même produit (un article « beurre » ajouté à la main et la ligne « beurre » des plats :
  * « Il reste 1 article : beurre. »). Ni le placard, ni ce qui est coché. Vide : « Courses terminées » finit tout de
  * suite ; sinon la feuille « Courses terminées ? » le dit (phraseRestesFin).
@@ -801,7 +1396,7 @@ export function restesFinDesCourses(liste) {
     return true;
   };
   return [
-    ...lignesRestantes(liste).map((reste) => ({ type: 'ligne', ...reste })),
+    ...lignesRestantes(liste, { chaqueSemaine: true }).map((reste) => ({ type: 'ligne', ...reste })),
     ...articlesPasCoches(liste).map((a) => ({
       type: 'article', libelle: a.libelle, precision: a.precision ?? '', produitId: a.produitId, articleId: a.articleId,
     })),
