@@ -1,5 +1,6 @@
-// Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde, projet Claude, relecture des recettes et
-// notifications (T2e : carte « 🔔 Notifications », où l'app crée le sujet ntfy du foyer).
+// Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde, projet Claude, relecture des recettes,
+// notifications (T2e : carte « 🔔 Notifications », où l'app crée le sujet ntfy du foyer) et drive (T3b : carte « 🚗
+// Drive », la même feuille « Votre drive » que dans Courses).
 // Profil d'un enfant (T2c) : « 🧸 Ce que <Enfant> mange › » ouvre l'écran de ses précautions selon l'âge ; la ligne
 // du profil donne son âge (« · 🧸 4 ans ») et, si sa date demande des précautions que ses règles n'ont pas encore
 // (restauration, règle abîmée retirée, barème complété), « 🧸 N précautions à ajouter › ». Calcul seulement : rien
@@ -16,6 +17,8 @@ import { platsARelire, lotDePrecautions } from '../coeur/relecture.js';
 import { MARQUEURS_PRECAUTION, estRelue } from '../coeur/vocabulaire.js';
 import { ageEnMois, estRegleAge, reglesSelonAge, texteAge } from '../coeur/age.js';
 import { LIEN_INSTALLER_NTFY, lienAbonnement, sujetValide, texteEssai } from '../coeur/ntfy.js';
+import { TEXTES_DRIVE, texteVotreDrive } from '../coeur/drive.js';
+import { driveDe, majFeuillesDrive, ouvrirVotreDrive } from './drive.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -645,6 +648,42 @@ function creerCarteNotifications(ctx) {
   };
 }
 
+/**
+ * Carte « 🚗 Drive » (T3b) : le drive réglé (« Votre drive : drive.exemple.fr ») et « Changer », qui ouvre la feuille
+ * « Votre drive » sur son formulaire (avec « Ne plus chercher au drive ») ; pas réglé : « Régler le drive ». Les deux
+ * membres règlent aussi le drive depuis Courses, là où ils s'en servent. → { noeud, maj }
+ */
+function creerCarteDrive(ctx) {
+  let courant = ctx;
+  const texte = el('p', {});
+  const bouton = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button' });
+  bouton.addEventListener('click', () => {
+    ouvrirVotreDrive(() => courant, {
+      modifier: true,
+      onFermer: () => {
+        if (bouton.isConnected) bouton.focus();
+      },
+    });
+  });
+
+  function maj(nouveau) {
+    courant = nouveau;
+    const drive = driveDe(nouveau);
+    const voulu = drive ? texteVotreDrive(drive.nom) : TEXTES_DRIVE.aRegler;
+    if (texte.textContent !== voulu) texte.textContent = voulu;
+    const libelle = drive ? TEXTES_DRIVE.changer : TEXTES_DRIVE.regler;
+    if (bouton.textContent !== libelle) bouton.textContent = libelle;
+    majFeuillesDrive(nouveau);
+  }
+
+  const noeud = el('section', { class: 'carte carte-drive', 'aria-labelledby': 'titre-drive' },
+    el('h2', { id: 'titre-drive' }, el('span', { 'aria-hidden': 'true' }, '🚗\u00A0'), 'Drive'),
+    texte,
+    bouton);
+  maj(ctx);
+  return { noeud, maj };
+}
+
 let versNotifications = false;
 
 /** Appelé par le lien « 🔔 Être prévenu sur votre téléphone › » de Demandes : la prochaine ouverture de Réglages va à la carte « 🔔 Notifications ». */
@@ -657,6 +696,7 @@ export function creer(ctx) {
   const carteProjetClaude = creerCarteProjetClaude(ctx);
   const carteRelecture = creerCarteRelecture(ctx);
   const carteNotifications = creerCarteNotifications(ctx);
+  const carteDrive = creerCarteDrive(ctx);
   // Venu du lien « 🔔 Être prévenu sur votre téléphone › » de l'écran Demandes : une seule fois, la carte « 🔔
   // Notifications » défile en haut et son titre reçoit le focus. Après l'image suivante : `monter` a déjà remis le
   // défilement et le focus de la zone.
@@ -787,11 +827,12 @@ export function creer(ctx) {
       carteProjetClaude.noeud,
       carteRelecture.noeud,
       carteNotifications.noeud,
+      carteDrive.noeud,
       etatVide({
         emoji: '⚙️',
         teinte: 'olive',
         titre: 'D’autres réglages arrivent',
-        texte: 'Les rayons du magasin et les appareils trouveront leur place ici.',
+        texte: 'Les appareils trouveront leur place ici.',
       }),
     ),
     maj(nouveau) {
@@ -800,6 +841,7 @@ export function creer(ctx) {
       carteProjetClaude.maj(nouveau);
       carteRelecture.maj(nouveau);
       carteNotifications.maj(nouveau);
+      carteDrive.maj(nouveau);
     },
     detruire() {
       carteProjetClaude.detruire();

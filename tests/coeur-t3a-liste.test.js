@@ -250,7 +250,7 @@ test('liste : forme d’une ligne (clé = produit, recherche = nom, ni coche ni 
   assert.deepEqual(pates, {
     type: 'ligne', cle: 'pate', produitId: 'pate', repli: null, replis: [], nom: 'Pâtes', libelle: 'pâtes', rayon: 'epicerie_salee',
     totaux: { masse: 750 }, quantite: '750\u00A0g', sources: pates.sources, placard: false, rachetee: false,
-    cochee: false, dejaPris: null, reste: null, recherche: 'pâtes',
+    cochee: false, dejaPris: null, reste: null, recherche: 'pâtes', rechercheFoyer: null, // T3b : aucun mot du foyer
   });
 });
 
@@ -735,7 +735,9 @@ test('carteProchaineAction : plats sans recette seulement ; tout est dans le pan
   assert.deepEqual(sansRecette.boutons, [{ action: 'courses', libelle: 'Faire les courses ›', principal: true }]);
   const coches = Object.fromEntries(calculer(SEMAINE).lignes.map((l) => [l.cle, valeurCoche(l.totaux, 1)]));
   const panier = carte({ ...SEMAINE, coches });
-  assert.deepEqual([panier.cas, panier.titre, panier.texte], ['panier', 'Tout est dans le panier 🎉', 'Bon appétit\u00A0!']);
+  // T3b : tant que les courses ne sont pas terminées, la carte invite à le dire dans Courses (« Bon appétit ! » vient
+  // avec « Courses faites ✓ », coeur-t3b-courses.test.js).
+  assert.deepEqual([panier.cas, panier.titre, panier.texte], ['panier', 'Tout est dans le panier 🎉', 'Dites-le dans Courses quand c’est fini.']);
   assert.deepEqual(panier.boutons, [{ action: 'courses', libelle: 'Voir la liste ›', principal: false }]);
   // Deux derniers jours : la semaine suivante se prépare (principal quand tout est dans le panier).
   const fin = carte({ ...SEMAINE, coches }, { aujourdhui: '2026-10-15' });

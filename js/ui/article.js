@@ -3,11 +3,15 @@
 //   focus (on enchaîne, clavier ouvert) ; trois suggestions sous le champ, ajoutées d'un toucher ; « Terminé » ajoute
 //   d'abord le texte en cours (rien de tapé ne se perd). Le nom suffit : ni quantité ni rayon demandés.
 // - Feuille d'un article (⋮) : « 600 g en tout », « Pour : » et une ligne par plat ou version, « Déjà pris… » ; un
-//   produit du placard : « À racheter cette fois » ; un article ajouté à la main : « Retirer de la liste ».
-// Écritures : actions de l'app (ajouterArticle, retirerArticle, racheter), seulement sur un geste.
+//   produit du placard : « À racheter cette fois » ; un article ajouté à la main : « Retirer de la liste » ; drive réglé
+//   (T3b) : « Au drive, je cherche : « pâtes courtes » · Changer » (feuille « Au drive, je cherche », drive.js).
+// Écritures : actions de l'app (ajouterArticle, retirerArticle, racheter ; changerRecherche par drive.js), seulement
+// sur un geste.
 import { el, ecrireTexte, reconcilier } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { listeCourante } from './plat-semaine.js';
+import { driveDe, ouvrirMotCherche } from './drive.js';
+import { TEXTES_DRIVE, texteJeCherche } from '../coeur/drive.js';
 import { catalogueAvecDictionnaire, suggestions, LIBELLES_RAYON } from '../coeur/edition.js';
 import {
   ERREURS_ARTICLE, preparerAjout, texteAjoutArticle, texteDejaPris, texteQuantites, texteSource,
@@ -233,11 +237,27 @@ export function ouvrirDetailsArticle(lireCtx, cle, { onFermer } = {}) {
     },
   }, 'Retirer de la liste');
   const blocMain = el('div', { class: 'bloc-main' }, texteMain, boutonRetirer);
+  // Drive réglé (T3b) : le mot cherché au drive pour ce produit, « Changer » ouvre « Au drive, je cherche ».
+  const texteMot = el('span', { class: 'texte-mot-drive' });
+  const boutonMot = el('button', {
+    class: 'bouton bouton-texte bouton-changer-mot',
+    type: 'button',
+    // Le nom lu commence par le mot affiché : « Changer le mot cherché ».
+    'aria-label': TEXTES_DRIVE.changerLeMot,
+    onclick: () => ouvrirMotCherche(lireCtx, cle, {
+      onFermer: () => {
+        if (ouverte && boutonMot.isConnected) boutonMot.focus();
+      },
+    }),
+  }, TEXTES_DRIVE.changer);
+  const blocMot = el('div', { class: 'bloc-mot-drive', hidden: true },
+    el('p', { class: 'ligne-mot-drive' }, texteMot, el('span', { 'aria-hidden': 'true' }, ' · '), boutonMot),
+    el('p', { class: 'aide' }, TEXTES_DRIVE.serviraSuivantes));
   const boutonFermer = el('button', { class: 'bouton bouton-texte', type: 'button', onclick: () => fermer() }, 'Fermer');
 
   const depart = trouver(courant, cle);
   const feuille = ouvrirFeuille(depart?.nom ?? 'Article', () => el('div', { class: 'feuille-article' },
-    total, dejaPris, blocSources, blocPlacard, blocMain,
+    total, dejaPris, blocSources, blocPlacard, blocMain, blocMot,
     el('div', { class: 'actions-feuille' }, boutonFermer)), {
     onFermer: () => {
       ouverte = false;
@@ -280,6 +300,10 @@ export function ouvrirDetailsArticle(lireCtx, cle, { onFermer } = {}) {
     }
     blocMain.hidden = !article;
     if (article) ecrireTexte(texteMain, 'Ajouté à la main.');
+    // Le mot cherché ne sert qu'avec un drive réglé ; jamais pour un produit du placard (il n'est pas sur la liste).
+    const avecMot = Boolean(driveDe(courant)) && !(ligne.placard && !ligne.rachetee);
+    blocMot.hidden = !avecMot;
+    if (avecMot) ecrireTexte(texteMot, texteJeCherche(ligne.recherche ?? ligne.libelle));
   }
 
   const handle = {
