@@ -58,6 +58,7 @@ import { annonceRelecture, bilanRelecture, platsARelire } from './coeur/relectur
 import {
   lireSemaine, semaineAPreparer, semaineEnCours, appliquerChamps, estDansLaSemaine, texteDates, aDesPlats,
   ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage, EFFACER, statutSemaine,
+  validerDates, texteErreurDates,
 } from './coeur/semaine.js';
 import {
   listeDeCourses, ecrituresCoche, ecrituresCocheArticle, ecrituresRachat, preparerAjout, texteAjoutArticle,
@@ -1322,15 +1323,16 @@ const actions = {
    * → { code: 'ok', id (semaine), creee (vrai si ce geste a créé la semaine), restes (articles des restes écrits) } |
    *   { code } : chargement (semaines, articles, plats ou profils pas encore lus : rien n'est écrit), invalide (plat
    *   inconnu, dans la corbeille, apéro ou préparation de chaque semaine, cible illisible), deja (déjà dans cette
-   *   semaine ; `id`), echec (lot impossible à construire : annoncé), refuse.
+   *   semaine ; `id`), chevauche (T3c, `silencieux` seulement : la cible, encore sans plat, touche une semaine qui a
+   *   des plats ; rien n'est écrit), echec (lot impossible à construire : annoncé), refuse.
    */
   ajouterALaSemaine(platId, { cible = null, restes = [], silencieux = false } = {}) {
     if (!etat.utilisateur) return { code: 'refuse' };
     if (!semainesLues()) return { code: 'chargement' };
     const plat = platsSepares().actifs.find((p) => p.id === platId);
     if (!plat) return { code: 'invalide' };
-    const ecritures = ecrituresAjout(etat.semaines, platId, {
-      cible,
+    const preparer = (visee) => ecrituresAjout(etat.semaines, platId, {
+      cible: visee,
       semainesChargees: etat.semainesChargees,
       aujourdhui: dateDuJour(),
       auteur: etat.utilisateur.email,
@@ -1338,6 +1340,11 @@ const actions = {
       restes,
       plat,
     });
+    let ecritures = preparer(cible);
+    // Cible devenue impossible (ses dates touchent une semaine qui a des plats, changée entre-temps sur l'autre
+    // téléphone) : la fiche et Plats prennent la semaine visée du moment, que l'annonce dit ; la feuille de choix
+    // (`silencieux`), qui affiche ses dates, recalcule elle-même la sienne.
+    if (ecritures.code === 'chevauche' && cible && !silencieux) ecritures = preparer(null);
     if (ecritures.code) return ecritures;
     const nom = citerPlat(platId);
     if (!ecrireDansLaSemaine(ecritures, `${nom} n’a pas pu être ajouté à la semaine. Réessayez.`)) return { code: 'echec' };
@@ -1403,11 +1410,22 @@ const actions = {
     return { code: 'ok' };
   },
   /**
-   * Réglage d'un plat de la semaine (feuille du plat) : T3a, `{ repas }` (entier de 1 à 14, écrit même s'il vaut le
-   * défaut ; null : revenir au défaut) ; T3c ajoutera `mange` et `invites`. Écrit tout de suite : l'écran regroupe
-   * lui-même les touchers (0,8 s) et les envoie à la fermeture de la feuille ou quand l'app passe en arrière-plan. Aucune
-   * annonce. `semaineId` : sans lui, la semaine montrée.
-   * → { code } : ok, chargement, inutile (plat absent de la semaine), invalide, echec, refuse.
+   * Réglage d'un plat de la semaine (feuille du plat), préparé par coeur/semaine.js › ecrituresReglage, chaque champ
+   * écrit seul par son chemin pointé (`update` en lot ; hors ligne : part plus tard ; aucune transaction) :
+   * - `repas` (T3a) : entier de 1 à 14, écrit même s'il vaut le défaut ; null : revenir au défaut ;
+   * - `mange: { profilId: bool | null }` (T3c, « Qui en mange ? ») : `plats.<id>.mange.<p>` ; une valeur égale au défaut
+   *   du moment efface le chemin (une version arrivée plus tard fera entrer le profil toute seule) ;
+   * - `invites: { adultes?, enfants? }` (T3c) : entiers de 0 à 20, chacun son chemin ; 0 ou null efface ; un invité
+   *   n'écrit jamais `repas` (il ajoute des portions, sans retirer de repas) ;
+   * - `styles: { profilId: 'mer' | 'vegetal' | null }` : comme choisirStyle ;
+   * - `depart: true` (T3c, « Revenir aux réglages de départ ») : chaque réglage écrit du plat effacé, chemin par chemin ;
+   *   des touchers qui le suivent (coeur/semaine.js › fusionnerReglages) s'écrivent par-dessus, dans le même lot.
+   * Écrit tout de suite : l'écran regroupe lui-même les touchers (0,8 s, fusionnerReglages, affichage immédiat par
+   * appliquerChamps) et les envoie à la fermeture de la feuille ou quand l'app passe en arrière-plan. Aucune annonce :
+   * la phrase des portions change aussitôt. Jamais de demande ici (« 📬 Demander ma version » reste un geste :
+   * actions.demander). `semaineId` : sans lui, la semaine montrée.
+   * → { code } : ok, chargement, inutile (plat absent de la semaine ; `depart` seul sur un plat sans réglage écrit),
+   *   style (ce style ne convient pas), invalide (réglage illisible, clé inconnue, profil inconnu), echec, refuse.
    */
   reglerPlat(platId, reglage, { semaineId = null } = {}) {
     if (!etat.utilisateur) return { code: 'refuse' };
@@ -1422,6 +1440,53 @@ const actions = {
     if (!ecrireDansLaSemaine(ecritures, 'Ce réglage n’a pas pu être enregistré. Réessayez.')) return { code: 'echec' };
     rendre();
     return { code: 'ok' };
+  },
+  /**
+   * « Les dates de la semaine » (T3c, « Changer » à côté de « Du 10 au 16 octobre » ; les deux membres) : nouvelles
+   * dates `debut` et `fin` ('AAAA-MM-JJ', `input type=date`) de la semaine `semaineId` (sans lui, la semaine montrée),
+   * vérifiées sur le téléphone (coeur/semaine.js › validerDates, avec la date du jour : 14 jours au plus, fin pas encore
+   * passée, aucun jour commun avec une autre semaine qui a des plats ; une semaine vidée, invisible, ne compte pas).
+   * Écrites par `update` en lot (hors ligne : part plus tard ; aucune transaction), toujours ensemble dès que l'une
+   * change (validerDates les rend ensemble) : deux téléphones qui changent l'un le début, l'autre la fin ne laissent
+   * jamais une semaine illisible (fin avant le début, plus de 14 jours), qui disparaîtrait avec ses plats. Jamais l'identifiant (figé), le statut, les traces de « Courses terminées », les
+   * articles `garde--` et `reste--`, ni `derniereFois` : une semaine aux courses faites garde ses dates modifiables,
+   * rien d'autre ne change. Appliqué tout de suite, puis annonce `message` (« Dates enregistrées : du 11 au
+   * 17 octobre. » ; « … : le 10 octobre. » pour un seul jour) juste après, une fois que la feuille, qui se ferme au
+   * retour de l'action, ne rend plus la zone d'annonce inerte ; `silencieux: true` : aucune annonce (l'écran peut
+   * annoncer `message` lui-même).
+   * → { code: 'ok', id, debut, fin, message } | { code: 'inchange' } (mêmes dates : rien n'est écrit) |
+   *   { code: erreur, erreur: 'vide' | 'ordre' | 'duree' | 'passee' | 'chevauche', message, avec? } (rien n'est écrit ;
+   *   le résultat de validerDates, que texteErreurDates lit aussi ; `message` : « La fin doit venir après le début. »,
+   *   « Deux semaines au plus. », « Ces dates touchent la semaine du 3 au 9 octobre : choisissez d’autres dates. »,
+   *   « Choisissez les deux dates. », « La semaine doit finir aujourd’hui ou plus tard. » ; `avec` : { debut, fin } de
+   *   la semaine touchée) |
+   *   { code: 'chargement' | 'invalide' (aucune semaine, ou semaine inconnue) | 'echec' (lot impossible à construire :
+   *   annoncé) | 'refuse' }.
+   */
+  changerDates({ debut = null, fin = null } = {}, { semaineId = null, silencieux = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine) return { code: 'invalide' };
+    const resultat = validerDates({ debut, fin }, { semaines: etat.semaines, id: semaine.id, aujourdhui: dateDuJour() });
+    if (resultat.erreur) {
+      return {
+        code: resultat.erreur,
+        erreur: resultat.erreur,
+        message: texteErreurDates(resultat),
+        ...(resultat.avec ? { avec: { ...resultat.avec } } : {}),
+      };
+    }
+    if (resultat.code) return { code: resultat.code };
+    if (!ecrireDansLaSemaine(resultat, 'Les dates n’ont pas pu être enregistrées. Réessayez.')) {
+      return { code: 'echec' };
+    }
+    rendre();
+    const message = `Dates enregistrées\u00A0: ${texteDates(debut, fin)}.`;
+    // Annoncée au tour suivant : la feuille des dates (modale), fermée au retour de l'action, laisse alors la zone
+    // d'annonce lisible par le lecteur d'écran.
+    if (!silencieux) setTimeout(() => annoncer(message), 0);
+    return { code: 'ok', id: resultat.id, debut, fin, message };
   },
   /**
    * Cocher (`oui` vrai) ou décocher une ligne de la liste par sa clé (`ligne.cle` de ctx.liste) : une ligne calculée
@@ -1707,7 +1772,8 @@ function nomArticle(article) {
 }
 
 /**
- * Écritures d'une semaine ({ creation?, id, champs, articles? }, préparées par coeur/semaine.js ou coeur/liste.js) :
+ * Écritures d'une semaine ({ creation?, id, champs, articles? }, préparées par coeur/semaine.js ou coeur/liste.js ;
+ * dates changées : { id, champs: { debut, fin } }, actions.changerDates) :
  * envoyées par un lot (donnees.js › ecrireSemaine ; hors ligne : plus tard ; un refus du serveur est annoncé avec
  * `echec`), puis appliquées tout de suite sur ce téléphone (appliquerChamps, pour l'affichage seulement : la copie de
  * Firestore les remplace dès son arrivée). Lot impossible à construire : `echec` annoncé, rien d'appliqué.

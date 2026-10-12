@@ -273,8 +273,12 @@ test('semaineVisee : semaine suivante vidée (« Annuler ») → reprise telle q
   }
   assert.deepEqual(semaineSuivante([S1, S2], '2026-10-16', S1), { id: '2026-10-17', debut: '2026-10-17', fin: '2026-10-23' });
   assert.deepEqual(semaineSuivante([S1], '2026-10-16', S1), { id: '2026-10-17', debut: '2026-10-17', fin: '2026-10-23' });
-  // Un document qui porte l'identifiant à d'autres dates : nouvelle semaine « -2 ».
-  assert.equal(semaineSuivante([S1, { id: '2026-10-17', debut: '2026-10-18', fin: '2026-10-20' }], '2026-10-16', S1).id, '2026-10-17-2');
+  // Un document qui porte l'identifiant à d'autres dates, sans les toucher : nouvelle semaine « -2 ».
+  assert.equal(semaineSuivante([S1, { id: '2026-10-17', debut: '2026-09-01', fin: '2026-09-07' }], '2026-10-16', S1).id, '2026-10-17-2');
+  // T3c (changement voulu) : une semaine sans plat qui touche ces dates (créée puis vidée, dates changées) est reprise
+  // sous son identifiant, aux dates de la semaine suivante : jamais deux semaines qui se chevauchent.
+  assert.deepEqual(semaineSuivante([S1, { id: '2026-10-17', debut: '2026-10-18', fin: '2026-10-20' }], '2026-10-16', S1),
+    { id: '2026-10-17', debut: '2026-10-17', fin: '2026-10-23' });
 });
 
 // ——— Chemins et champs ———
@@ -578,11 +582,16 @@ test('ecrituresAjout : semaines pas encore lues → « chargement », jamais de 
 
 test('ecrituresAjout : la cible figée par l’écran est respectée, même si une autre semaine est apparue entre-temps', () => {
   const cible = semaineVisee([S1], '2026-10-16'); // la feuille s'ouvre : semaine du 17 au 23, à créer
-  // Pendant ce temps, l'autre téléphone crée une semaine qui commence le 18 : le plat va quand même au 17-23.
+  // Pendant ce temps, l'autre téléphone crée une semaine qui commence le 18, vidée depuis : le plat va quand même au
+  // 17-23 (une semaine sans plat ne compte pas).
   const autre = { id: '2026-10-18', debut: '2026-10-18', fin: '2026-10-24', creeLe: T };
   const ecritures = ecrituresAjout([S1, autre], 'gratin', { ...OPTIONS_AJOUT, aujourdhui: '2026-10-16', cible });
   assert.equal(ecritures.id, '2026-10-17');
   assert.deepEqual(ecritures.creation.donnees, { debut: '2026-10-17', fin: '2026-10-23', creePar: 'a@exemple.fr', creeLe: T });
+  // T3c (relecture, changement voulu) : avec un plat, elle serait cachée par la nouvelle semaine le 18 → « chevauche »,
+  // rien n'est écrit et l'écran recalcule la semaine visée (jamais deux semaines qui ont des plats et se chevauchent).
+  assert.deepEqual(ecrituresAjout([S1, avecPlats(autre, { curry: dans(1) })], 'gratin', { ...OPTIONS_AJOUT, aujourdhui: '2026-10-16', cible }),
+    { code: 'chevauche' });
   // « Ajouter plutôt à la semaine qui finit le 16 » : la cible devient l'autre semaine, qui existe déjà.
   const plutot = ecrituresAjout([S1], 'gratin', { ...OPTIONS_AJOUT, aujourdhui: '2026-10-16', cible: cible.autre });
   assert.deepEqual(plutot, { id: '2026-10-10', champs: { 'plats.gratin.ajouteLe': T, 'plats.gratin.retire': EFFACER } });

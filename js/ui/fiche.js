@@ -21,9 +21,9 @@ import { stylesAttendus, marqueursSurveilles } from '../coeur/regles.js';
 import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
 import { estDansCorbeille, platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
-import { dateDemande, etatDemande, texteDemandee } from '../coeur/demandes.js';
+import { etatDemande, texteDemandee } from '../coeur/demandes.js';
 import { estDansLaSemaine, lireSemaine, peutAllerDansLaSemaine, semaineVisee, texteDates } from '../coeur/semaine.js';
-import { majPlatsDeLaSemaine, ouvrirPlatDeLaSemaine, restesPour } from './plat-semaine.js';
+import { majPlatsDeLaSemaine, ouvrirPlatDeLaSemaine, phraseDemandee, restesPour } from './plat-semaine.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -315,22 +315,9 @@ function versionAttendue(etats, demandes = new Set()) {
     ?? null;
 }
 
-// Suites de la phrase « 📬 Demandée… » : une version (sauf hors ligne, avant le serveur : la phrase dit alors que la
-// demande partira au retour du réseau), la recette d'un plat ⏳ (toujours).
-const SUITE_VERSION = ' Elle apparaîtra ici dès qu’elle sera prête.';
-const SUITE_RECETTE = ' Vous pouvez aussi l’écrire vous-même.';
-// Clé du bloc « 📬 Demander la recette » ; celle d'une version est `profil:<id>`.
+// Clé du bloc « 📬 Demander la recette » ; celle d'une version est `profil:<id>`. Phrase « 📬 Demandée… » :
+// plat-semaine.js › phraseDemandee (partagée avec la feuille du plat de la semaine).
 const CLE_RECETTE = 'recette';
-
-/**
- * Phrase « 📬 Demandée… » d'une demande ouverte (coeur/demandes.js › texteDemandee), suite comprise. `pourVersion` :
- * « Elle apparaîtra ici dès qu’elle sera prête. » ; sinon « Vous pouvez aussi l’écrire vous-même. ».
- */
-function phraseDemandee(demande, { pourVersion, horsLigne }) {
-  const base = texteDemandee(demande, { horsLigne });
-  if (!pourVersion) return `${base}${SUITE_RECETTE}`;
-  return dateDemande(demande).enAttente && horsLigne ? base : `${base}${SUITE_VERSION}`;
-}
 
 /** Ligne « 📬 Demandée par Adulte B le 9 octobre. » (gestionnaire) : qui a demandé, et quand ; jamais une adresse. */
 function ligneDemandee(demande, { profils, moi }) {

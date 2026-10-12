@@ -6,6 +6,8 @@
 // semaine suivante est déjà montrée ; plats de la corbeille dits d'une ligne discrète). Pour le gestionnaire (hors
 // aperçu « Repas et courses ») : la carte « 🧸🎂 <Enfant> a 5 ans ! » quand des précautions de l'enfant ont passé leur
 // âge (T2c-3), la carte « 📬 2 demandes à traiter » (T2e) en tête, et la carte « Idées de plats » en bas.
+// Les dates de la semaine (« Du 10 au 16 octobre ») ont leur « Changer » (T3c) : feuille « Les dates de la semaine »,
+// « Du » et « Au » natifs, deux semaines au plus, jamais à cheval sur une autre semaine.
 // Rien n'est écrit à l'ouverture : chaque section se met à jour en place (`maj`), la liste de courses suit.
 import { el, enteteVue, pastille, ecrireTexte, reconcilier } from './dom.js';
 import { prenomDe } from './profil.js';
@@ -24,7 +26,8 @@ import {
 } from '../coeur/claude.js';
 import { carteAnniversaire } from '../coeur/age.js';
 import {
-  exceptionPlat, lireSemaine, peutPreparerLaSuivante, resumePlat, semaineEnCours, texteDates, texteJour,
+  TEXTES_DATES, exceptionPlat, feuillePlat, lireSemaine, peutPreparerLaSuivante, resumePlat, semaineEnCours,
+  texteDates, texteErreurDates, texteJour, validerDates,
 } from '../coeur/semaine.js';
 import { carteProchaineAction, grouperParRayon, ordreRayons } from '../coeur/liste.js';
 
@@ -270,6 +273,168 @@ function creerCarteDemandes(ctx) {
   return { noeud, maj };
 }
 
+// ——— Les dates de la semaine (T3c) ———
+
+/** Réponse d'une action refusée : { erreur } ou un code autre que « ok ». */
+const echoue = (resultat) => !resultat || Boolean(resultat.erreur)
+  || (typeof resultat.code === 'string' && resultat.code !== 'ok');
+
+/** Une action peut rendre une valeur ou une promesse : `suite` reçoit la valeur (une promesse rejetée : null). */
+function quand(resultat, suite) {
+  if (resultat && typeof resultat.then === 'function') resultat.then(suite, () => suite(null));
+  else suite(resultat);
+}
+
+const ECHEC_DATES = 'Les dates n’ont pas pu être enregistrées. Réessayez.';
+let numeroDates = 0;
+// Feuille « Les dates de la semaine » ouverte : l'écran Semaine la met à jour à chaque rendu (majDatesDeLaSemaine).
+let feuilleDates = null;
+
+/** Met à jour la feuille des dates ouverte avec le contexte du moment. */
+function majDatesDeLaSemaine(ctx) {
+  feuilleDates?.maj(ctx);
+}
+
+/**
+ * Feuille « Les dates de la semaine » (« Changer » à côté de « Du 10 au 16 octobre », les deux membres) : « Du » et
+ * « Au » (`input type=date` natifs, préremplis), « Deux semaines au plus. », « Enregistrer ». Les erreurs
+ * (coeur/semaine.js › validerDates, texteErreurDates : « La fin doit venir après le début. », « Deux semaines au
+ * plus. », « Ces dates touchent la semaine du 3 au 9 octobre : choisissez d’autres dates. »…) s'affichent au toucher
+ * sur « Enregistrer », jamais pendant la saisie. Mêmes dates : la feuille se ferme sans rien écrire. Une semaine aux
+ * courses faites garde ses dates modifiables ; rien d'autre ne change (statut, articles gardés, `derniereFois`).
+ * Dates changées ailleurs pendant que la feuille est ouverte (l'autre téléphone) : un champ que la personne n'a pas
+ * changé prend la nouvelle date ; « Enregistrer » sans avoir rien changé de ce qu'elle voyait ferme la feuille sans
+ * rien écrire (jamais l'ancienne date réécrite par-dessus celle de l'autre membre).
+ * Action : changerDates({ debut, fin }, { semaineId }) → { code: 'ok' } | { erreur, avec? } | { code }.
+ */
+function ouvrirDatesDeLaSemaine(semaineId, { onFermer } = {}) {
+  const trouver = (ctx) => lireSemaine((ctx?.semaines ?? []).find((s) => s?.id === semaineId) ?? null)
+    ?? (lireSemaine(ctx?.semaine)?.id === semaineId ? lireSemaine(ctx.semaine) : null);
+  const depart = trouver(contexteSemaine);
+  if (!depart) return;
+  numeroDates += 1;
+  const base = `dates-${numeroDates}`;
+  let ouverte = true;
+
+  const erreur = el('p', { class: 'erreur-champ', id: `${base}-erreur`, role: 'alert', hidden: true });
+  const decrit = `${base}-aide ${base}-erreur`;
+  const effacerErreur = () => {
+    if (erreur.hidden) return;
+    erreur.hidden = true;
+    erreur.textContent = '';
+    du.removeAttribute('aria-invalid');
+    au.removeAttribute('aria-invalid');
+  };
+  const du = el('input', {
+    class: 'champ champ-date', type: 'date', id: `${base}-du`, name: 'debut', required: true, value: depart.debut,
+    'aria-describedby': decrit, oninput: effacerErreur,
+  });
+  const au = el('input', {
+    class: 'champ champ-date', type: 'date', id: `${base}-au`, name: 'fin', required: true, value: depart.fin,
+    'aria-describedby': decrit, oninput: effacerErreur,
+  });
+  const boutonEnregistrer = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' },
+    TEXTES_DATES.enregistrer);
+  // Dates de la semaine que montre chaque champ tant que la personne ne l'a pas changé.
+  const vues = { debut: depart.debut, fin: depart.fin };
+
+  const feuille = ouvrirFeuille(TEXTES_DATES.titre, (fermer) => el('div', { class: 'feuille-dates' },
+    el('form', {
+      class: 'formulaire formulaire-dates',
+      novalidate: true,
+      onsubmit: (evenement) => {
+        evenement.preventDefault();
+        enregistrer();
+      },
+    },
+    el('label', { class: 'etiquette-champ', for: `${base}-du` }, TEXTES_DATES.du),
+    du,
+    el('label', { class: 'etiquette-champ', for: `${base}-au` }, TEXTES_DATES.au),
+    au,
+    el('p', { class: 'aide', id: `${base}-aide` }, TEXTES_DATES.aide),
+    erreur,
+    el('div', { class: 'feuille-pied' }, boutonEnregistrer)),
+    el('div', { class: 'actions-feuille' },
+      el('button', { class: 'bouton bouton-texte bouton-plein', type: 'button', onclick: fermer }, 'Fermer'))), {
+    onFermer: () => {
+      ouverte = false;
+      if (feuilleDates === poignee) feuilleDates = null;
+      onFermer?.();
+    },
+  });
+  const poignee = {
+    /** Dates changées ailleurs : chaque champ que la personne n'a pas changé suit la semaine. */
+    maj(ctx) {
+      const semaine = ouverte ? trouver(ctx) : null;
+      if (!semaine) return;
+      for (const [champ, cle] of [[du, 'debut'], [au, 'fin']]) {
+        if (champ.value !== vues[cle] || semaine[cle] === vues[cle]) continue;
+        champ.value = semaine[cle];
+        vues[cle] = semaine[cle];
+        effacerErreur();
+      }
+    },
+  };
+  feuilleDates = poignee;
+
+  function fermer() {
+    if (ouverte) feuille.fermer();
+  }
+
+  /** Erreur d'une date : la phrase, les champs en cause marqués, le focus sur le premier. */
+  function montrerErreur(resultat) {
+    const texte = texteErreurDates(resultat) || ECHEC_DATES;
+    erreur.textContent = texte;
+    erreur.hidden = false;
+    let enCause;
+    if (resultat?.erreur === 'vide') enCause = [du, au].filter((champ) => !champ.value);
+    else if (resultat?.erreur === 'chevauche') enCause = [du, au];
+    else if (resultat?.erreur) enCause = [au];
+    else enCause = [];
+    for (const champ of [du, au]) {
+      if (enCause.includes(champ)) champ.setAttribute('aria-invalid', 'true');
+      else champ.removeAttribute('aria-invalid');
+    }
+    (enCause[0] ?? boutonEnregistrer).focus();
+  }
+
+  function enregistrer() {
+    const ctx = contexteSemaine;
+    if (!trouver(ctx)) {
+      fermer();
+      return;
+    }
+    const dates = { debut: du.value, fin: au.value };
+    // Rien changé de ce que la personne voyait : rien à écrire, même si la semaine a changé ailleurs entre-temps.
+    if (dates.debut === vues.debut && dates.fin === vues.fin) {
+      fermer();
+      return;
+    }
+    const verifie = validerDates(dates, { semaines: ctx?.semaines ?? [], id: semaineId, aujourdhui: aujourdhuiDe(ctx) });
+    if (verifie.erreur) {
+      montrerErreur(verifie);
+      return;
+    }
+    if (verifie.code) {
+      // Mêmes dates (rien à écrire) ou semaine illisible : rien à enregistrer.
+      fermer();
+      return;
+    }
+    quand(ctx?.actions?.changerDates?.(dates, { semaineId }), (resultat) => {
+      if (!ouverte) return;
+      if (!echoue(resultat) || resultat?.code === 'inchange') {
+        fermer();
+        return;
+      }
+      if (resultat?.code === 'invalide' || resultat?.code === 'refuse') {
+        fermer();
+        return;
+      }
+      montrerErreur(resultat?.erreur ? resultat : null);
+    });
+  }
+}
+
 // ——— Carte « prochaine action » ———
 
 /**
@@ -335,6 +500,19 @@ function creerCarteAction(choisir) {
  */
 const cartes = new WeakMap(); // nœud → ses parties
 
+/**
+ * Ligne de la carte quand personne n'est écarté mais qu'un profil a été coché à la main malgré sa raison (T3c,
+ * « Qui en mange ? ») : d'abord un enfant malgré ses précautions (« Enfant : 🧸 pas avant 1 an (miel). » ;
+ * gestionnaire avec ❌), puis un profil sans version (« Pas encore de version pour Adulte B : sa part suit la
+ * recette. ») : l'avertissement de la feuille reste visible sur la semaine. null sinon.
+ */
+function avertissementCoche(element, ctx) {
+  if (element?.etat !== 'ok') return null;
+  const modele = feuillePlat(element, { moi: ctx?.moi ?? null, role: ctx?.role ?? null });
+  const coches = (modele?.qui ?? []).filter((q) => q.coche && !q.parDefaut && q.texte);
+  return (coches.find((q) => q.raison === 'age') ?? coches.find((q) => q.raison === 'version'))?.texte ?? null;
+}
+
 function creerCartePlat(element, ouvrir) {
   const idNom = `plat-semaine-${element.platId}`;
   const visuel = el('span', { class: 'plat-semaine-visuel' });
@@ -370,7 +548,8 @@ function majCartePlat(noeud, element) {
   const resume = resumePlat(element) ?? '';
   ecrireTexte(carte.resume, resume);
   carte.resume.hidden = !resume;
-  const exception = exceptionPlat(element, { moi: ctx?.moi ?? null, role: ctx?.role ?? null }) ?? '';
+  const exception = exceptionPlat(element, { moi: ctx?.moi ?? null, role: ctx?.role ?? null })
+    ?? avertissementCoche(element, ctx) ?? '';
   ecrireTexte(carte.exception, exception);
   carte.exception.hidden = !exception;
   carte.versions.maj(element.etat === 'ok' ? element : null, ctx);
@@ -395,42 +574,78 @@ function majLigneCorbeille(noeud, element) {
 
 /**
  * « En ce moment, jusqu'au 16 octobre : Carbonade, Gratin de pâtes. » (noms en liens vers leur fiche, texte seul) :
- * la semaine en cours quand la suivante est déjà montrée. Reconstruite seulement quand elle change (le focus d'un lien
- * reste). → { noeud, maj(ctx) }
+ * la semaine en cours quand la suivante est déjà montrée, avec « Changer » (T3c : feuille « Les dates de la semaine »
+ * de la semaine en cours, pour la finir plus tôt quand la suivante doit commencer avant). Reconstruite seulement quand
+ * elle change (le focus d'un lien ou de « Changer » reste). → { noeud, maj(ctx) }
  */
 function creerEnCeMoment() {
-  const noeud = el('p', { class: 'en-ce-moment', hidden: true });
+  const texte = el('p', { class: 'en-ce-moment', id: 'texte-en-ce-moment' });
+  let idEnCours = null;
+  const boutonDates = el('button', {
+    class: 'bouton bouton-texte bouton-changer-dates',
+    type: 'button',
+    'aria-label': 'Changer les dates de la semaine en cours',
+    'aria-describedby': 'texte-en-ce-moment',
+  }, TEXTES_DATES.changer);
+  boutonDates.addEventListener('click', () => {
+    if (!idEnCours) return;
+    ouvrirDatesDeLaSemaine(idEnCours, {
+      onFermer: () => {
+        if (boutonDates.isConnected && !boutonDates.closest('[hidden]')) boutonDates.focus();
+      },
+    });
+  });
+  const noeud = el('div', { class: 'bloc-en-ce-moment', hidden: true }, texte, boutonDates);
   let signature = '';
   function maj(ctx) {
     const enCours = ctx?.semaineEnCours !== undefined ? ctx.semaineEnCours
       : semaineEnCours(ctx?.semaines ?? [], aujourdhuiDe(ctx));
     const lue = lireSemaine(enCours);
     const plats = lue ? platsDeLaSemaineDe(ctx, enCours).filter((e) => e.etat === 'ok' || e.etat === 'sansRecette') : [];
-    const nouvelle = lue && plats.length ? `${lue.fin}|${plats.map((e) => `${e.platId}:${nomDuPlat(e.plat)}`).join('|')}` : '';
+    const nouvelle = lue && plats.length
+      ? `${lue.id}|${lue.fin}|${plats.map((e) => `${e.platId}:${nomDuPlat(e.plat)}`).join('|')}` : '';
+    idEnCours = nouvelle ? lue.id : null;
     if (nouvelle === signature) return;
     signature = nouvelle;
     noeud.hidden = !nouvelle;
     if (!nouvelle) {
-      noeud.replaceChildren();
+      texte.replaceChildren();
       return;
     }
     const liens = plats.flatMap((e, i) => [
       i ? ', ' : null,
       el('a', { class: 'lien-en-ce-moment', href: `#/plat/${encodeURIComponent(e.platId)}` }, nomDuPlat(e.plat)),
     ]);
-    noeud.replaceChildren(`En ce moment, jusqu’au ${texteJour(lue.fin)}\u00A0: `, ...liens.filter(Boolean), '.');
+    texte.replaceChildren(`En ce moment, jusqu’au ${texteJour(lue.fin)}\u00A0: `, ...liens.filter(Boolean), '.');
   }
   return { noeud, maj };
 }
 
 /**
- * Section « Les plats de la semaine » : titre, dates (« Du 10 au 16 octobre »), « En ce moment… », une carte par plat
- * (ordre d'ajout), les plats de la corbeille, puis « ＋ Choisir d'autres plats » (s'il y a déjà un plat et que la
- * semaine ne finit pas dans 2 jours : la carte propose alors « Préparer la semaine du … »).
+ * Section « Les plats de la semaine » : titre, dates (« Du 10 au 16 octobre ») et « Changer » (T3c : feuille « Les
+ * dates de la semaine »), « En ce moment… », une carte par plat (ordre d'ajout), les plats de la corbeille, puis
+ * « ＋ Choisir d'autres plats » (s'il y a déjà un plat et que la semaine ne finit pas dans 2 jours : la carte propose
+ * alors « Préparer la semaine du … »).
  * → { noeud, maj(ctx) }
  */
 function creerSectionPlats(choisir, ouvrir) {
-  const dates = el('p', {});
+  const dates = el('p', { id: 'texte-dates-semaine' });
+  const boutonDates = el('button', {
+    class: 'bouton bouton-texte bouton-changer-dates',
+    type: 'button',
+    'aria-label': 'Changer les dates de la semaine',
+    'aria-describedby': 'texte-dates-semaine',
+  }, TEXTES_DATES.changer);
+  boutonDates.addEventListener('click', () => {
+    const id = lireSemaine(contexteSemaine?.semaine)?.id;
+    if (!id) return;
+    ouvrirDatesDeLaSemaine(id, {
+      onFermer: () => {
+        if (boutonDates.isConnected && !boutonDates.closest('[hidden]')) boutonDates.focus();
+      },
+    });
+  });
+  const blocDates = el('div', { class: 'dates-semaine', hidden: true }, dates, boutonDates);
   const enCeMoment = creerEnCeMoment();
   const listeCartes = el('div', { class: 'cartes-plats-semaine' });
   const horsSemaine = el('div', { class: 'plats-hors-semaine' });
@@ -438,7 +653,7 @@ function creerSectionPlats(choisir, ouvrir) {
     el('span', { 'aria-hidden': 'true' }, '＋'), 'Choisir d’autres plats');
   boutonAutres.addEventListener('click', () => choisir(boutonAutres));
   const noeud = el('section', { class: 'section section-plats-semaine', 'aria-labelledby': 'titre-plats-semaine', hidden: true },
-    el('div', { class: 'section-titre' }, el('h2', { id: 'titre-plats-semaine' }, 'Les plats de la semaine'), dates),
+    el('div', { class: 'section-titre' }, el('h2', { id: 'titre-plats-semaine' }, 'Les plats de la semaine'), blocDates),
     enCeMoment.noeud,
     listeCartes,
     horsSemaine,
@@ -451,7 +666,7 @@ function creerSectionPlats(choisir, ouvrir) {
     const montres = elements.filter((e) => e.etat === 'ok' || e.etat === 'sansRecette');
     const jetes = elements.filter((e) => e.etat === 'corbeille' && e.plat);
     ecrireTexte(dates, lue ? majuscule(texteDates(lue.debut, lue.fin)) : '');
-    dates.hidden = !lue;
+    blocDates.hidden = !lue;
     enCeMoment.maj(pret ? ctx : { ...ctx, semaineEnCours: null });
     // Carte qui a le focus (ou dont la feuille vient de le lui rendre) : si elle disparaît (« Retirer de la semaine »,
     // retrait sur l'autre téléphone), le focus passe à sa voisine, jamais à la page.
@@ -577,6 +792,7 @@ export function creer(ctx) {
       majSemaine(nouveau);
       majChoixDesPlats(nouveau);
       majPlatsDeLaSemaine(nouveau);
+      majDatesDeLaSemaine(nouveau);
     },
   };
 }

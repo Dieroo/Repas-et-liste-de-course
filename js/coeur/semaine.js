@@ -10,6 +10,12 @@
 // - T3b : « Courses terminées » (liste.js › preparerFinDesCourses) écrit `statut: 'courses_faites'` et `statutAvant` ;
 //   « Rouvrir la liste » (ecrituresRouvrir) remet le statut d'avant, jamais plus loin ; ce qui manquait, gardé pour la
 //   prochaine fois, devient des articles `garde--<semaine>--<produit>` (idGarde).
+// - T3c « Ajuster la semaine » : « Qui en mange ? » (`plats.<id>.mange.<profilId>`, une valeur égale au défaut du moment
+//   efface le chemin), invités (`plats.<id>.invites.adultes|enfants`, 0 efface), Mer / Végétale et repas par
+//   ecrituresReglage ; « Revenir aux réglages de départ » (ecrituresDepart) ; dates de la semaine (validerDates :
+//   `debut` et `fin` seulement, jamais le statut ni les traces de « Courses terminées ») ; modèle de la feuille du plat
+//   (feuillePlat). Un invité ajoute des portions, jamais ne retire un repas : le repas par défaut se calcule sur le
+//   foyer seul.
 import { correspond, slug } from './slug.js';
 import { aSaRecette, typeDe } from './plats.js';
 import { deNom, noteDe } from './notes.js';
@@ -171,27 +177,39 @@ export function aDesPlats(semaine) {
 }
 
 /**
+ * Une semaine qui a des plats d'abord, puis la plus récente (plusRecenteDabord) : une semaine sans plat (vidée) ne
+ * passe jamais devant une semaine qui a des plats, même si leurs dates se touchent (dates changées, création hors
+ * ligne) ; elle ne cache jamais ses plats, sa liste ni ses coches.
+ */
+const avecPlatsDabord = (a, b) => Number(aDesPlats(b)) - Number(aDesPlats(a)) || plusRecenteDabord(a, b);
+
+/** Jours communs entre une semaine et les dates `debut`–`fin` (bornes comprises). */
+const touche = (s, debut, fin) => s.debut <= fin && s.fin >= debut;
+
+/**
  * Semaine à préparer, celle que Semaine et Courses montrent : la plus récente (debut le plus grand) dont la fin n'est
  * pas passée (fin ≥ aujourdhui) ; null sinon. Une semaine qui commence plus tard ne passe devant que si elle a un plat
  * (aDesPlats) : dès que la semaine suivante a un plat, les prochaines courses sont pour elle ; vidée (« Annuler », case
- * décochée), elle s'efface et la semaine en cours revient, avec sa liste.
+ * décochée), elle s'efface et la semaine en cours revient, avec sa liste. Une semaine sans plat ne passe jamais devant
+ * une semaine qui a des plats (T3c : des dates changées peuvent faire se toucher une semaine vidée et une autre).
  */
 export function semaineAPreparer(semaines, aujourdhui) {
   if (!jourValide(aujourdhui)) return null;
   return lisibles(semaines).filter((s) => s.fin >= aujourdhui && (s.debut <= aujourdhui || aDesPlats(s)))
-    .sort(plusRecenteDabord)[0] ?? null;
+    .sort(avecPlatsDabord)[0] ?? null;
 }
 
 /**
  * Semaine en cours quand une semaine suivante est déjà montrée (ligne « En ce moment, jusqu'au 16 octobre : … ») :
- * celle qui contient aujourd'hui, autre que la semaine montrée ; null sinon (ou si la semaine montrée a commencé).
+ * celle qui contient aujourd'hui, autre que la semaine montrée (une semaine qui a des plats d'abord) ; null sinon (ou
+ * si la semaine montrée a commencé).
  */
 export function semaineEnCours(semaines, aujourdhui) {
   const montree = semaineAPreparer(semaines, aujourdhui);
   if (!montree || montree.debut <= aujourdhui) return null;
   return lisibles(semaines)
     .filter((s) => s.id !== montree.id && s.debut <= aujourdhui && s.fin >= aujourdhui)
-    .sort(plusRecenteDabord)[0] ?? null;
+    .sort(avecPlatsDabord)[0] ?? null;
 }
 
 /**
@@ -224,23 +242,37 @@ export function peutPreparerLaSuivante(semaine, aujourdhui) {
 const resumeSemaine = (s) => ({ id: s.id, debut: s.debut, fin: s.fin });
 
 /**
- * Semaine qui suit `apres` (la semaine montrée) → { id, debut, fin } : du lendemain de sa fin à + 6 jours
- * (nouvelleSemaine) ; une semaine déjà créée à ces dates, vidée depuis (« Annuler »), est reprise telle quelle (même
- * identifiant, jamais de « -2 » pour rien). null si `aujourdhui` est illisible.
+ * Nouvelle semaine (nouvelleSemaine) → { id, debut, fin }, ou reprise d'une semaine sans plat (vidée : « Annuler »,
+ * case décochée, dernier plat retiré) qui touche ses dates, autre que `apres` : la première par date de début, sous
+ * son identifiant, aux nouvelles dates (ecrituresAjout les écrit avec le premier plat). Une semaine sans plat n'existe
+ * pas pour la personne (jamais montrée devant une semaine qui a des plats, ignorée par validerDates) : elle est reprise
+ * au lieu d'être chevauchée, jamais de « -2 » pour rien. null si `aujourdhui` est illisible.
  */
-export function semaineSuivante(semaines, aujourdhui, apres) {
+function nouvelleOuReprise(semaines, aujourdhui, apres = null) {
   const nouvelle = nouvelleSemaine(semaines, aujourdhui, { apres });
   if (!nouvelle) return null;
-  const existante = lisibles(semaines).filter((s) => s.id !== apres?.id && s.debut === nouvelle.debut)
-    .sort(plusRecenteDabord)[0];
-  return existante ? resumeSemaine(existante) : nouvelle;
+  const vide = lisibles(semaines)
+    .filter((s) => s.id !== apres?.id && !aDesPlats(s) && touche(s, nouvelle.debut, nouvelle.fin))
+    .sort((a, b) => parId(a.debut, b.debut) || parId(a.id, b.id))[0];
+  return vide ? { id: vide.id, debut: nouvelle.debut, fin: nouvelle.fin } : nouvelle;
+}
+
+/**
+ * Semaine qui suit `apres` (la semaine montrée) → { id, debut, fin } : du lendemain de sa fin à + 6 jours
+ * (nouvelleSemaine) ; une semaine sans plat qui touche ces dates (créée puis vidée par « Annuler », ou dont les dates
+ * ont changé) est reprise sous son identifiant, à ces dates (jamais de « -2 » pour rien, jamais deux semaines qui se
+ * chevauchent). null si `aujourdhui` est illisible.
+ */
+export function semaineSuivante(semaines, aujourdhui, apres) {
+  return nouvelleOuReprise(semaines, aujourdhui, apres);
 }
 
 /**
  * Où vont les plats choisis (§3.2) → { id, debut, fin, nouvelle, autre } : la semaine montrée, sauf dans ses deux
  * derniers jours (peutPreparerLaSuivante) : alors la suivante (semaineSuivante ; `nouvelle: true` : elle n'a pas
  * encore de plat, elle naîtra ou reprendra avec le premier, et les articles pas pris de la semaine qui finit peuvent
- * la suivre). Aucune semaine à préparer : du jour même à + 6 jours (`nouvelle: true`). `autre` : la semaine qui finit,
+ * la suivre). Aucune semaine à préparer : du jour même à + 6 jours (`nouvelle: true` ; une semaine sans plat qui touche
+ * ces dates est reprise sous son identifiant, nouvelleOuReprise). `autre` : la semaine qui finit,
  * quand la cible est la suivante (« Ajouter plutôt à la semaine qui finit le 16 ») ; null sinon. L'écran fige le
  * résultat à l'ouverture de la feuille (ou au toucher sur la fiche) et le passe à ecrituresAjout. null si
  * `aujourdhui` est illisible.
@@ -248,7 +280,7 @@ export function semaineSuivante(semaines, aujourdhui, apres) {
 export function semaineVisee(semaines, aujourdhui) {
   if (!jourValide(aujourdhui)) return null;
   const montree = semaineAPreparer(semaines, aujourdhui);
-  if (!montree) return { ...nouvelleSemaine(semaines, aujourdhui), nouvelle: true, autre: null };
+  if (!montree) return { ...nouvelleOuReprise(semaines, aujourdhui), nouvelle: true, autre: null };
   if (peutPreparerLaSuivante(montree, aujourdhui)) {
     return { ...semaineSuivante(semaines, aujourdhui, montree), nouvelle: true, autre: resumeSemaine(montree) };
   }
@@ -384,6 +416,29 @@ export function estDansLaSemaine(entree) {
   return estObjet(entree) && estNombre(entree.ajouteLe) && entree.retire !== true;
 }
 
+/**
+ * Réglages d'un plat de la semaine qu'un geste écrit, et que « Revenir aux réglages de départ » efface (T3c) : le nombre
+ * de repas, qui en mange, les invités, Mer / Végétale. Jamais `ajouteLe`, `retire`, ni ce que T4 et T5 écriront
+ * (`portionsACongeler`, `verrou`).
+ */
+export const CHAMPS_REGLAGE = Object.freeze(['repas', 'mange', 'invites', 'styles']);
+
+/** Vrai si ce champ de l'entrée porte un réglage écrit : présent, ni null, ni table vide. */
+function reglageEcrit(entree, champ) {
+  if (!estObjet(entree) || !Object.hasOwn(entree, champ)) return false;
+  const valeur = entree[champ];
+  return valeur !== null && valeur !== undefined && !(estObjet(valeur) && !Object.keys(valeur).length);
+}
+
+/**
+ * Vrai si l'entrée d'un plat de la semaine porte au moins un réglage écrit (CHAMPS_REGLAGE : repas touché, une case
+ * « Qui en mange ? », un invité, un choix Mer / Végétale) : la feuille du plat propose alors « Revenir aux réglages de
+ * départ ».
+ */
+export function aDesReglagesEcrits(entree) {
+  return CHAMPS_REGLAGE.some((champ) => reglageEcrit(entree, champ));
+}
+
 /** Identifiants des plats dans la semaine (pastille « 🗓️ Au menu » de Plats), corbeille comprise. */
 export function idsDansLaSemaine(semaine) {
   const plats = estObjet(semaine?.plats) ? semaine.plats : {};
@@ -412,9 +467,12 @@ function frigoJoursDuFoyer(reglages) {
  *   parRepasFoyer (Σ coefPortion des profils qui en mangent), parRepas (+ invités adultes + 0,5 × invités enfants),
  *   aCuire (parRepas × repas), aCongeler (portionsACongeler, 0 si absent),
  *   versions: [{ profil, variante, style, frigoJours, auChoix }] (profils qui en mangent avec une version servie),
- *   conservation: { jours, limite: null | { profil, style, jours } } }.
+ *   conservation: { jours, limite: null | { profil, style, jours } },
+ *   reglagesEcrits (T3c : aDesReglagesEcrits de l'entrée, « Revenir aux réglages de départ ») }.
  * Plat de la corbeille ou introuvable : aucun mangeur, aucune portion, `conservation` null (il revient avec ses
  * réglages s'il est remis). Plat ⏳ : tout le monde (sauf « Jamais »), aucune version.
+ * Invariant (T3c) : un invité ajoute des portions, jamais ne retire un repas ; le repas par défaut se calcule sur le
+ * foyer seul (parRepasFoyer), que le compteur ait été touché ou non.
  */
 export function platsDeLaSemaine(semaine, { tousLesPlats = [], profils = [], evaluer = evaluerParDefaut, reglages = null } = {}) {
   const entrees = estObjet(semaine?.plats) ? semaine.plats : {};
@@ -434,6 +492,7 @@ export function platsDeLaSemaine(semaine, { tousLesPlats = [], profils = [], eva
       platId, plat, etat, ajouteLe: entree.ajouteLe,
       mangeurs: [], invites: { adultes: 0, enfants: 0 }, repas: 0, repasParDefaut: 0, repasTouche: false,
       parRepasFoyer: 0, parRepas: 0, aCuire: 0, aCongeler: 0, versions: [], conservation: null,
+      reglagesEcrits: aDesReglagesEcrits(entree),
     };
     if (etat === 'absent' || etat === 'corbeille') {
       elements.push(element);
@@ -556,11 +615,14 @@ export function peutAllerDansLaSemaine(plat) {
  * Écritures de l'ajout d'un plat → { creation?: { id, donnees }, id, champs, articles?: [{ id?, ...donnees }] }, ou
  * { code } : 'chargement' (semaines pas encore lues : jamais de nouvelle semaine sans elles), 'invalide' (identifiant,
  * cible ou heure illisible ; `plat` donné qui ne peut pas aller dans la semaine : peutAllerDansLaSemaine), 'deja'
- * (déjà dans la semaine visée ; `id`).
+ * (déjà dans la semaine visée ; `id`), 'chevauche' (T3c : la cible n'a encore aucun plat et ses dates touchent une
+ * autre semaine qui a des plats, dont les dates ont changé entre-temps ; rien n'est écrit, l'écran recalcule la
+ * semaine visée).
  * `cible` : la semaine visée, figée par l'écran (semaineVisee) ; sans elle, semaineVisee(semaines, aujourdhui). Le plat
- * va toujours dans la cible, même si une autre semaine est apparue entre-temps. Si aucune semaine lisible ne porte
- * l'identifiant de la cible, elle est créée dans le même lot : `creation.donnees` = { debut, fin, creePar, creeLe }
- * seulement (set fusionné, jamais de statut). Si la cible n'a encore aucun plat (créée ici, ou vidée depuis), les
+ * va toujours dans la cible, même si une autre semaine (sans plat, ou qui ne la touche pas) est apparue entre-temps.
+ * Si aucune semaine lisible ne porte l'identifiant de la cible, elle est créée dans le même lot : `creation.donnees` =
+ * { debut, fin, creePar, creeLe } seulement (set fusionné, jamais de statut) ; une semaine sans plat reprise à d'autres
+ * dates (nouvelleOuReprise) reçoit la même `creation`, à ses nouvelles dates. Si la cible n'a encore aucun plat (créée ici, ou vidée depuis), les
  * `restes` (liste.js › restes) deviennent des articles du même lot, d'identifiant fixe (idReste : un second envoi
  * réécrit les mêmes documents). `champs` : `plats.<id>.ajouteLe` (maintenant, l'heure du téléphone) et
  * `plats.<id>.retire` effacé (un plat retiré revient avec ses réglages).
@@ -577,19 +639,27 @@ export function ecrituresAjout(semaines, platId, {
     || dureeVisee + 1 > DUREE_MAX_JOURS) {
     return { code: 'invalide' };
   }
-  const existante = lisibles(semaines).find((s) => s.id === visee.id) ?? null;
+  const toutes = lisibles(semaines);
+  const existante = toutes.find((s) => s.id === visee.id) ?? null;
   if (existante && estDansLaSemaine(existante.plats[platId])) return { code: 'deja', id: visee.id };
+  const premierPlat = !existante || !aDesPlats(existante);
+  // Une semaine qui reçoit son premier plat ne touche jamais une semaine qui a des plats (dates changées sur l'autre
+  // téléphone pendant que la feuille était ouverte) : elle la cacherait. L'écran recalcule la semaine visée.
+  if (premierPlat && toutes.some((s) => s.id !== visee.id && aDesPlats(s) && touche(s, visee.debut, visee.fin))) {
+    return { code: 'chevauche' };
+  }
   const resultat = {
     id: visee.id,
     champs: { [`plats.${platId}.ajouteLe`]: maintenant, [`plats.${platId}.retire`]: EFFACER },
   };
-  if (!existante) {
+  // Créée, ou reprise sans plat à d'autres dates (nouvelleOuReprise) : mêmes champs que la création, set fusionné.
+  if (!existante || (premierPlat && (existante.debut !== visee.debut || existante.fin !== visee.fin))) {
     const donnees = { debut: visee.debut, fin: visee.fin };
     if (reduire(auteur)) donnees.creePar = reduire(auteur);
     donnees.creeLe = maintenant;
     resultat.creation = { id: visee.id, donnees };
   }
-  if (!existante || !aDesPlats(existante)) {
+  if (premierPlat) {
     const articles = articlesDesRestes(restes, { semaineId: visee.id, auteur, maintenant });
     if (articles.length) resultat.articles = articles;
   }
@@ -700,22 +770,211 @@ export function ecrituresStyle(semaine, platId, profilId, style, { evaluer = eva
   return { id: lue.id, champs: { [chemin]: style === defaut ? EFFACER : style } };
 }
 
+/** Clés d'un réglage (ecrituresReglage) : les champs de CHAMPS_REGLAGE, et `depart`. */
+const CLES_REGLAGE = new Set([...CHAMPS_REGLAGE, 'depart']);
+const CLES_INVITES = Object.freeze(['adultes', 'enfants']);
+
 /**
- * Réglage d'un plat de la semaine → { id, champs }. T3a : seulement `repas` (entier borné de 1 à REPAS_MAX, écrit
- * même s'il vaut le défaut du moment : un profil ajouté ou écarté ensuite ne le fait plus bouger ; null → EFFACER,
- * revenir au défaut). T3c y ajoute `mange` et `invites`. { code: 'invalide' } sinon.
+ * Réglage d'un plat de la semaine (feuille du plat, carte du plat) → { id, champs } ; chaque clé de chemin vérifiée,
+ * chaque champ écrit seul (`update` par chemin pointé, en lot) ; null = revenir au défaut (EFFACER). `reglage` :
+ * - `repas` (T3a) : entier borné de 1 à REPAS_MAX, écrit même s'il vaut le défaut du moment (un profil ajouté ou écarté
+ *   ensuite ne le fait plus bouger) ;
+ * - `mange: { profilId: bool | null }` (T3c, « Qui en mange ? ») : `plats.<id>.mange.<p>` ; une valeur égale au défaut
+ *   du moment (mangeParDefaut, avec le style qu'il recevra) efface le chemin : une version arrivée plus tard fera
+ *   entrer le profil toute seule. `true` pour un profil sans version qui convient : il mange la recette telle quelle ;
+ *   `false` : sa part et sa version sortent de la liste. Profil absent de `profils` : refusé. Plat absent de
+ *   `tousLesPlats` : la valeur est écrite telle quelle (défaut inconnu) ;
+ * - `invites: { adultes?, enfants? }` (T3c) : entiers bornés de 0 à INVITES_MAX, chacun son chemin
+ *   (`plats.<id>.invites.adultes`) ; 0 efface. Un invité n'écrit jamais `repas` : il ajoute des portions, sans retirer
+ *   de repas ;
+ * - `styles: { profilId: 'mer' | 'vegetal' | null }` : comme ecrituresStyle (le style par défaut efface ; un style qui
+ *   ne convient pas → { code: 'style' }) ;
+ * - `depart: true` : « Revenir aux réglages de départ » (ecrituresDepart) ; avec d'autres clés (touchers réunis après
+ *   lui, fusionnerReglages), ils s'appliquent par-dessus, dans la même écriture.
+ * { code: 'invalide' } : semaine, plat ou réglage illisible, clé inconnue, rien à écrire ; { code: 'style' } ;
+ * { code: 'inutile' } : `depart` seul sur un plat sans réglage écrit.
  */
 export function ecrituresReglage(semaine, platId, reglage, { evaluer = evaluerParDefaut, tousLesPlats = [], profils = [] } = {}) {
   const lue = lireSemaine(semaine);
   if (!lue || !cheminSur('plats', platId) || !estObjet(reglage)) return { code: 'invalide' };
-  const champs = {};
+  const cles = Object.keys(reglage);
+  if (!cles.length || !cles.every((cle) => CLES_REGLAGE.has(cle))) return { code: 'invalide' };
+  const entree = estObjet(lue.plats[platId]) ? lue.plats[platId] : {};
+  let champs = {};
+  let styles = { ...(estObjet(entree.styles) ? entree.styles : {}) };
+  if (Object.hasOwn(reglage, 'depart')) {
+    if (reglage.depart !== true) return { code: 'invalide' };
+    const depart = ecrituresDepart(lue, platId);
+    if (depart.code === 'invalide' || (depart.code && cles.length === 1)) return depart;
+    champs = { ...(depart.champs ?? {}) };
+    styles = {};
+  }
   if (Object.hasOwn(reglage, 'repas')) {
     if (reglage.repas === null) champs[`plats.${platId}.repas`] = EFFACER;
     else if (estNombre(reglage.repas)) champs[`plats.${platId}.repas`] = entierBorne(reglage.repas, 1, REPAS_MAX);
     else return { code: 'invalide' };
   }
+  // Styles d'abord : le défaut de `mange` se juge sur la version que le profil recevra.
+  if (Object.hasOwn(reglage, 'styles')) {
+    if (!estObjet(reglage.styles)) return { code: 'invalide' };
+    for (const [profilId, style] of Object.entries(reglage.styles)) {
+      const chemin = cheminSur('plats', platId, 'styles', profilId);
+      if (!chemin) return { code: 'invalide' };
+      if (style === null) {
+        champs[chemin] = EFFACER;
+        delete styles[profilId];
+        continue;
+      }
+      const ecritures = ecrituresStyle(lue, platId, profilId, style, { evaluer, tousLesPlats, profils });
+      if (ecritures.code) return ecritures;
+      Object.assign(champs, ecritures.champs);
+      styles[profilId] = style;
+    }
+  }
+  if (Object.hasOwn(reglage, 'mange')) {
+    if (!estObjet(reglage.mange)) return { code: 'invalide' };
+    const plat = listeDe(tousLesPlats).find((p) => estObjet(p) && p.id === platId) ?? null;
+    for (const [profilId, valeur] of Object.entries(reglage.mange)) {
+      const chemin = cheminSur('plats', platId, 'mange', profilId);
+      const profil = listeDe(profils).find((p) => estObjet(p) && p.id === profilId) ?? null;
+      if (!chemin || !profil || (valeur !== null && typeof valeur !== 'boolean')) return { code: 'invalide' };
+      if (valeur === null) {
+        champs[chemin] = EFFACER;
+        continue;
+      }
+      const choix = STYLES.includes(styles[profilId]) ? styles[profilId] : null;
+      const defaut = plat ? mangeParDefaut(plat, profil, { evaluer, choix }).mange : null;
+      champs[chemin] = valeur === defaut ? EFFACER : valeur;
+    }
+  }
+  if (Object.hasOwn(reglage, 'invites')) {
+    if (!estObjet(reglage.invites)) return { code: 'invalide' };
+    for (const [qui, valeur] of Object.entries(reglage.invites)) {
+      if (!CLES_INVITES.includes(qui)) return { code: 'invalide' };
+      const chemin = `plats.${platId}.invites.${qui}`;
+      if (valeur === null) champs[chemin] = EFFACER;
+      else if (estNombre(valeur)) {
+        const nombreInvites = entierBorne(valeur, 0, INVITES_MAX);
+        champs[chemin] = nombreInvites === 0 ? EFFACER : nombreInvites;
+      } else return { code: 'invalide' };
+    }
+  }
+  // Un réglage illisible effacé en entier par « Revenir » (table qui n'en est pas une) l'emporte sur un toucher qui
+  // écrirait dedans : deux chemins dont l'un contient l'autre sont refusés dans la même écriture.
+  for (const chemin of Object.keys(champs)) {
+    if (Object.keys(champs).some((autre) => autre !== chemin && chemin.startsWith(`${autre}.`))) delete champs[chemin];
+  }
   if (!Object.keys(champs).length) return { code: 'invalide' };
   return { id: lue.id, champs };
+}
+
+/**
+ * « Revenir aux réglages de départ » (T3c, un geste) → { id, champs } : chaque réglage écrit du plat (CHAMPS_REGLAGE)
+ * effacé, chemin par chemin (`plats.<id>.repas`, `plats.<id>.mange.<p>`, `plats.<id>.invites.adultes`,
+ * `plats.<id>.styles.<p>`), comme chaque toucher les avait écrits ; une table illisible est effacée entière. Tout
+ * reprend son défaut calculé à la lecture. Jamais `ajouteLe`, `retire`, `portionsACongeler` ni `verrou`.
+ * { code: 'inutile' } : aucun réglage écrit (aDesReglagesEcrits) ; { code: 'invalide' } : semaine ou plat illisible,
+ * plat absent du document de la semaine.
+ */
+export function ecrituresDepart(semaine, platId) {
+  const lue = lireSemaine(semaine);
+  if (!lue || !cheminSur('plats', platId) || !estObjet(lue.plats[platId])) return { code: 'invalide' };
+  const entree = lue.plats[platId];
+  const champs = {};
+  for (const champ of CHAMPS_REGLAGE) {
+    if (!reglageEcrit(entree, champ)) continue;
+    const valeur = entree[champ];
+    const feuilles = estObjet(valeur) ? Object.keys(valeur) : [];
+    if (champ !== 'repas' && feuilles.length && feuilles.every((cle) => ID_SUR.test(cle))) {
+      for (const cle of feuilles) champs[`plats.${platId}.${champ}.${cle}`] = EFFACER;
+    } else champs[`plats.${platId}.${champ}`] = EFFACER;
+  }
+  return Object.keys(champs).length ? { id: lue.id, champs } : { code: 'inutile' };
+}
+
+/**
+ * Réglages touchés en rafale, réunis avant l'écriture (l'écran regroupe les touchers 0,8 s) → réglage
+ * (ecrituresReglage) : le plus récent l'emporte, champ par champ et profil par profil (`mange`, `invites`, `styles`
+ * fusionnés ; `repas` remplacé) ; « Revenir aux réglages de départ » (`depart`) remplace ce qui attendait (tout est
+ * effacé), et un toucher qui le suit s'y ajoute. Rien n'est modifié en entrée.
+ */
+export function fusionnerReglages(avant, apres) {
+  const a = estObjet(avant) ? avant : {};
+  const b = estObjet(apres) ? apres : {};
+  if (b.depart === true) return { ...b };
+  const resultat = { ...a };
+  for (const [cle, valeur] of Object.entries(b)) {
+    if ((cle === 'mange' || cle === 'invites' || cle === 'styles') && estObjet(valeur) && estObjet(a[cle])) {
+      resultat[cle] = { ...a[cle], ...valeur };
+    } else resultat[cle] = estObjet(valeur) ? { ...valeur } : valeur;
+  }
+  return resultat;
+}
+
+// ——— Dates de la semaine (T3c, feuille « Les dates de la semaine ») ———
+
+/**
+ * Nouvelles dates de la semaine `id` (« Changer » à côté de « Du 10 au 16 octobre ») → { id, champs: { debut, fin } } :
+ * les deux dates ensemble dès que l'une change (deux téléphones qui changeraient l'un le début, l'autre la fin
+ * pourraient sinon laisser une semaine de plus de 14 jours, illisible, qui disparaîtrait avec ses plats ; donnees.js
+ * refuse une date écrite seule) ; jamais l'identifiant (figé), le statut ni les traces de « Courses terminées » (une
+ * semaine aux courses faites garde ses dates modifiables, rien d'autre ne change). Sinon :
+ * - { erreur: 'vide' } : une date manque ou est illisible (un champ de date vidé) ;
+ * - { code: 'inchange' } : mêmes dates, rien à écrire ;
+ * - { erreur: 'ordre' } : la fin vient avant le début (un seul jour est permis) ;
+ * - { erreur: 'duree' } : plus de DUREE_MAX_JOURS jours ;
+ * - { erreur: 'passee' } : avec `aujourdhui`, la fin est déjà passée (la semaine et sa liste disparaîtraient) ;
+ * - { erreur: 'chevauche', avec: { debut, fin } } : une autre semaine lisible qui a des plats (passée, en cours ou
+ *   suivante) a au moins un jour commun (la première par date de début). Une semaine sans plat (vidée par « Annuler »
+ *   ou une case décochée) ne compte pas : la personne ne la voit nulle part, elle ne passe jamais devant une semaine
+ *   qui a des plats (semaineAPreparer), et la prochaine semaine créée la reprend à ses propres dates
+ *   (nouvelleOuReprise) ;
+ * - { code: 'invalide' } : `id` n'est pas une semaine lisible de `semaines`.
+ */
+export function validerDates({ debut = null, fin = null } = {}, { semaines = [], id = null, aujourdhui = null } = {}) {
+  const toutes = lisibles(semaines);
+  const actuelle = typeof id === 'string' ? toutes.find((s) => s.id === id) ?? null : null;
+  if (!actuelle) return { code: 'invalide' };
+  if (!jourValide(debut) || !jourValide(fin)) return { erreur: 'vide' };
+  if (debut === actuelle.debut && fin === actuelle.fin) return { code: 'inchange' };
+  if (fin < debut) return { erreur: 'ordre' };
+  if (ecartJours(debut, fin) + 1 > DUREE_MAX_JOURS) return { erreur: 'duree' };
+  if (jourValide(aujourdhui) && fin < aujourdhui) return { erreur: 'passee' };
+  const touchee = toutes.filter((s) => s.id !== actuelle.id && aDesPlats(s) && touche(s, debut, fin))
+    .sort((a, b) => parId(a.debut, b.debut) || parId(a.id, b.id))[0];
+  if (touchee) return { erreur: 'chevauche', avec: { debut: touchee.debut, fin: touchee.fin } };
+  return { id: actuelle.id, champs: { debut, fin } };
+}
+
+/** Textes de la feuille « Les dates de la semaine » (`input type=date` natifs). */
+export const TEXTES_DATES = Object.freeze({
+  changer: 'Changer',
+  titre: 'Les dates de la semaine',
+  du: 'Du',
+  au: 'Au',
+  aide: 'Deux semaines au plus.',
+  enregistrer: 'Enregistrer',
+});
+
+/**
+ * Phrase d'erreur de validerDates : « La fin doit venir après le début. », « Deux semaines au plus. », « Ces dates
+ * touchent la semaine du 3 au 9 octobre : choisissez d'autres dates. », « Choisissez les deux dates. », « La semaine
+ * doit finir aujourd'hui ou plus tard. » ; '' sans erreur.
+ */
+export function texteErreurDates(resultat) {
+  switch (resultat?.erreur) {
+    case 'vide': return 'Choisissez les deux dates.';
+    case 'ordre': return 'La fin doit venir après le début.';
+    case 'duree': return 'Deux semaines au plus.';
+    case 'passee': return 'La semaine doit finir aujourd’hui ou plus tard.';
+    case 'chevauche': {
+      const { debut, fin } = resultat.avec ?? {};
+      const dates = !jourValide(debut) || !jourValide(fin) ? '' : debut === fin ? `du ${texteJour(debut)}` : texteDates(debut, fin);
+      return dates ? `Ces dates touchent la semaine ${dates}\u00A0: choisissez d’autres dates.`
+        : 'Ces dates touchent une autre semaine\u00A0: choisissez d’autres dates.';
+    }
+    default: return '';
+  }
 }
 
 // ——— Feuille « Ajouter à la semaine » ———
@@ -786,7 +1045,8 @@ export const TEXTE_SANS_RECETTE = '⏳ Pas encore de recette\u00A0: ajoutez ses 
 /**
  * Résumé d'un plat de la semaine (carte) : « Tout le monde · 2 repas · 5 portions », « Adulte A et Enfant · 3 repas ·
  * 4,5 portions », « Personne n'en mange : il n'est pas dans les courses. » ; avec des invités (T3c) : « Tout le monde
- * et 2 invités · … ». null pour un plat ⏳, de la corbeille ou introuvable (pas de résumé de portions).
+ * et 2 invités · … », « Adulte A, Enfant et 1 invité · … », « 2 invités · … » (personne du foyer). null pour un plat
+ * ⏳, de la corbeille ou introuvable (pas de résumé de portions).
  */
 export function resumePlat(element) {
   if (!element || element.etat !== 'ok') return null;
@@ -795,9 +1055,9 @@ export function resumePlat(element) {
   if (!(element.aCuire > 0)) return TEXTE_PERSONNE;
   const qui = [];
   if (mangent.length && mangent.length === element.mangeurs.length) qui.push('Tout le monde');
-  else if (mangent.length) qui.push(enumerer(mangent.map((m) => nomDe(m.profil))));
+  else qui.push(...mangent.map((m) => nomDe(m.profil)));
   if (nbInvites) qui.push(`${nbInvites}\u00A0${nbInvites > 1 ? 'invités' : 'invité'}`);
-  return `${qui.join(' et ')} · ${texteRepas(element.repas)} · ${textePortions(element.aCuire)}`;
+  return `${enumerer(qui)} · ${texteRepas(element.repas)} · ${textePortions(element.aCuire)}`;
 }
 
 /**
@@ -867,14 +1127,114 @@ export function raisonsEcartes(element, { moi = null, role = null } = {}) {
   return listeDe(element.mangeurs).filter((m) => !m.mange).map((m) => {
     const moiMeme = estMoi(m.profil, moi);
     const nom = nomDe(m.profil);
-    let texte;
-    if (m.raison === 'version') texte = moiMeme ? 'Pas encore de version pour vous.' : `${nom}\u00A0: pas encore de version.`;
-    else if (m.raison === 'jamais') texte = moiMeme ? 'Vous avez dit «\u00A0Jamais\u00A0».' : `${nom} a dit «\u00A0Jamais\u00A0».`;
-    else if (m.raison === 'age' && texteEcarteAge(m.precautions, role)) {
-      texte = `${moiMeme ? 'Vous' : nom}\u00A0: 🧸 ${texteEcarteAge(m.precautions, role)}.`;
-    } else texte = moiMeme ? 'Vous n’en mangez pas.' : `${nom} n’en mange pas.`;
+    const texte = phraseRaison(m, { moi, role }) ?? (moiMeme ? 'Vous n’en mangez pas.' : `${nom} n’en mange pas.`);
     return { profil: m.profil, texte };
   });
+}
+
+/**
+ * Phrase de la raison par défaut d'un profil (mangeParDefaut), quel que soit son choix : « Adulte B : pas encore de
+ * version. » (pour soi : « Pas encore de version pour vous. ») ; « Adulte A a dit « Jamais ». » (« Vous avez dit
+ * « Jamais ». ») ; « Enfant : 🧸 pas avant 1 an (miel). » (gestionnaire : « Enfant : 🧸 ❌ Pas avant 1 an : miel. ») ;
+ * null sans raison. Coché à la main sans version : « Pas encore de version pour Adulte B : sa part suit la recette. »
+ * (« Pas encore de version pour vous : votre part suit la recette. »).
+ */
+function phraseRaison(mangeur, { moi = null, role = null } = {}) {
+  const moiMeme = estMoi(mangeur.profil, moi);
+  const nom = nomDe(mangeur.profil);
+  if (mangeur.raison === 'version') {
+    if (mangeur.mange) {
+      return moiMeme ? 'Pas encore de version pour vous\u00A0: votre part suit la recette.'
+        : `Pas encore de version pour ${nom}\u00A0: sa part suit la recette.`;
+    }
+    return moiMeme ? 'Pas encore de version pour vous.' : `${nom}\u00A0: pas encore de version.`;
+  }
+  if (mangeur.raison === 'jamais') return moiMeme ? 'Vous avez dit «\u00A0Jamais\u00A0».' : `${nom} a dit «\u00A0Jamais\u00A0».`;
+  if (mangeur.raison === 'age') {
+    const age = texteEcarteAge(mangeur.precautions, role);
+    if (age) return `${moiMeme ? 'Vous' : nom}\u00A0: 🧸 ${age}.`;
+  }
+  return null;
+}
+
+/** Textes de la feuille du plat de la semaine (T3c). */
+export const TEXTES_PLAT_SEMAINE = Object.freeze({
+  quiEnMange: 'Qui en mange\u00A0?',
+  invites: 'Des invités\u00A0?',
+  depart: 'Revenir aux réglages de départ',
+});
+
+/**
+ * Compteurs de la feuille du plat : étiquette visible, nom du groupe (nomCompteur : « Repas : 2 », « Adultes invités :
+ * 0 », « Enfants invités : 0 »), noms des boutons, bornes.
+ */
+export const COMPTEURS = Object.freeze({
+  repas: Object.freeze({
+    etiquette: 'Pour combien de repas\u00A0?', nom: 'Repas', plus: 'Un repas de plus', moins: 'Un repas de moins',
+    min: 1, max: REPAS_MAX,
+  }),
+  adultes: Object.freeze({
+    etiquette: 'Adultes', nom: 'Adultes invités', plus: 'Un adulte invité de plus', moins: 'Un adulte invité de moins',
+    min: 0, max: INVITES_MAX,
+  }),
+  enfants: Object.freeze({
+    etiquette: 'Enfants', nom: 'Enfants invités', plus: 'Un enfant invité de plus', moins: 'Un enfant invité de moins',
+    min: 0, max: INVITES_MAX,
+  }),
+});
+
+/** Nom d'un compteur avec sa valeur : « Repas : 2 », « Adultes invités : 0 » ; '' pour un compteur inconnu. */
+export function nomCompteur(type, valeur) {
+  return Object.hasOwn(COMPTEURS, type) ? `${COMPTEURS[type].nom}\u00A0: ${valeur}` : '';
+}
+
+/**
+ * Ce que montre la feuille du plat de la semaine (T3c), pour un élément de platsDeLaSemaine → null (plat ⏳, de la
+ * corbeille ou introuvable : la feuille garde seulement son bandeau, « Voir la recette › » et « Retirer de la
+ * semaine ») | {
+ *   qui: [{ profil, libelle (prénom), coche (il en mange), parDefaut, raison (celle du défaut : null, 'version',
+ *     'jamais', 'age'), texte (phrase sous la case, ou null : phraseRaison), demande (vue « Repas et courses » et
+ *     raison 'version' : la case peut porter « 📬 Demander… », selon demandes.js › etatDemande), libelleDemande
+ *     ('Demander ma version' pour soi, 'Demander une version pour Adulte B' ; null sans demande ; l'écran met 📬
+ *     devant) }] (ordre de trierProfils) ;
+ *   compteurs: { repas, adultes, enfants } : chacun { valeur, nom (« Repas : 2 »), etiquette, plus, moins, min, max } ;
+ *   invites: { adultes, enfants, ouvert (au moins un invité : « Des invités ? » s'ouvre) } ;
+ *   repas: { valeur, parDefaut, touche } ; resume (resumePlat) ; portions (phrasePortions) ;
+ *   versions (element.versions : choix Mer / Végétale ou version unique) ; conservation (texteConservation) ;
+ *   depart (un réglage est écrit : « Revenir aux réglages de départ ») }.
+ * Jamais de croix dans la vue « Repas et courses » (`role` autre que 'gestionnaire').
+ */
+export function feuillePlat(element, { moi = null, role = null } = {}) {
+  if (!element || element.etat !== 'ok') return null;
+  const vueCourses = role !== 'gestionnaire';
+  const qui = listeDe(element.mangeurs).map((m) => {
+    const moiMeme = estMoi(m.profil, moi);
+    const demande = vueCourses && m.raison === 'version';
+    return {
+      profil: m.profil,
+      libelle: nomDe(m.profil),
+      coche: m.mange,
+      parDefaut: m.parDefaut,
+      raison: m.raison,
+      texte: phraseRaison(m, { moi, role }),
+      demande,
+      libelleDemande: demande ? (moiMeme ? 'Demander ma version' : `Demander une version pour ${nomDe(m.profil)}`) : null,
+    };
+  });
+  const compteur = (type, valeur) => ({ ...COMPTEURS[type], valeur, nom: nomCompteur(type, valeur) });
+  const adultes = element.invites?.adultes ?? 0;
+  const enfants = element.invites?.enfants ?? 0;
+  return {
+    qui,
+    compteurs: { repas: compteur('repas', element.repas), adultes: compteur('adultes', adultes), enfants: compteur('enfants', enfants) },
+    invites: { adultes, enfants, ouvert: adultes + enfants > 0 },
+    repas: { valeur: element.repas, parDefaut: element.repasParDefaut, touche: element.repasTouche === true },
+    resume: resumePlat(element),
+    portions: phrasePortions(element),
+    versions: listeDe(element.versions),
+    conservation: texteConservation(element, { moi }),
+    depart: element.reglagesEcrits === true,
+  };
 }
 
 /** Légende du choix de version : « Pour Adulte B : », « Pour vous : ». */
