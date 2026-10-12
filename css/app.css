@@ -3985,3 +3985,212 @@ body:has(.barre-courses) .annonce {
 .etiquette-pour { font-weight: 600; }
 
 .sources-article li { overflow-wrap: anywhere; }
+
+/* ——— Courses au drive (T3b) ——— */
+
+/* La liste elle-même ne fait pas de boîte : ses parties restent espacées comme les autres blocs de l'écran. Une fois
+   les courses faites, elle passe dans « Revoir la liste », où elle se range en colonne. */
+.corps-courses,
+.achats { display: contents; }
+
+.details-revoir > .corps-courses {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 -8px; /* la liste garde presque toute la largeur dans le cadre */
+  padding-bottom: 8px;
+}
+
+.details-revoir .rayon-titre { background: var(--surface); }
+
+/* Bascule « 🚗 Drive » · « 🛒 Magasin » ; police agrandie : l'emoji passe au-dessus du mot, puis les deux choix passent
+   l'un sous l'autre ; le mot ne déborde jamais. */
+.bascule-courses .choix-ligne {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.5em), 1fr));
+  margin-top: 0;
+}
+
+.bascule-courses .choix {
+  flex-wrap: wrap;
+  align-content: center;
+  gap: 0 8px;
+  padding-inline: 4px;
+  overflow-wrap: anywhere;
+}
+
+.sections-drive {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-courses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.titre-section-courses {
+  padding: 4px 0;
+  font-size: 1.0625rem;
+  overflow-wrap: anywhere;
+}
+
+/* Une ligne : la case et son texte (la cible), 🔍, ⋮ ; « Pas le bon produit ? » passe dessous, sur toute la largeur. */
+.ligne-article { flex-wrap: wrap; }
+
+/* Avec 🔍, le texte a moins de place : le nom s'affiche en entier (au drive, on compare les résultats à ce nom). */
+.ligne-article:has(.bouton-chercher:not([hidden])) .article-nom { max-height: none; }
+
+.bouton-chercher {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 1.25rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.bouton-chercher:active { background: var(--fond); }
+
+/* Hors ligne : le lien reste atteignable (TalkBack), mais se voit éteint. */
+.bouton-chercher[aria-disabled="true"] {
+  border-style: dashed;
+  filter: grayscale(1);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.retour-drive {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin: -4px 0 8px;
+  padding-left: 42px; /* sous le texte de la ligne (case de 28 px et son écart) */
+  color: var(--texte);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* Le texte du bouton s'aligne sur « Pas le bon produit ? » quand il passe à la ligne. */
+.bouton.bouton-mot-drive {
+  margin-left: -8px;
+  padding: 0 8px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.carte-regler-drive { gap: 12px; }
+
+/* « Votre drive : drive.exemple.fr › » : sous la liste, en texte, le nom se coupe s'il est long. */
+.bouton.bouton-votre-drive {
+  align-self: center;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Courses faites : « Courses faites ✓ le samedi 10 octobre », « Rouvrir la liste ». */
+.carte-faites {
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.carte-faites h2 { overflow-wrap: anywhere; }
+
+.carte-faites h2:focus:not(:focus-visible) { outline: none; }
+
+.bouton.bouton-rouvrir {
+  margin-left: -16px;
+  color: var(--accent);
+}
+
+.prochaines-courses { gap: 4px; }
+
+/* ——— Feuilles « Votre drive », « Au drive, je cherche », « Courses terminées ? » ——— */
+
+.feuille-drive,
+.feuille-mot-drive,
+.feuille-fin-courses {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bloc-drive-regle,
+.bloc-drive-valide {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.votre-drive-nom {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.etapes-drive {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding-left: 1.25em;
+}
+
+.etapes-drive li > * + * { margin-top: 6px; }
+
+.etapes-drive li::marker { font-weight: 600; }
+
+.ligne-adresse-drive {
+  display: flex;
+  gap: 8px;
+}
+
+.ligne-adresse-drive .champ {
+  flex: 1;
+  min-width: 0;
+}
+
+.bouton.bouton-coller-drive {
+  flex: none;
+  padding: 0 14px;
+}
+
+/* « ✓ C'est bon… » : olive sur la surface de la feuille (5,7:1 en clair, 6,6:1 en sombre). */
+.drive-valide {
+  color: var(--olive);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.phrase-fin-courses {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Feuille d'un article : « Au drive, je cherche : « pâtes courtes » · Changer ». */
+.bloc-mot-drive {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ligne-mot-drive { overflow-wrap: anywhere; }
+
+.bouton.bouton-changer-mot {
+  min-height: 48px;
+  padding: 0 8px;
+  color: var(--accent);
+}
+
+.feuille-fin-courses .actions-feuille {
+  gap: 8px;
+  margin-top: 4px;
+}

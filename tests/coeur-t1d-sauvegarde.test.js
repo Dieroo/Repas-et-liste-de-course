@@ -5,9 +5,9 @@ process.env.TZ = 'Europe/Paris';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  FICHIER_MAX, PLATS_MAX_SAUVEGARDE, ECRITURES_PAR_LOT,
+  FICHIER_MAX, PLATS_MAX_SAUVEGARDE, ECRITURES_PAR_LOT, CHAMPS_PRODUIT, CHAMPS_REGLAGES, CLES_SAUVEGARDE,
   creerSauvegarde, nomFichierSauvegarde, lireSauvegarde, validerSauvegarde, preparerRestauration,
-  empreinteRestauration, dateDeSauvegarde, joursDepuis, appliquerConditions,
+  empreinteRestauration, dateDeSauvegarde, joursDepuis, appliquerConditions, phrasesCoursesRemises,
 } from '../js/coeur/sauvegarde.js';
 import {
   CHAMPS_PLAT, PLATS_MAX, extrairePaquet, validerPaquet, estSauvegarde, preparerImport, recetteValidee,
@@ -123,14 +123,20 @@ function fusionner(cible, source) {
   return sortie;
 }
 
-/** Applique des lots d'écritures à un état { plats, profils } (copie), comme le ferait Firestore. */
+/**
+ * Applique des lots d'écritures à un état { plats, profils, … } (copie ; chaque liste de documents { id } est une
+ * collection : T3b, `produits` et `reglages` [{ id: 'foyer', … }]), comme le ferait Firestore.
+ */
 function appliquer(etat, lots) {
-  const collections = {
-    plats: new Map(etat.plats.map((p) => [p.id, structuredClone(p)])),
-    profils: new Map(etat.profils.map((p) => [p.id, structuredClone(p)])),
-  };
+  const collections = {};
+  for (const [nom, docs] of Object.entries(etat)) {
+    if (Array.isArray(docs)) collections[nom] = new Map(docs.map((p) => [p.id, structuredClone(p)]));
+  }
+  collections.plats ??= new Map();
+  collections.profils ??= new Map();
   for (const lot of lots) {
     for (const ecriture of lot) {
+      collections[ecriture.collection] ??= new Map();
       const docs = collections[ecriture.collection];
       const donnees = horodater(ecriture.donnees);
       if (ecriture.mode === 'fusion') {
@@ -151,7 +157,7 @@ function appliquer(etat, lots) {
       for (const champ of ecriture.effacer ?? []) delete doc[champ];
     }
   }
-  return { plats: [...collections.plats.values()], profils: [...collections.profils.values()] };
+  return Object.fromEntries(Object.entries(collections).map(([nom, docs]) => [nom, [...docs.values()]]));
 }
 
 /** Toutes les écritures, à plat. */
@@ -234,7 +240,10 @@ test('creerSauvegarde : clés exactes, tris, ordre des champs du §8, défauts d
   const r = creerSauvegarde({ plats: [...etat.plats].reverse(), profils: etat.profils }, { maintenant: MAINTENANT });
   assert.equal(r.nomFichier, 'repas-courses-sauvegarde-2026-10-06.json');
   const fichier = JSON.parse(r.texte);
-  assert.deepEqual(Object.keys(fichier), ['format', 'sauvegardeLe', 'profils', 'plats']);
+  // T3b : `reglages` (le drive seul) et `produits` toujours présents, vides ici.
+  assert.deepEqual(Object.keys(fichier), ['format', 'sauvegardeLe', 'reglages', 'profils', 'produits', 'plats']);
+  assert.deepEqual(fichier.reglages, {});
+  assert.deepEqual(fichier.produits, []);
   assert.equal(fichier.format, 'paquet@1');
   assert.equal(fichier.sauvegardeLe, '2026-10-06T16:42:00.000Z');
   assert.deepEqual(fichier.profils.map((p) => p.id), ['profil-a', 'profil-b', 'enfant']);
@@ -262,10 +271,12 @@ test('creerSauvegarde : ni photo, ni mise à jour, ni gestionnaire, ni réglages
   ];
   const reglages = { gestionnaire: 'a@example.com', notifications: { ntfySujet: sujet } };
   const r = creerSauvegarde({ ...etat, demandes, reglages }, { maintenant: MAINTENANT });
-  for (const absent of ['vignette', 'majPar', 'majLe', 'gestionnaire', 'reglages', 'demandes', 'undefined', 'base64',
+  // T3b : la clé `reglages` existe désormais (le drive seul) ; ces réglages-ci n'ont pas de drive : elle reste vide.
+  for (const absent of ['vignette', 'majPar', 'majLe', 'gestionnaire', 'demandes', 'undefined', 'base64',
     'ntfy', 'notifications', 'repas-', sujet, 'profilId', 'besoin', 'sans_viande', 'creePar']) {
     assert.equal(r.texte.includes(absent), false, absent);
   }
+  assert.deepEqual(JSON.parse(r.texte).reglages, {});
   assert.equal(contientUndefined(JSON.parse(r.texte)), false);
   // Valeurs non sérialisables écartées ; horodatages en ISO.
   const bizarre = {
@@ -322,7 +333,7 @@ test('creerSauvegarde : résumé ; une fiche abîmée est signalée, le reste re
   abimee.nom = 'Tarte abîmée';
   delete abimee.ingredients[0].rayon;
   const r = creerSauvegarde({ plats: [...etat.plats, abimee], profils: etat.profils }, { maintenant: MAINTENANT });
-  assert.deepEqual(r.resume, { plats: 4, profils: 3, notes: 3 });
+  assert.deepEqual(r.resume, { plats: 4, profils: 3, notes: 3, produits: 0, drive: false }); // T3b : produits et drive
   assert.deepEqual(r.aCorriger, [{ id: 'tarte-abimee', nom: 'Tarte abîmée' }]);
   const validation = validerSauvegarde(lireSauvegarde(r.texte).sauvegarde);
   assert.equal(validation.valide, true);
@@ -844,6 +855,8 @@ test('résumé : comptes exacts', () => {
     naissancesRemises: [], // T2c : aucun profil du fichier n'a de date de naissance
     precautionsARemettre: [],
     reperesGardes: [], // T2d : aucune recette reprise
+    produitsRemis: 0, // T3b : ni produits ni drive dans ce fichier
+    driveRemis: null,
   });
   assert.equal(r.recettesDifferentes.length, 1);
   assert.equal(r.rien, false);
@@ -1046,4 +1059,187 @@ test('empreinte : une recette cochée changée entre l’aperçu et le toucher c
   const p2 = preparerRestauration(v, { ...app2, demandes: [] }, options);
   assert.notEqual(empreinteRestauration(p1), empreinteRestauration(p2));
   assert.equal(empreinteRestauration(p1), empreinteRestauration(preparerRestauration(v, { ...structuredClone(app1), demandes: [] }, options)));
+});
+
+// ——— T3b : réglages des produits (mot cherché au drive) et drive du foyer ———
+
+const MODELE = 'https://drive.exemple.fr/recherche?text={q}';
+const DRIVE = { nom: 'drive.exemple.fr', urlRecherche: MODELE };
+/** reglages/foyer tel que l'app le lit : le drive, et ce qui ne part jamais dans un fichier. */
+const REGLAGES_FOYER = {
+  gestionnaire: 'a@example.com', notifications: { ntfySujet: 'repas-abcdefghijkmnpqrstuvwxy' }, instructionsCopiees: 6,
+  derniereSauvegarde: { seconds: 1790000000, nanoseconds: 0 }, frigoJoursDefaut: 3, drive: DRIVE,
+};
+const PRODUITS = [
+  { id: 'pate', rechercheDrive: 'penne' },
+  { id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' },
+  { id: 'farine', placard: { actif: false } }, // T3d : rien de sauvegardé en T3b
+];
+const etatT3b = () => ({ ...etatDeBase(), produits: clone(PRODUITS), reglages: structuredClone(REGLAGES_FOYER) });
+
+test('T3b creerSauvegarde : `reglages` (le drive seul) et `produits` (mot cherché, triés) ; jamais le reste du foyer', () => {
+  const r = creerSauvegarde(etatT3b(), { maintenant: MAINTENANT });
+  const fichier = JSON.parse(r.texte);
+  assert.deepEqual(Object.keys(fichier), [...CLES_SAUVEGARDE]);
+  assert.deepEqual(fichier.reglages, { drive: DRIVE });
+  assert.deepEqual(fichier.produits, [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'pate', rechercheDrive: 'penne' }]);
+  assert.deepEqual(r.resume, { plats: 3, profils: 3, notes: 3, produits: 2, drive: true });
+  for (const absent of ['gestionnaire', 'notifications', 'ntfy', 'repas-abc', 'instructionsCopiees', 'derniereSauvegarde',
+    'frigoJoursDefaut', 'placard', 'semaines', 'articles', 'coches']) {
+    assert.equal(r.texte.includes(absent), false, absent);
+  }
+  assert.equal(contientUndefined(fichier), false);
+  // Produits en table par id ou en Map : même fichier.
+  const parId = Object.fromEntries(PRODUITS.map(({ id, ...champs }) => [id, champs]));
+  assert.equal(creerSauvegarde({ ...etatT3b(), produits: parId }, { maintenant: MAINTENANT }).texte, r.texte);
+  assert.equal(creerSauvegarde({ ...etatT3b(), produits: new Map(Object.entries(parId)) }, { maintenant: MAINTENANT }).texte, r.texte);
+});
+
+test('T3b creerSauvegarde : drive illisible ou absent → `reglages` vide ; produits abîmés écartés', () => {
+  const sansDrive = JSON.parse(creerSauvegarde({ ...etatT3b(), reglages: { ...REGLAGES_FOYER, drive: { urlRecherche: 'javascript:{q}' } } },
+    { maintenant: MAINTENANT }).texte);
+  assert.deepEqual(sansDrive.reglages, {});
+  assert.deepEqual(JSON.parse(creerSauvegarde({ ...etatT3b(), reglages: null }, { maintenant: MAINTENANT }).texte).reglages, {});
+  const abimes = [{ id: 'Pate', rechercheDrive: 'penne' }, { id: 'a/b', rechercheDrive: 'x' }, { id: 'vide', rechercheDrive: '   ' },
+    { id: 'long', rechercheDrive: 'x'.repeat(61) }, { id: 'nombre', rechercheDrive: 3 }, null, { rechercheDrive: 'sans id' },
+    { id: 'propre', rechercheDrive: '  penne   rigate ' }];
+  assert.deepEqual(JSON.parse(creerSauvegarde({ ...etatT3b(), produits: abimes }, { maintenant: MAINTENANT }).texte).produits,
+    [{ id: 'propre', rechercheDrive: 'penne rigate' }]);
+});
+
+test('T3b validerSauvegarde : produits et drive lus ; un ancien fichier (sans ces clés) reste lisible', () => {
+  const v = relue(etatT3b());
+  assert.equal(v.valide, true);
+  assert.deepEqual(v.avertissements, []);
+  assert.deepEqual(v.reglages, { drive: DRIVE });
+  assert.deepEqual(v.produits, [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'pate', rechercheDrive: 'penne' }]);
+  // Fichier d'avant T3b : ni `reglages` ni `produits`, aucun avertissement.
+  const ancien = validerSauvegarde(fichierAvec([clone(RECETTE_TARTE)]));
+  assert.equal(ancien.valide, true);
+  assert.deepEqual(ancien.avertissements, []);
+  assert.deepEqual([ancien.reglages, ancien.produits], [{}, []]);
+  assert.deepEqual(ancien.plats.map((p) => p.id), ['tarte-test']);
+  assert.equal(preparerRestauration(ancien, { plats: [], profils: [], demandes: [], produits: [], reglages: {} }).resume.produitsRemis, 0);
+});
+
+test('T3b validerSauvegarde : drive et produits illisibles ignorés avec un avertissement, jamais bloquants', () => {
+  const v = validerSauvegarde(fichierAvec([], clone(PROFILS), {
+    reglages: { drive: { urlRecherche: 'http://drive.exemple.fr/?q={q}' } },
+    produits: [{ id: 'pate', rechercheDrive: 'penne' }, { id: 'pate', rechercheDrive: 'autre' }, { id: 'A B' }, 'x',
+      { id: 'tomate', rechercheDrive: 'x'.repeat(61) }],
+  }));
+  assert.equal(v.valide, true);
+  assert.deepEqual(v.reglages, {});
+  assert.deepEqual(v.produits, [{ id: 'pate', rechercheDrive: 'penne' }]);
+  assert.deepEqual(v.avertissements, ['Le drive du fichier est illisible : il a été ignoré.',
+    '4 réglages de produits illisibles ont été ignorés.']);
+  const listes = validerSauvegarde(fichierAvec([], clone(PROFILS), { reglages: 'drive', produits: { pate: {} } }));
+  assert.equal(listes.valide, true);
+  assert.deepEqual(listes.avertissements, ['Les réglages des courses sont illisibles dans ce fichier : ils ont été ignorés.',
+    'Les réglages des produits sont illisibles dans ce fichier : ils ont été ignorés.']);
+  assert.deepEqual(validerSauvegarde(fichierAvec([], clone(PROFILS), { produits: [{ id: 'pate', rechercheDrive: '' }] })).avertissements,
+    ['Un réglage de produit illisible a été ignoré.']);
+  textesPropres([...v.avertissements, ...listes.avertissements]);
+});
+
+test('T3b validerSauvegarde : un réglage ou un champ de produit d’une app plus récente → « Une partie du fichier… », le reste repris', () => {
+  const v = validerSauvegarde(fichierAvec([], clone(PROFILS), {
+    reglages: { drive: DRIVE, rayons: ['boissons'], gestionnaire: 'a@example.com' },
+    produits: [{ id: 'pate', rechercheDrive: 'penne', rayon: 'epicerie_salee' }, { id: 'lait', habituel: { actif: true } }],
+  }));
+  assert.equal(v.valide, true);
+  assert.deepEqual(v.avertissements, ['Une partie du fichier n’est pas encore reprise par l’app : elle a été ignorée.']);
+  assert.deepEqual(v.reglages, { drive: DRIVE });
+  assert.deepEqual(v.produits, [{ id: 'pate', rechercheDrive: 'penne' }]);
+});
+
+test('T3b : un fichier T3b lu par une app d’avant (sans `reglages` ni `produits`) → avertissement, plats et profils restaurés', () => {
+  const lue = lireSauvegarde(creerSauvegarde(etatT3b(), { maintenant: MAINTENANT }).texte).sauvegarde;
+  const avant = validerSauvegarde(lue, { cles: ['format', 'sauvegardeLe', 'plats', 'profils'] });
+  assert.equal(avant.valide, true);
+  assert.deepEqual(avant.avertissements, ['Une partie du fichier n’est pas encore reprise par l’app : elle a été ignorée.']);
+  assert.deepEqual([avant.reglages, avant.produits], [{}, []]);
+  const r = preparerRestauration(avant, { plats: [], profils: [], demandes: [], email: 'a@example.com' });
+  assert.deepEqual(r.resume.platsRemis.sort(), ['Gratin de test (dans la corbeille)', 'Lasagnes', 'Tarte de test']);
+  assert.deepEqual(r.resume.profilsRemis, ['Adulte A', 'Adulte B', 'Enfant']);
+  assert.equal(ecrituresDe(r).some((e) => e.collection === 'produits' || e.collection === 'reglages'), false);
+});
+
+test('T3b aller-retour : sur une base vide, produits et drive reviennent à l’identique ; restaurés une fois, plus rien ne manque', () => {
+  const etat = etatT3b();
+  const vide = { plats: [], profils: [], demandes: [], email: 'a@example.com', produits: [], reglages: { gestionnaire: 'a@example.com' } };
+  const r = preparerRestauration(relue(etat), vide);
+  assert.equal(r.resume.produitsRemis, 2);
+  assert.equal(r.resume.driveRemis, 'drive.exemple.fr');
+  // Profils d'abord, puis le drive, puis les produits, puis les plats.
+  assert.deepEqual([...new Set(ecrituresDe(r).map((e) => e.collection))], ['profils', 'reglages', 'produits', 'plats']);
+  const apres = appliquer({ plats: [], profils: [], produits: [], reglages: [{ id: 'foyer', gestionnaire: 'a@example.com' }] }, r.lots);
+  assert.deepEqual(apres.produits.sort((a, b) => (a.id < b.id ? -1 : 1)),
+    [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'pate', rechercheDrive: 'penne' }]);
+  // Le drive revient ; le gestionnaire reste (jamais un set du document).
+  assert.deepEqual(apres.reglages, [{ id: 'foyer', gestionnaire: 'a@example.com', drive: DRIVE }]);
+  const encore = preparerRestauration(relue(etat), {
+    ...apres, demandes: [], email: 'a@example.com', reglages: apres.reglages[0],
+  });
+  assert.equal(encore.rien, true);
+  assert.deepEqual([encore.resume.produitsRemis, encore.resume.driveRemis], [0, null]);
+});
+
+test('T3b restauration additive : un mot cherché ou un drive présents ne sont jamais remplacés ; un champ absent revient', () => {
+  const v = relue(etatT3b());
+  const app = {
+    ...etatDeBase(), demandes: [], email: 'a@example.com',
+    produits: [{ id: 'pate', rechercheDrive: 'spaghetti' }, { id: 'creme-fraiche-epaisse', rayon: 'cremerie' }],
+    reglages: { ...REGLAGES_FOYER, drive: { nom: 'courses.exemple.fr', urlRecherche: 'https://courses.exemple.fr/r?q={q}' } },
+  };
+  const r = preparerRestauration(v, app);
+  assert.deepEqual(ecrituresDe(r).filter((e) => e.collection !== 'plats' && e.collection !== 'profils'), [{
+    collection: 'produits', id: 'creme-fraiche-epaisse', mode: 'update', donnees: { rechercheDrive: 'crème fraîche 30 %' },
+    condition: { champsAbsents: ['rechercheDrive'] },
+  }]);
+  assert.deepEqual([r.resume.produitsRemis, r.resume.driveRemis], [1, null]);
+  // Drive absent de l'app : `update` du seul champ `drive`, à condition qu'il manque encore.
+  const sansDrive = preparerRestauration(v, { ...app, reglages: { gestionnaire: 'a@example.com' } });
+  const ecriture = ecrituresDe(sansDrive).find((e) => e.collection === 'reglages');
+  assert.deepEqual(ecriture, { collection: 'reglages', id: 'foyer', mode: 'update', donnees: { drive: DRIVE }, condition: { champsAbsents: ['drive'] } });
+  assert.equal(sansDrive.resume.driveRemis, 'drive.exemple.fr');
+  // Le fichier ne porte que le drive : jamais le gestionnaire, le sujet ni la date de sauvegarde.
+  for (const e of ecrituresDe(sansDrive)) assert.equal(e.collection === 'reglages' && e.mode !== 'update', false);
+});
+
+test('T3b envoi : drive ou mot cherché posés ailleurs entre-temps → rien ; document absent → rien', () => {
+  const drive = { collection: 'reglages', id: 'foyer', mode: 'update', donnees: { drive: DRIVE }, condition: { champsAbsents: ['drive'] } };
+  assert.deepEqual(appliquerConditions(drive, { gestionnaire: 'a@example.com' }), drive);
+  assert.deepEqual(appliquerConditions(drive, { gestionnaire: 'a@example.com', drive: null }), drive);
+  assert.equal(appliquerConditions(drive, { gestionnaire: 'a@example.com', drive: { urlRecherche: 'https://courses.exemple.fr/{q}' } }), null);
+  assert.equal(appliquerConditions(drive, null), null, 'reglages/foyer absent : jamais créé par une restauration');
+  const mot = { collection: 'produits', id: 'pate', mode: 'update', donnees: { rechercheDrive: 'penne' }, condition: { champsAbsents: ['rechercheDrive'] } };
+  assert.deepEqual(appliquerConditions(mot, { rayon: 'epicerie_salee' }), mot);
+  assert.equal(appliquerConditions(mot, { rechercheDrive: 'spaghetti' }), null);
+  assert.equal(appliquerConditions(mot, null), null);
+  const absent = { collection: 'produits', id: 'pate', mode: 'fusion', donnees: { rechercheDrive: 'penne' }, condition: { absent: true } };
+  assert.deepEqual(appliquerConditions(absent, null), absent);
+  assert.equal(appliquerConditions(absent, { rayon: 'epicerie_salee' }), null);
+});
+
+test('T3b garde-fou : chaque champ de produit et chaque réglage sauvegardés survivent au voyage', () => {
+  // Une tranche qui ajoute un champ à CHAMPS_PRODUIT ou CHAMPS_REGLAGES doit le mettre ici, et dans la sauvegarde.
+  const produit = { id: 'pate', rechercheDrive: 'penne' };
+  const reglages = { drive: DRIVE };
+  for (const champ of CHAMPS_PRODUIT) assert.ok(champ in produit, `champ ${champ} absent du produit d’essai`);
+  for (const champ of CHAMPS_REGLAGES) assert.ok(champ in reglages, `réglage ${champ} absent des réglages d’essai`);
+  const v = relue({ plats: [], profils: [], produits: [produit], reglages });
+  const r = preparerRestauration(v, { plats: [], profils: [], demandes: [], produits: [], reglages: {} });
+  const apres = appliquer({ produits: [], reglages: [{ id: 'foyer' }] }, r.lots);
+  assert.deepEqual(apres.produits, [produit]);
+  assert.deepEqual(apres.reglages, [{ id: 'foyer', ...reglages }]);
+});
+
+test('T3b phrasesCoursesRemises : « 12 réglages de produits reviennent. », « Le drive revient (drive.exemple.fr). »', () => {
+  assert.deepEqual(phrasesCoursesRemises({ produitsRemis: 12, driveRemis: 'drive.exemple.fr' }),
+    ['12 réglages de produits reviennent.', 'Le drive revient (drive.exemple.fr).']);
+  assert.deepEqual(phrasesCoursesRemises({ produitsRemis: 1, driveRemis: null }), ['1 réglage de produit revient.']);
+  assert.deepEqual(phrasesCoursesRemises({ produitsRemis: 0, driveRemis: null }), []);
+  assert.deepEqual(phrasesCoursesRemises(null), []);
+  textesPropres(phrasesCoursesRemises({ produitsRemis: 12, driveRemis: 'drive.exemple.fr' }));
 });

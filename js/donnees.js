@@ -21,6 +21,8 @@ import { VERSION_REPERES } from './coeur/vocabulaire.js';
 import { lireIdDemande } from './coeur/demandes.js';
 import { EFFACER, cheminSur, champsValides } from './coeur/semaine.js';
 import { ARTICLE_MAX, PRECISION_MAX } from './coeur/liste.js';
+import { CHAMPS_PRODUIT } from './coeur/sauvegarde.js';
+import { RECHERCHE_MAX, lireDrive } from './coeur/drive.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -70,22 +72,24 @@ export function devenirGestionnaire(email) {
   });
 }
 
-// ——— Collections partagées (profils, plats, demandes, semaines, articles) ———
+// ——— Collections partagées (profils, plats, demandes, semaines, articles, produits) ———
 
 /**
- * Suit les profils, les plats, les demandes, les semaines et les articles ajoutés à la main (T3a) en temps réel, un
- * abonnement par collection entière, créé une fois au démarrage : la liste de courses est ainsi dans la copie du
- * téléphone dès que l'app a été ouverte avec du réseau, même si l'onglet Courses ne l'a jamais été.
+ * Suit les profils, les plats, les demandes, les semaines, les articles ajoutés à la main (T3a) et les produits du
+ * foyer (`produits/{id}`, T3b : mot cherché au drive…) en temps réel, un abonnement par collection entière, créé une fois
+ * au démarrage : la liste de courses est ainsi dans la copie du téléphone dès que l'app a été ouverte avec du réseau,
+ * même si l'onglet Courses ne l'a jamais été.
  * rappel({ profils, profilsDepuisCache }), rappel({ plats, platsDepuisCache }), rappel({ demandes }),
- * rappel({ semaines, semainesDepuisCache }) ou rappel({ articles, articlesDepuisCache }) à chaque changement, documents
- * sous la forme { id, ...champs } ; `…DepuisCache` : copie du téléphone, pas encore confirmée par le serveur.
+ * rappel({ semaines, semainesDepuisCache }), rappel({ articles, articlesDepuisCache }) ou rappel({ produits,
+ * produitsDepuisCache }) à chaque changement, documents sous la forme { id, ...champs } ; `…DepuisCache` : copie du
+ * téléphone, pas encore confirmée par le serveur.
  * surErreur(code) si une écoute s'arrête pour une autre raison qu'un accès refusé (géré par reglages/foyer).
  */
 export function suivreCollections(rappel, surErreur) {
   arreterCollections();
-  for (const nom of ['profils', 'plats', 'demandes', 'semaines', 'articles']) {
-    // Profils, plats, semaines et articles : on sait aussi si la copie vient du serveur ou seulement du téléphone
-    // (sauvegarde ; « La liste n'est pas encore sur ce téléphone »).
+  for (const nom of ['profils', 'plats', 'demandes', 'semaines', 'articles', 'produits']) {
+    // Toutes sauf les demandes : on sait aussi si la copie vient du serveur ou seulement du téléphone (sauvegarde ;
+    // « La liste n'est pas encore sur ce téléphone »).
     const suivreCache = nom !== 'demandes';
     let dernierCache = null;
     arretsCollections.push(onSnapshot(
@@ -545,21 +549,28 @@ export function retirerProfil(profilId) {
 const DELAI_SERVEUR_MS = 15000;
 
 /**
- * Lit les profils, les plats et les demandes sur le serveur, jamais dans la copie du téléphone : la restauration
- * part des données à jour de l'autre téléphone. → promesse de { plats, profils, demandes } (documents sous la forme
- * { id, ...champs }) ; rejetée hors ligne, ou si le serveur ne répond pas à temps.
+ * Lit les profils, les plats, les demandes, les produits du foyer (T3b) et les réglages du foyer (T3b : le drive) sur le
+ * serveur, jamais dans la copie du téléphone : la restauration part des données à jour de l'autre téléphone.
+ * → promesse de { plats, profils, demandes, produits } (documents sous la forme { id, ...champs }) et { reglages } (le
+ * document `reglages/foyer`, ou null s'il n'existe pas) ; rejetée hors ligne, ou si le serveur ne répond pas à temps.
+ * `reglages/foyer` est lu avec sa collection (`reglages` n'a que ce document), par la même lecture que les autres.
  */
 export function lireDepuisServeur() {
-  const noms = ['plats', 'profils', 'demandes'];
+  const noms = ['plats', 'profils', 'demandes', 'produits', 'reglages'];
   let minuteur = null;
   const delai = new Promise((_, rejeter) => {
     minuteur = setTimeout(() => rejeter(new Error('Serveur injoignable.')), DELAI_SERVEUR_MS);
   });
   const lecture = Promise.all(noms.map((nom) => getDocsFromServer(collection(db, nom))))
-    .then((instantanes) => Object.fromEntries(noms.map((nom, i) => [
-      nom,
-      instantanes[i].docs.map((d) => ({ ...d.data(), id: d.id })),
-    ])));
+    .then((instantanes) => {
+      const lus = Object.fromEntries(noms.map((nom, i) => [
+        nom,
+        instantanes[i].docs.map((d) => ({ ...d.data(), id: d.id })),
+      ]));
+      const foyer = lus.reglages.find((document) => document.id === 'foyer') ?? null;
+      if (foyer) delete foyer.id;
+      return { ...lus, reglages: foyer };
+    });
   return Promise.race([lecture, delai]).finally(() => clearTimeout(minuteur));
 }
 
@@ -571,7 +582,29 @@ function versFirestore(valeur) {
   return Object.fromEntries(Object.entries(valeur).map(([cle, sous]) => [cle, versFirestore(sous)]));
 }
 
-const COLLECTIONS_RESTAUREES = new Set(['plats', 'profils']);
+const COLLECTIONS_RESTAUREES = new Set(['plats', 'profils', 'produits', 'reglages']);
+// Réglages du foyer qu'une restauration peut écrire (T3b : le drive), par `update` de ces seuls champs : jamais un `set`
+// du document, le gestionnaire, le sujet des notifications ni la date de sauvegarde ne sont touchés.
+const REGLAGES_RESTAURES = new Set(['drive']);
+
+/**
+ * Vrai si une écriture de restauration sur `produits` ou `reglages` reste dans ce qui est permis (T3b) : un produit
+ * d'identifiant `^[a-z0-9-]+$` et de champs CHAMPS_PRODUIT seulement ; `reglages/foyer` par `update` des seuls champs
+ * REGLAGES_RESTAURES (un drive lisible : { nom, urlRecherche }), sans rien effacer. Les autres collections ne sont pas
+ * vérifiées ici.
+ */
+function ecritureRestaurablePermise({ collection: nom, id, mode, donnees, effacer }) {
+  const champs = Object.keys(estTable(donnees) ? donnees : {});
+  if (nom === 'produits') {
+    return cheminSur(id) !== null && champs.length > 0 && champs.every((champ) => CHAMPS_PRODUIT.includes(champ))
+      && !(effacer ?? []).length;
+  }
+  if (nom === 'reglages') {
+    return id === 'foyer' && mode === 'update' && champs.length > 0 && champs.every((champ) => REGLAGES_RESTAURES.has(champ))
+      && (!champs.includes('drive') || driveSur(donnees.drive)) && !(effacer ?? []).length;
+  }
+  return true;
+}
 
 /**
  * Écritures `update` d'un même document réunies en une seule, à la place de la première (champs, `effacer` et `clore`
@@ -618,6 +651,9 @@ const ECRITURES_PAR_TRANSACTION = 200;
  * en file : rien ne part plus tard à l'insu de la personne.
  * - `fusion` : `set` + `merge` (données imbriquées) ;
  * - `update` : chemins (`notes.<profil>`, champs de recette), `effacer` → deleteField().
+ * T3b : produits du foyer (`produits/{id}`, champs CHAMPS_PRODUIT seulement) et drive du foyer (`reglages/foyer`, `update`
+ * du seul champ `drive`, jamais un `set` du document : rôle et notifications restent intacts) ; une autre écriture sur
+ * ces collections est refusée avant tout envoi.
  * Les demandes satisfaites par une écriture faite (`clore`) sont closes dans la même transaction.
  * `auteur` : la personne connectée (`majPar` est déjà posé par le cœur).
  * → promesse de la fin de toutes les transactions (rejetée à la première qui échoue ; les précédentes restent faites,
@@ -625,9 +661,11 @@ const ECRITURES_PAR_TRANSACTION = 200;
  */
 export async function restaurer({ lots }, auteur) {
   const ecritures = (lots ?? []).flat();
-  for (const { collection: nom, mode } of ecritures) {
+  for (const ecriture of ecritures) {
+    const { collection: nom, mode } = ecriture;
     if (!COLLECTIONS_RESTAUREES.has(nom)) throw new Error(`Collection refusée pour une restauration : ${nom}.`);
     if (mode !== 'fusion' && mode !== 'update') throw new Error(`Mode d’écriture inconnu : ${mode}.`);
+    if (!ecritureRestaurablePermise(ecriture)) throw new Error(`Écriture refusée pour une restauration : ${nom}.`);
   }
   for (let debut = 0; debut < ecritures.length; debut += ECRITURES_PAR_TRANSACTION) {
     const tranche = ecritures.slice(debut, debut + ECRITURES_PAR_TRANSACTION);
@@ -997,4 +1035,162 @@ export function remettreArticles(docs) {
     envois.push(lot.commit());
   }
   return Promise.all(envois);
+}
+
+// ——— Au drive et fin des courses (T3b) ———
+// Toujours par lot (appliqué tout de suite sur le téléphone, envoyé au retour du réseau ; aucune transaction : rien ne
+// doit être refusé en magasin), seulement sur un geste.
+
+/** Vrai pour une valeur de champ d'un produit (`produits/{id}`) : EFFACER, ou mot cherché de 1 à RECHERCHE_MAX caractères. */
+function valeurDeProduitSure(champ, valeur) {
+  if (valeur === EFFACER) return true;
+  if (champ === 'rechercheDrive') return typeof valeur === 'string' && valeur.trim() !== '' && valeur.length <= RECHERCHE_MAX;
+  return !contientIndefini(valeur) && !effacerImbrique(valeur);
+}
+
+/**
+ * Différences voulues par le foyer sur des produits (« Au drive, je cherche », T3b ; préparées par coeur/liste.js ›
+ * ecrituresRecherche : [{ id, champs }]), en un seul lot : pour chacun, `set` + `mergeFields` des seuls champs donnés
+ * (EFFACER → deleteField() : retour au défaut) ; les autres champs du produit restent, et un produit absent est créé
+ * avec ce seul champ. Jamais une valeur recopiée des produits courants ni des recettes.
+ * Lève une erreur avant tout envoi si un identifiant n'est pas `^[a-z0-9-]+$`, si un champ n'est pas un champ de produit
+ * (coeur/sauvegarde.js › CHAMPS_PRODUIT) ou si une valeur est refusée, ou s'il n'y a rien à écrire. Hors ligne : part
+ * plus tard. → promesse de l'envoi.
+ */
+export function ecrireProduits(ecritures) {
+  const liste = Array.isArray(ecritures) ? ecritures : [];
+  if (!liste.length) throw new Error('Rien à écrire dans les produits.');
+  const preparees = liste.map((ecriture) => {
+    const id = ecriture?.id;
+    const champs = ecriture?.champs;
+    const entrees = estTable(champs) ? Object.entries(champs) : [];
+    if (!cheminSur(id) || !entrees.length
+      || !entrees.every(([champ, valeur]) => CHAMPS_PRODUIT.includes(champ) && valeurDeProduitSure(champ, valeur))) {
+      throw new Error('Écriture d’un produit refusée : identifiant sûr et champs d’un produit attendus.');
+    }
+    return { id, document: Object.fromEntries(entrees.map(([champ, valeur]) => [champ, versChamp(valeur)])) };
+  });
+  const lot = writeBatch(db);
+  for (const { id, document } of preparees) {
+    lot.set(doc(db, 'produits', id), document, { mergeFields: Object.keys(document) });
+  }
+  return lot.commit();
+}
+
+/** Un seul produit : ecrireProduits([{ id, champs }]). → promesse de l'envoi. */
+export function ecrireProduit(id, champs) {
+  return ecrireProduits([{ id, champs }]);
+}
+
+// Réglages du foyer que les deux membres écrivent depuis les écrans des courses (T3b : le drive ; T3d : rayons ; T3e :
+// apéro), par `update` de ces chemins seulement.
+const REGLAGES_COURSES = new Set(['drive']);
+
+/** Vrai pour un drive écrit tel que coeur/drive.js › lireDrive le relit : { nom, urlRecherche } exactement. */
+function driveSur(valeur) {
+  if (!estTable(valeur) || !Object.keys(valeur).every((cle) => cle === 'nom' || cle === 'urlRecherche')) return false;
+  const lu = lireDrive(valeur);
+  return Boolean(lu) && lu.nom === valeur.nom && lu.urlRecherche === valeur.urlRecherche;
+}
+
+/**
+ * Réglages des courses du foyer (T3b : `drive`, préparé par coeur/drive.js › ecrituresDrive) : `update` de
+ * `reglages/foyer`, chemins validés (`drive` seulement en T3b ; EFFACER → deleteField()). Jamais un `set` du document :
+ * le gestionnaire, le sujet des notifications et les autres réglages restent. Lève une erreur avant tout envoi si un
+ * chemin ou une valeur est refusé (drive illisible). Hors ligne : part plus tard. → promesse de l'envoi.
+ */
+export function ecrireReglages(champs) {
+  const entrees = estTable(champs) ? Object.entries(champs) : [];
+  const ok = entrees.length > 0 && entrees.every(([chemin, valeur]) => REGLAGES_COURSES.has(chemin)
+    && (valeur === EFFACER || (chemin === 'drive' && driveSur(valeur))));
+  if (!ok) throw new Error('Réglage refusé : seulement le drive du foyer.');
+  const lot = writeBatch(db);
+  lot.update(doc(db, 'reglages', 'foyer'), Object.fromEntries(entrees.map(([chemin, valeur]) => [chemin, versChamp(valeur)])));
+  return lot.commit();
+}
+
+// Champs d'une semaine qu'écrivent « Courses terminées » et son « Annuler » (T3b).
+const CHAMPS_FIN_DES_COURSES = new Set(['statut', 'statutAvant', 'coursesFaitesLe', 'coursesFaitesPar', 'coursesFaitesA']);
+
+/**
+ * Article écrit tel quel par « Courses terminées » (article gardé pour la prochaine fois) ou par son « Annuler » (article
+ * remis tel qu'il était) : { id, libelle, ...champs } ; identifiant de document sûr, libellé non vide de ARTICLE_MAX
+ * caractères au plus, aucune valeur indéfinie. Lève une erreur sinon. → { id, champs }.
+ */
+function articleEntier(article) {
+  if (!estTable(article) || !idDocumentSur(article.id)) throw new Error('Identifiant d’article refusé.');
+  const { id, ...champs } = article;
+  const ok = typeof champs.libelle === 'string' && champs.libelle.trim() !== '' && champs.libelle.length <= ARTICLE_MAX
+    && (champs.precision === undefined || (typeof champs.precision === 'string' && champs.precision.length <= PRECISION_MAX))
+    && !contientIndefini(champs) && !effacerImbrique(champs);
+  if (!ok) throw new Error('Article refusé : libellé et valeurs définies attendus.');
+  return { id, champs };
+}
+
+/**
+ * « Courses terminées » (T3b) et son « Annuler » : un seul lot, préparé par coeur/liste.js › preparerFinDesCourses
+ * (`lot`, ou `avant` pour « Annuler ») : { id (la semaine), champs, articles, supprimer } :
+ * - `champs` : `update` des seuls champs de la fin des courses (`statut`, `statutAvant`, `coursesFaitesLe`,
+ *   `coursesFaitesPar`, `coursesFaitesA` ; EFFACER → deleteField()) ;
+ * - `articles` : chacun `{ id, libelle, ...champs }` écrit par un `set` sans fusion (article gardé pour la prochaine
+ *   fois, `garde--<semaine>--<produit>` : deux téléphones écrivent le même document, jamais deux ; « Annuler » : article
+ *   remis tel qu'il était, même identifiant) ;
+ * - `supprimer` : articles supprimés (achetés ; « Annuler » : articles gardés retirés).
+ * Lève une erreur avant tout envoi si l'identifiant de la semaine n'est pas `^[a-z0-9-]+$`, si un champ ou un article
+ * est refusé, ou s'il n'y a rien à écrire. Hors ligne : part plus tard. → promesse de l'envoi.
+ */
+export function terminerCourses({ lot: ecritures } = {}) {
+  const { id, champs = {}, articles = [], supprimer = [] } = estTable(ecritures) ? ecritures : {};
+  if (!cheminSur(id)) throw new Error('Identifiant de semaine refusé.');
+  const chemins = estTable(champs) ? Object.entries(champs) : null;
+  if (!chemins || !champsValides(champs) || chemins.some(([chemin, valeur]) => !CHAMPS_FIN_DES_COURSES.has(chemin)
+    || effacerImbrique(valeur))) {
+    throw new Error('Fin des courses refusée : statut et traces de la fin des courses seulement.');
+  }
+  const ecrits = (Array.isArray(articles) ? articles : []).map(articleEntier);
+  const aSupprimer = [...new Set(Array.isArray(supprimer) ? supprimer : [])];
+  if (aSupprimer.some((articleId) => !idDocumentSur(articleId))) throw new Error('Identifiant d’article refusé.');
+  if (!chemins.length && !ecrits.length && !aSupprimer.length) throw new Error('Rien à écrire pour la fin des courses.');
+
+  const lot = writeBatch(db);
+  if (chemins.length) {
+    lot.update(doc(db, 'semaines', id), Object.fromEntries(chemins.map(([chemin, valeur]) => [chemin, versChamp(valeur)])));
+  }
+  for (const articleId of aSupprimer) lot.delete(doc(db, 'articles', articleId));
+  for (const { id: articleId, champs: donnees } of ecrits) lot.set(doc(db, 'articles', articleId), donnees);
+  return lot.commit();
+}
+
+/**
+ * Date des plats (« Courses terminées », T3b ; préparées par coeur/liste.js › ecrituresDernieresFois : [{ platId, champs:
+ * { derniereFois } }]) : un lot par plat, `update` du seul champ `derniereFois` (EFFACER → deleteField()), sans `majPar`
+ * ni `majLe`. Un plat supprimé entre-temps n'empêche que le sien et n'est jamais recréé (refus `not-found`), sans
+ * message. Les écritures refusées (plat ou valeur illisibles) sont écartées avant tout envoi. Hors ligne : part plus
+ * tard.
+ * → promesse de { echecs: [platId] } (jamais rejetée) : plats dont l'écriture a été refusée ou écartée.
+ */
+export function ecrireDernieresFois(ecritures) {
+  const echecs = [];
+  const envois = [];
+  for (const ecriture of Array.isArray(ecritures) ? ecritures : []) {
+    const platId = ecriture?.platId;
+    const champs = ecriture?.champs;
+    const valeur = estTable(champs) ? champs.derniereFois : undefined;
+    const ok = cheminSur(platId) !== null && estTable(champs) && Object.keys(champs).length === 1
+      && valeur !== undefined && valeur !== null && !contientIndefini(valeur) && !effacerImbrique(valeur);
+    if (!ok) {
+      if (typeof platId === 'string') echecs.push(platId);
+      continue;
+    }
+    try {
+      const lot = writeBatch(db);
+      lot.update(doc(db, 'plats', platId), { derniereFois: versChamp(valeur) });
+      envois.push(lot.commit().catch(() => {
+        echecs.push(platId);
+      }));
+    } catch {
+      echecs.push(platId);
+    }
+  }
+  return Promise.all(envois).then(() => ({ echecs }));
 }

@@ -11,6 +11,7 @@ import {
   empreinteRestauration,
   creerSauvegarde,
   nomFichierSauvegarde,
+  phrasesCoursesRemises,
 } from '../coeur/sauvegarde.js';
 
 const MESSAGES_FICHIER = {
@@ -124,7 +125,7 @@ export function creer(ctx) {
   // du fichier), reseau (serveur injoignable), apercu, aJour.
   let etat = { type: 'attente' };
   let validation = null; // sauvegarde lue et validée
-  let serveur = null; // { plats, profils, demandes } lus sur le serveur pour l'aperçu
+  let serveur = null; // { plats, profils, demandes, produits, reglages } lus sur le serveur pour l'aperçu
   let preparation = null; // aperçu en cours (avec les cases cochées)
   let empreinte = ''; // empreinte des écritures de l'aperçu affiché
   const coches = new Set(); // recettes à reprendre
@@ -227,6 +228,10 @@ export function creer(ctx) {
       profils: lus.profils ?? [],
       demandes: lus.demandes ?? [],
       email: courant.utilisateur?.email ?? '',
+      // T3b : produits du foyer et réglages (`reglages/foyer`) lus sur le serveur : un drive ou un mot cherché déjà
+      // dans l'app ne sont jamais annoncés comme revenant.
+      produits: lus.produits ?? [],
+      reglages: lus.reglages ?? null,
     };
     const brouillon = preparerRestauration(validation, donneesApp, { recettesAReprendre: [...coches] });
     const proposees = new Set(brouillon.recettesDifferentes.map((r) => r.id));
@@ -286,7 +291,12 @@ export function creer(ctx) {
     if (coches.size) {
       try {
         const maintenant = new Date();
-        const { texte } = creerSauvegarde({ plats: serveur.plats ?? [], profils: serveur.profils ?? [] }, { maintenant });
+        const { texte } = creerSauvegarde({
+          plats: serveur.plats ?? [],
+          profils: serveur.profils ?? [],
+          produits: serveur.produits ?? [],
+          reglages: serveur.reglages ?? null,
+        }, { maintenant });
         courant.actions.telecharger(nomFichierSauvegarde(maintenant, { avantRestauration: true }), texte);
       } catch {
         // Sans copie de précaution, aucune recette n'est remplacée.
@@ -442,6 +452,8 @@ export function creer(ctx) {
       ...lignesVersionsRemises(resume.versionsRemises, courant.profils),
       // Date de naissance revenue sur un profil présent qui n'en avait pas (écriture à part, T2c-1).
       ...lignesAge(resume).revient,
+      // Mots cherchés au drive et drive du foyer absents de l'app (T3b) : « 12 réglages de produits reviennent. »…
+      ...phrasesCoursesRemises(resume).map((ligne) => `🛒 ${ligne}`),
     ].filter(Boolean);
     const aRemettre = lignesAge(resume).aRemettre;
 

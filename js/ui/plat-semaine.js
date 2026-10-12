@@ -59,7 +59,8 @@ export function listeCourante(ctx) {
   if (ctx?.liste) return ctx.liste;
   const m = memoListe;
   if (m.resultat && m.semaine === ctx?.semaine && m.plats === ctx?.tousLesPlats && m.profils === ctx?.profils
-    && m.articles === ctx?.articles && m.reglages === ctx?.reglages && m.compat === ctx?.compat) {
+    && m.articles === ctx?.articles && m.reglages === ctx?.reglages && m.compat === ctx?.compat
+    && m.produits === ctx?.produitsFoyer) {
     return m.resultat;
   }
   const resultat = listeDeCourses(ctx?.semaine ?? null, {
@@ -67,12 +68,13 @@ export function listeCourante(ctx) {
     profils: ctx?.profils ?? [],
     articles: ctx?.articles ?? [],
     reglages: ctx?.reglages ?? null,
+    produitsFoyer: ctx?.produitsFoyer ?? {},
     ...(typeof ctx?.compat === 'function' ? { evaluer: ctx.compat } : {}),
     maintenant: Date.now(),
   });
   memoListe = {
     semaine: ctx?.semaine, plats: ctx?.tousLesPlats, profils: ctx?.profils, articles: ctx?.articles,
-    reglages: ctx?.reglages, compat: ctx?.compat, resultat,
+    reglages: ctx?.reglages, compat: ctx?.compat, produits: ctx?.produitsFoyer, resultat,
   };
   return resultat;
 }

@@ -1,5 +1,7 @@
 // Écran Semaine (accueil, les deux rôles) : salutation, puis la carte « prochaine action » (le seul bouton principal :
-// « ＋ Choisir les plats », « Faire les courses › », « Préparer la semaine du … »), puis « Les plats de la semaine »
+// « ＋ Choisir les plats », « Faire les courses › », « Préparer la semaine du … » ; une fois les courses faites (T3b),
+// « Courses faites ✓ » sans bouton principal, sauf « Préparer la semaine du … » les deux derniers jours), puis « Les
+// plats de la semaine »
 // (une carte par plat : pour qui et combien, Mer / Végétale d'un toucher, conservation ; « En ce moment… » quand la
 // semaine suivante est déjà montrée ; plats de la corbeille dits d'une ligne discrète). Pour le gestionnaire (hors
 // aperçu « Repas et courses ») : la carte « 🧸🎂 <Enfant> a 5 ans ! » quand des précautions de l'enfant ont passé leur
@@ -272,7 +274,9 @@ function creerCarteDemandes(ctx) {
 
 /**
  * Carte « prochaine action » (coeur/liste.js › carteProchaineAction) : « Que mange-t-on cette semaine ? » et
- * « ＋ Choisir les plats », « Courses : 32 articles » et « Faire les courses › », « Tout est dans le panier 🎉 »… ;
+ * « ＋ Choisir les plats », « Courses : 32 articles » et « Faire les courses › », « Tout est dans le panier 🎉 » et
+ * « Dites-le dans Courses quand c'est fini. », puis « Courses faites ✓ » et « Le samedi 10 octobre. Bon appétit ! »
+ * (T3b : « Voir la liste › » secondaire, la semaine qu'on cuisine reste à l'écran)… ;
  * les deux derniers jours d'une semaine, « Cette semaine se termine vendredi 16 octobre. » et « Préparer la semaine du
  * 17 au 23 octobre », qui n'écrit rien et ouvre la feuille de choix sur la semaine suivante. Nœuds gardés d'un rendu à
  * l'autre (le focus reste sur le bouton touché). `choisir(bouton)` : ouvre la feuille « Ajouter à la semaine ».
@@ -290,10 +294,10 @@ function creerCarteAction(choisir) {
   let emoji = '';
 
   function maj(carte) {
-    const voulu = carte.cas === 'choisir' ? '🍲' : '🧺';
+    const voulu = carte.cas === 'choisir' ? '🍲' : carte.cas === 'faites' ? '✅' : '🧺';
     if (voulu !== emoji) {
       emoji = voulu;
-      visuel.replaceChildren(pastille(voulu, voulu === '🧺' ? 'olive' : ''));
+      visuel.replaceChildren(pastille(voulu, voulu === '🍲' ? '' : 'olive'));
     }
     ecrireTexte(titre, carte.titre);
     ecrireTexte(texte, carte.texte ?? '');

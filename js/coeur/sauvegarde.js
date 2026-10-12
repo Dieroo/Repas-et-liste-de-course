@@ -1,5 +1,6 @@
-// Sauvegarde et restauration (CLAUDE.md §8) : le fichier `paquet@1` complet (plats, notes, profils), sa lecture,
-// sa validation, et les écritures d'une restauration additive. Logique pure : ni DOM ni Firebase.
+// Sauvegarde et restauration (CLAUDE.md §8) : le fichier `paquet@1` complet (plats, notes, profils ; T3b : réglages
+// des produits et drive), sa lecture, sa validation, et les écritures d'une restauration additive. Logique pure : ni
+// DOM ni Firebase.
 // Règle de la restauration : ce qui est dans l'app reste ; ce qui manque revient ; seules les recettes cochées
 // reprennent leur version sauvegardée.
 import { slug } from './slug.js';
@@ -14,6 +15,7 @@ import { styleDe } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
 import { STYLES } from './vocabulaire.js';
 import { comparerAuxReperesPres, garderReperes, reperesEnPlus, texteReperes } from './relecture.js';
+import { RECHERCHE_MAX, lireDrive } from './drive.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
   validerPaquet,
@@ -37,8 +39,16 @@ const CHAMPS_SUIVI = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'cor
 const CHAMPS_PROFIL = ['id', 'nom', 'email', 'ordre', 'coefPortion', 'regles', 'naissance'];
 // Champs d'un profil jamais exportés (liste fermée ; vide en T1d).
 const EXCLUSIONS_PROFIL = [];
-// Clés de premier niveau comprises par la restauration.
-const CLES_SAUVEGARDE = ['format', 'sauvegardeLe', 'plats', 'profils'];
+// Clés de premier niveau comprises par la restauration, dans l'ordre du fichier (T3b : `reglages` et `produits`,
+// toujours présentes, {} et [] si vides).
+export const CLES_SAUVEGARDE = Object.freeze(['format', 'sauvegardeLe', 'reglages', 'profils', 'produits', 'plats']);
+// Champs d'un produit (`produits/{id}`) sauvegardés : ceux qu'écrit un geste (T3b : le mot cherché au drive ; T3d :
+// rayon, placard, habituel). Jamais une valeur recopiée des produits courants (ils sont du code).
+export const CHAMPS_PRODUIT = Object.freeze(['rechercheDrive']);
+// Réglages du foyer sauvegardés (T3b : le drive ; T3d : rayons ; T3e : apéro). Jamais le gestionnaire, le sujet des
+// notifications, la version des instructions copiée ni la date de la dernière sauvegarde.
+export const CHAMPS_REGLAGES = Object.freeze(['drive']);
+const AVERTISSEMENT_PARTIE_IGNOREE = 'Une partie du fichier n’est pas encore reprise par l’app\u00A0: elle a été ignorée.';
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 const reduire = (valeur) => (typeof valeur === 'string' ? valeur.replace(/\s+/g, ' ').trim() : '');
@@ -46,6 +56,32 @@ const parId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const deux = (n) => String(n).padStart(2, '0');
 const guillemets = (nom) => `«\u00A0${nom}\u00A0»`;
 const marqueurHorodatage = () => ({ horodatageServeur: true });
+/** Vrai si le document porte ce champ (ni absent, ni null, ni texte vide) : la restauration ne le remplace jamais. */
+const champPresent = (document, champ) => estObjet(document) && document[champ] !== undefined && document[champ] !== null
+  && document[champ] !== '';
+
+/** Mot cherché au drive lisible : texte de 1 à RECHERCHE_MAX caractères (espaces réduits), sinon ''. */
+function motCherche(valeur) {
+  const mot = reduire(valeur);
+  return mot.length <= RECHERCHE_MAX ? mot : '';
+}
+
+/** Documents `produits/{id}` donnés en liste ({ id, ...champs }), en table par id ou en Map → [{ id, ...champs }]. */
+function documentsProduits(produits) {
+  let entrees = [];
+  if (Array.isArray(produits)) entrees = produits.map((p) => [p?.id, p]);
+  else if (produits instanceof Map) entrees = [...produits];
+  else if (estObjet(produits)) entrees = Object.entries(produits);
+  return entrees.filter(([id, p]) => typeof id === 'string' && ID.test(id) && estObjet(p)).map(([id, p]) => ({ ...p, id }));
+}
+
+/** Champs sauvegardés d'un produit (CHAMPS_PRODUIT), lisibles seulement ; {} si aucun. */
+function champsDuProduit(produit) {
+  const champs = {};
+  const mot = typeof produit?.rechercheDrive === 'string' ? motCherche(produit.rechercheDrive) : '';
+  if (mot) champs.rechercheDrive = mot;
+  return champs;
+}
 
 // ——— Dates ———
 
@@ -199,12 +235,16 @@ export function nomFichierSauvegarde(date, { avantRestauration = false } = {}) {
 }
 
 /**
- * Fichier de sauvegarde, à partir des plats et des profils de l'app (documents { id, ...champs }).
- * → { nomFichier, texte, resume: { plats, profils, notes }, aCorriger: [{ id, nom }] }
+ * Fichier de sauvegarde, à partir des plats, des profils, des produits du foyer (documents { id, ...champs } ; T3b) et
+ * des réglages du foyer (`reglages/foyer`, T3b). Clés dans cet ordre : format, sauvegardeLe, reglages (seulement
+ * `drive`, lu par drive.js › lireDrive ; {} sans drive), profils, produits (triés par id, CHAMPS_PRODUIT seulement ; un
+ * produit sans champ sauvegardé est omis ; [] sinon), plats. Jamais le gestionnaire, les notifications, les instructions
+ * copiées, la date de sauvegarde, les semaines ni les articles ajoutés à la main.
+ * → { nomFichier, texte, resume: { plats, profils, notes, produits, drive }, aCorriger: [{ id, nom }] }
  *   `aCorriger` : plats dont la recette ne pourrait pas être reprise depuis ce fichier (fiche abîmée) ; le reste
  *   du fichier reste restaurable.
  */
-export function creerSauvegarde({ plats = [], profils = [] } = {}, { maintenant = new Date() } = {}) {
+export function creerSauvegarde({ plats = [], profils = [], produits = [], reglages = null } = {}, { maintenant = new Date() } = {}) {
   const quand = versDate(maintenant) ?? new Date();
   const platsFichier = (Array.isArray(plats) ? plats : [])
     .filter((plat) => estObjet(plat) && typeof plat.id === 'string' && plat.id !== '')
@@ -213,7 +253,19 @@ export function creerSauvegarde({ plats = [], profils = [] } = {}, { maintenant 
   const profilsFichier = trierProfils((Array.isArray(profils) ? profils : [])
     .filter((profil) => estObjet(profil) && typeof profil.id === 'string' && profil.id !== ''))
     .map(profilPourSauvegarde);
-  const fichier = { format: FORMAT, sauvegardeLe: quand.toISOString(), profils: profilsFichier, plats: platsFichier };
+  const produitsFichier = documentsProduits(produits)
+    .map((produit) => ({ id: produit.id, ...champsDuProduit(produit) }))
+    .filter((produit) => Object.keys(produit).length > 1)
+    .sort(parId);
+  const drive = lireDrive(reglages?.drive);
+  const fichier = {
+    format: FORMAT,
+    sauvegardeLe: quand.toISOString(),
+    reglages: drive ? { drive } : {},
+    profils: profilsFichier,
+    produits: produitsFichier,
+    plats: platsFichier,
+  };
   const texte = `${JSON.stringify(fichier, null, 2)}\n`;
 
   // Relu comme à la restauration : une recette qui ne passerait pas est signalée tout de suite.
@@ -230,6 +282,8 @@ export function creerSauvegarde({ plats = [], profils = [] } = {}, { maintenant 
       plats: platsFichier.length,
       profils: profilsFichier.length,
       notes: platsFichier.reduce((total, plat) => total + Object.keys(plat.notes ?? {}).length, 0),
+      produits: produitsFichier.length,
+      drive: Boolean(drive),
     },
     aCorriger,
   };
@@ -345,19 +399,71 @@ function validerProfils(bruts, erreurs, avertissements) {
 }
 
 /**
+ * Réglages des courses et produits du fichier (T3b), lus seulement si `cles` les comprend → { reglages: { drive? },
+ * produits: [{ id, rechercheDrive? }], ignoree, avertissements } : un drive illisible (drive.js › lireDrive), un
+ * produit illisible ou en double sont ignorés avec un avertissement, jamais bloquants ; un réglage ou un champ de
+ * produit d'une version plus récente de l'app (`ignoree`) donne l'avertissement « Une partie du fichier… ».
+ */
+function validerCourses(sauvegarde, cles) {
+  const sortie = { reglages: {}, produits: [], ignoree: false, avertissements: [] };
+  if (cles.includes('reglages') && sauvegarde.reglages != null) {
+    if (!estObjet(sauvegarde.reglages)) {
+      sortie.avertissements.push('Les réglages des courses sont illisibles dans ce fichier\u00A0: ils ont été ignorés.');
+    } else {
+      if (Object.keys(sauvegarde.reglages).some((cle) => !CHAMPS_REGLAGES.includes(cle))) sortie.ignoree = true;
+      if (sauvegarde.reglages.drive != null) {
+        const drive = lireDrive(sauvegarde.reglages.drive);
+        if (drive) sortie.reglages.drive = drive;
+        else sortie.avertissements.push('Le drive du fichier est illisible\u00A0: il a été ignoré.');
+      }
+    }
+  }
+  if (cles.includes('produits') && sauvegarde.produits != null) {
+    if (!Array.isArray(sauvegarde.produits)) {
+      sortie.avertissements.push('Les réglages des produits sont illisibles dans ce fichier\u00A0: ils ont été ignorés.');
+      return sortie;
+    }
+    const ids = new Set();
+    let illisibles = 0;
+    for (const brut of sauvegarde.produits) {
+      if (!estObjet(brut) || typeof brut.id !== 'string' || !ID.test(brut.id) || ids.has(brut.id)) {
+        illisibles += 1;
+        continue;
+      }
+      ids.add(brut.id);
+      if (Object.keys(brut).some((cle) => cle !== 'id' && !CHAMPS_PRODUIT.includes(cle))) sortie.ignoree = true;
+      const champs = champsDuProduit(brut);
+      if (brut.rechercheDrive != null && !champs.rechercheDrive) illisibles += 1;
+      if (Object.keys(champs).length) sortie.produits.push({ id: brut.id, ...champs });
+    }
+    if (illisibles === 1) sortie.avertissements.push('Un réglage de produit illisible a été ignoré.');
+    else if (illisibles > 1) sortie.avertissements.push(`${illisibles}\u00A0réglages de produits illisibles ont été ignorés.`);
+  }
+  return sortie;
+}
+
+/**
  * Vérifie une sauvegarde lue par lireSauvegarde. Seules les fautes du fichier entier bloquent (liste des plats
  * illisible, trop de plats, identifiants en double) ; une recette abîmée n'est simplement pas reprise.
  * → { date (Date ou null), plats: [{ id, nom, recette (null si abîmée), notes, derniereFois?, modifieeLe? (Date),
- *     modifieePar?, corbeille? ({ le (Date), par? }), reperesRelus? (entier ≥ 1, T2d) }], profils, erreurs: [texte], avertissements: [texte], valide }
- *   Marque de la corbeille illisible (pas un objet, ou sans date lisible) : ignorée, avec un avertissement.
+ *     modifieePar?, corbeille? ({ le (Date), par? }), reperesRelus? (entier ≥ 1, T2d) }], profils, reglages: { drive? }
+ *     (T3b), produits: [{ id, rechercheDrive? }] (T3b), erreurs: [texte], avertissements: [texte], valide }
+ *   Marque de la corbeille illisible (pas un objet, ou sans date lisible) : ignorée, avec un avertissement. Un fichier
+ *   d'avant T3b (sans `reglages` ni `produits`) reste lisible.
+ * `cles` : clés de premier niveau que l'app comprend (CLES_SAUVEGARDE) ; une clé hors de cette liste est ignorée avec
+ * l'avertissement « Une partie du fichier… », et le reste du fichier reste repris (une liste plus courte imite une app
+ * d'avant : garde-fou des tests).
  */
-export function validerSauvegarde(sauvegarde) {
+export function validerSauvegarde(sauvegarde, { cles = CLES_SAUVEGARDE } = {}) {
   const erreurs = [];
   const avertissements = [];
+  let courses = { reglages: {}, produits: [] };
   const fin = (plats = [], profils = []) => ({
     date: typeof sauvegarde?.sauvegardeLe === 'string' ? versDate(sauvegarde.sauvegardeLe) : null,
     plats,
     profils,
+    reglages: courses.reglages,
+    produits: courses.produits,
     erreurs,
     avertissements,
     valide: !erreurs.length,
@@ -366,9 +472,12 @@ export function validerSauvegarde(sauvegarde) {
     erreurs.push('Ce fichier n’est pas une sauvegarde de l’app.');
     return fin();
   }
-  if (Object.keys(sauvegarde).some((cle) => !CLES_SAUVEGARDE.includes(cle))) {
-    avertissements.push('Une partie du fichier n’est pas encore reprise par l’app\u00A0: elle a été ignorée.');
+  const comprises = Array.isArray(cles) ? cles : CLES_SAUVEGARDE;
+  courses = validerCourses(sauvegarde, comprises);
+  if (courses.ignoree || Object.keys(sauvegarde).some((cle) => !comprises.includes(cle))) {
+    avertissements.push(AVERTISSEMENT_PARTIE_IGNOREE);
   }
+  avertissements.push(...courses.avertissements);
 
   // Profils.
   let profils = [];
@@ -487,6 +596,12 @@ function enLots(ecritures, taille) {
  * `resume.versionsRemises` : [{ pour, nom, nombre }] (versions remises sur des plats présents, par profil).
  * Date de naissance (T2c) : un profil présent sans date la reçoit par une écriture séparée (condition
  * `naissanceAbsente`, pour qu'elle ne soit pas annulée avec ses règles) ; `resume.naissancesRemises` : [nom].
+ * Réglages des courses (T3b) : `reglages` (le document `reglages/foyer` lu) ; le drive du fichier revient seulement
+ * s'il manque dans l'app (`update` du seul champ `drive`, condition `champsAbsents` : jamais un `set` du document, le
+ * gestionnaire et le sujet des notifications restent intacts) ; `resume.driveRemis` : son nom, sinon null. Produits
+ * (T3b) : `produits` (documents `produits/{id}`, liste, table par id ou Map) ; un produit absent revient entier (fusion,
+ * condition `absent`), un produit présent ne reçoit que ses champs absents (`update`, condition `champsAbsents`) ;
+ * `resume.produitsRemis` : le nombre de produits écrits.
  * `resume.precautionsARemettre` : [nom] des profils présents dont la date revient, ou dont le fichier porte des
  * précautions d'âge absentes de l'app sans que leurs règles reviennent : l'écran invite à ouvrir « 🧸 Ce que <Enfant>
  * mange » (aucune précaution n'est écrite par la restauration sur un profil qui a déjà des règles).
@@ -502,8 +617,9 @@ function enLots(ecritures, taille) {
  *   Dans `donnees`, `majLe` vaut le marqueur { horodatageServeur: true } (donnees.js le traduit) ; `modifieeLe` du
  *   fichier est une Date. `avertissements` : ceux de la validation, puis ceux de la restauration.
  */
-export function preparerRestauration(validation, { plats = [], profils = [], demandes = [], email = '' } = {},
-  { recettesAReprendre = [] } = {}) {
+export function preparerRestauration(validation, {
+  plats = [], profils = [], demandes = [], email = '', produits = [], reglages = null,
+} = {}, { recettesAReprendre = [] } = {}) {
   const avertissements = [...(validation?.avertissements ?? [])];
   const auteur = normaliserEmail(email);
   const platsApp = (Array.isArray(plats) ? plats : []).filter((p) => estObjet(p) && typeof p.id === 'string');
@@ -536,6 +652,8 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     naissancesRemises: [],
     precautionsARemettre: [],
     reperesGardes: [],
+    produitsRemis: 0,
+    driveRemis: null,
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -785,8 +903,54 @@ export function preparerRestauration(validation, { plats = [], profils = [], dem
     return { id: pour, ordre: profil?.ordre, nom: reduire(profil?.nom) || pour };
   })).map(({ id, nom }) => ({ pour: id, nom, nombre: versionsRemises.get(id) }));
 
-  const lots = enLots([...ecrituresProfils, ...ecrituresPlats], ECRITURES_PAR_LOT);
+  // Réglages des courses (T3b) : le drive, seulement s'il manque dans l'app.
+  const ecrituresReglages = [];
+  const drive = lireDrive(validation?.reglages?.drive);
+  if (drive && !champPresent(reglages, 'drive')) {
+    ecrituresReglages.push({
+      collection: 'reglages', id: 'foyer', mode: 'update', donnees: { drive }, condition: { champsAbsents: ['drive'] },
+    });
+    resume.driveRemis = drive.nom;
+  }
+  // Produits (T3b) : un produit absent revient entier ; un produit présent ne reçoit que ses champs absents.
+  const ecrituresProduits = [];
+  const produitsApp = new Map(documentsProduits(produits).map((p) => [p.id, p]));
+  for (const produit of Array.isArray(validation?.produits) ? validation.produits : []) {
+    if (!estObjet(produit) || typeof produit.id !== 'string' || !ID.test(produit.id)) continue;
+    const champs = champsDuProduit(produit);
+    if (!Object.keys(champs).length) continue;
+    const present = produitsApp.get(produit.id);
+    if (!present) {
+      ecrituresProduits.push({ collection: 'produits', id: produit.id, mode: 'fusion', donnees: champs, condition: { absent: true } });
+      resume.produitsRemis += 1;
+      continue;
+    }
+    const manquants = Object.keys(champs).filter((champ) => !champPresent(present, champ));
+    if (!manquants.length) continue;
+    ecrituresProduits.push({
+      collection: 'produits', id: produit.id, mode: 'update',
+      donnees: Object.fromEntries(manquants.map((champ) => [champ, champs[champ]])),
+      condition: { champsAbsents: manquants },
+    });
+    resume.produitsRemis += 1;
+  }
+
+  const lots = enLots([...ecrituresProfils, ...ecrituresReglages, ...ecrituresProduits, ...ecrituresPlats], ECRITURES_PAR_LOT);
   return { resume, recettesDifferentes, lots, demandesAClore, avertissements, rien: lots.length === 0 };
+}
+
+/**
+ * Lignes de l'aperçu pour les réglages des courses qui reviennent (T3b) : « 12 réglages de produits reviennent. »,
+ * « 1 réglage de produit revient. », « Le drive revient (drive.exemple.fr). » ; [] si rien ne revient.
+ */
+export function phrasesCoursesRemises(resume) {
+  const lignes = [];
+  const n = resume?.produitsRemis;
+  if (Number.isInteger(n) && n === 1) lignes.push('1\u00A0réglage de produit revient.');
+  else if (Number.isInteger(n) && n > 1) lignes.push(`${n}\u00A0réglages de produits reviennent.`);
+  const nom = reduire(resume?.driveRemis);
+  if (nom) lignes.push(`Le drive revient (${nom}).`);
+  return lignes;
 }
 
 /**
@@ -840,6 +1004,8 @@ function empreinteRecette(plat) {
  * - recette cochée : seulement si la fiche est encore celle de l'aperçu ;
  * - règles d'un profil (`reglesAbsentes`) : seulement s'il n'en a toujours aucune (une liste, même vide, reste) ;
  * - date de naissance (`naissanceAbsente`) : seulement s'il n'en a toujours aucune ;
+ * - champs d'un produit ou d'un réglage (`champsAbsents` : [champ], T3b) : seulement ceux que le document n'a toujours
+ *   pas (le drive réglé entre-temps sur l'autre téléphone, un mot cherché changé, restent) ;
  * - versions : seulement celles dont le profil n'a toujours aucune version sur la fiche (`variantesAbsentes` : [pour]),
  *   ou aucune de ce style (`stylesAbsents` : [{ pour, style }], compatibilite.js › styleDe), ajoutées à la fin des
  *   versions lues (celles de la fiche gagnent).
@@ -854,6 +1020,9 @@ export function appliquerConditions(ecriture, actuel) {
   if (condition.reglesAbsentes && Array.isArray(actuel.regles)) return null;
   if (condition.naissanceAbsente && actuel.naissance != null) return null;
   const donnees = { ...ecriture.donnees };
+  for (const champ of condition.champsAbsents ?? []) {
+    if (champPresent(actuel, champ)) delete donnees[champ];
+  }
   let effacer = [...(ecriture.effacer ?? [])];
   let clore = ecriture.clore ?? [];
   for (const profilId of condition.notesAbsentes ?? []) {

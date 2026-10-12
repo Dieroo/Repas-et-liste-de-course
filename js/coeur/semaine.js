@@ -7,6 +7,9 @@
 //   calculé ; retirer un plat écrit `retire: true`, l'entrée n'est jamais supprimée ; une semaine naît avec son
 //   premier plat (`set` fusionné de { debut, fin, creePar, creeLe }, jamais de `statut`).
 // - La liste de courses ne lit que `plats.<id>` (repas, mange, invites, styles, portionsACongeler) : coeur/liste.js.
+// - T3b : « Courses terminées » (liste.js › preparerFinDesCourses) écrit `statut: 'courses_faites'` et `statutAvant` ;
+//   « Rouvrir la liste » (ecrituresRouvrir) remet le statut d'avant, jamais plus loin ; ce qui manquait, gardé pour la
+//   prochaine fois, devient des articles `garde--<semaine>--<produit>` (idGarde).
 import { correspond, slug } from './slug.js';
 import { aSaRecette, typeDe } from './plats.js';
 import { deNom, noteDe } from './notes.js';
@@ -481,6 +484,18 @@ export function platsDeLaSemaine(semaine, { tousLesPlats = [], profils = [], eva
 
 /** Préfixe des articles nés des restes d'une semaine : `reste--<semaine>--<produit>`. */
 export const PREFIXE_RESTE = 'reste--';
+/**
+ * Préfixe des articles gardés par « Courses terminées » (T3b, « Les garder pour la prochaine fois ») :
+ * `garde--<semaine>--<produit>`, la semaine dont les courses sont terminées. Distinct des restes : vider une semaine qui
+ * commence plus tard n'emporte jamais ce qui a été gardé pour la prochaine fois.
+ */
+export const PREFIXE_GARDE = 'garde--';
+
+/** `<prefixe><semaine>--<produit>`, ou '' si une clé est hors `^[a-z0-9-]+$`. */
+function idDArticle(prefixe, semaineId, produitId) {
+  return typeof semaineId === 'string' && ID_SUR.test(semaineId) && typeof produitId === 'string' && ID_SUR.test(produitId)
+    ? `${prefixe}${semaineId}--${produitId}` : '';
+}
 
 /**
  * Identifiant d'un article des restes, fixé par la semaine qui le reçoit et le produit (`reste--2026-10-17--beurre`) :
@@ -488,21 +503,31 @@ export const PREFIXE_RESTE = 'reste--';
  * hors `^[a-z0-9-]+$`.
  */
 export function idReste(semaineId, produitId) {
-  return typeof semaineId === 'string' && ID_SUR.test(semaineId) && typeof produitId === 'string' && ID_SUR.test(produitId)
-    ? `${PREFIXE_RESTE}${semaineId}--${produitId}` : '';
+  return idDArticle(PREFIXE_RESTE, semaineId, produitId);
 }
 
 /**
- * Articles des restes gardés (liste.js › restes) : { id, libelle, precision?, creePar?, creeLe } ; `id` : idReste
- * (absent sans produit lisible : identifiant tiré par donnees.js) ; un produit n'apparaît qu'une fois.
+ * Identifiant d'un article gardé par « Courses terminées » (`garde--2026-10-10--beurre`), fixé par la semaine dont les
+ * courses sont terminées et le produit : deux téléphones qui terminent les mêmes courses écrivent le même document.
+ * '' si une clé est hors `^[a-z0-9-]+$`.
  */
-function articlesDesRestes(restes, { semaineId, auteur, maintenant }) {
+export function idGarde(semaineId, produitId) {
+  return idDArticle(PREFIXE_GARDE, semaineId, produitId);
+}
+
+/**
+ * Articles des restes gardés (liste.js › restes), ou des lignes gardées par « Courses terminées » (`garde: true`) →
+ * [{ id?, libelle, precision?, creePar?, creeLe }] ; `id` : idReste (idGarde avec `garde`), absent sans produit
+ * lisible (identifiant tiré par donnees.js) ; un produit n'apparaît qu'une fois ; libellé de 60 caractères au plus,
+ * précision de 40 au plus.
+ */
+export function articlesDesRestes(restes, { semaineId, auteur, maintenant, garde = false }) {
   const articles = [];
   const vus = new Set();
   for (const reste of listeDe(restes)) {
     const libelle = reduire(reste?.libelle).slice(0, 60).trim();
     if (!libelle) continue;
-    const id = idReste(semaineId, reste?.produitId);
+    const id = (garde ? idGarde : idReste)(semaineId, reste?.produitId);
     if (id && vus.has(id)) continue;
     if (id) vus.add(id);
     const precision = reduireQuantite(reste?.precision).slice(0, 40).trim();
@@ -580,6 +605,38 @@ export function restesDeLaSemaine(semaine, articles) {
   if (!prefixe) return [];
   return listeDe(articles).filter((a) => estObjet(a) && typeof a.id === 'string' && a.id.startsWith(prefixe) && !estObjet(a.coche))
     .map((a) => a.id);
+}
+
+/**
+ * Articles gardés par « Courses terminées » de cette semaine (identifiant `garde--<semaine>--…`), pas cochés :
+ * ceux que « Rouvrir la liste » retire (ses lignes reviennent à acheter). → [identifiant]
+ */
+export function gardesDeLaSemaine(semaine, articles) {
+  const prefixe = typeof semaine?.id === 'string' && ID_SUR.test(semaine.id) ? `${PREFIXE_GARDE}${semaine.id}--` : null;
+  if (!prefixe) return [];
+  return listeDe(articles).filter((a) => estObjet(a) && typeof a.id === 'string' && a.id.startsWith(prefixe) && !estObjet(a.coche))
+    .map((a) => a.id);
+}
+
+/**
+ * « Rouvrir la liste » (T3b, un geste) → { id, champs: { statut: statutAvant | EFFACER, statutAvant: EFFACER },
+ * supprimer? } : le statut d'avant « Courses terminées » revient (une semaine `validee` redevient `validee`, jamais
+ * brouillon ; brouillon ou absent : EFFACER), jamais plus loin. `supprimer` : les articles gardés pour la prochaine
+ * fois par ces courses et pas encore cochés (gardesDeLaSemaine) : leurs lignes reviennent à acheter, elles ne
+ * doivent pas apparaître deux fois. { code: 'invalide' } pour une semaine illisible ; { code: 'statut' } si ses
+ * courses ne sont pas terminées (statut autre que `courses_faites`).
+ */
+export function ecrituresRouvrir(semaine, { articles = [] } = {}) {
+  const lue = lireSemaine(semaine);
+  if (!lue) return { code: 'invalide' };
+  if (statutSemaine(lue) !== 'courses_faites') return { code: 'statut' };
+  const avant = lue.statutAvant;
+  const remis = Object.hasOwn(RANGS_STATUT, avant ?? '') && RANGS_STATUT[avant] > RANGS_STATUT.brouillon
+    && RANGS_STATUT[avant] < RANGS_STATUT.courses_faites ? avant : EFFACER;
+  const resultat = { id: lue.id, champs: { statut: remis, statutAvant: EFFACER } };
+  const supprimer = gardesDeLaSemaine(lue, articles);
+  if (supprimer.length) resultat.supprimer = supprimer;
+  return resultat;
 }
 
 /**

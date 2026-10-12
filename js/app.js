@@ -57,13 +57,15 @@ import {
 import { annonceRelecture, bilanRelecture, platsARelire } from './coeur/relecture.js';
 import {
   lireSemaine, semaineAPreparer, semaineEnCours, appliquerChamps, estDansLaSemaine, texteDates, aDesPlats,
-  ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage,
+  ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage, EFFACER, statutSemaine,
 } from './coeur/semaine.js';
 import {
   listeDeCourses, ecrituresCoche, ecrituresCocheArticle, ecrituresRachat, preparerAjout, texteAjoutArticle,
-  ERREURS_ARTICLE, phraseRestesAjoutes,
+  ERREURS_ARTICLE, phraseRestesAjoutes, ecrituresRecherche, preparerFinDesCourses, ecrituresDernieresFois,
+  TEXTES_FIN_DES_COURSES, articleGardeDeLaLigne, ecrituresRouvrirListe,
 } from './coeur/liste.js';
 import { indexDesRecettes } from './coeur/produits.js';
+import { modeleDrive, ecrituresDrive, ERREURS_DRIVE, texteMotNote } from './coeur/drive.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -137,6 +139,10 @@ const etat = {
   articles: [],
   articlesCharges: false,
   articlesDepuisCache: false,
+  // Produits du foyer (T3b) : documents `produits/{id}` bruts (différences voulues par le foyer : mot cherché au drive…).
+  produits: [],
+  produitsCharges: false,
+  produitsDepuisCache: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
 };
 
@@ -419,22 +425,38 @@ function semaineCourante(aujourdhui = dateDuJour()) {
   return semainesDuJour(aujourdhui).semaine;
 }
 
+// Produits du foyer par identifiant (T3b : `ctx.produitsFoyer`, `produitsFoyer` de coeur/liste.js), table figée, gardée
+// tant que `etat.produits` est le même tableau.
+let memoProduits = { produits: null, parId: Object.freeze({}) };
+
+function produitsFoyerCourants() {
+  if (memoProduits.produits !== etat.produits) {
+    const parId = {};
+    for (const produit of etat.produits) {
+      if (produit && typeof produit.id === 'string' && produit.id) parId[produit.id] = produit;
+    }
+    memoProduits = { produits: etat.produits, parId: Object.freeze(parId) };
+  }
+  return memoProduits.parId;
+}
+
 // Liste de courses (coeur/liste.js › listeDeCourses), calculée sur le téléphone, jamais écrite. Gardée tant que la
-// semaine montrée, les plats, les profils, les articles, les réglages du foyer (`etat.donnees.reglages`, nouvel objet
-// à chaque instantané : ordre des rayons, `frigoJoursDefaut`…) et le jour sont les mêmes objets.
+// semaine montrée, les plats, les profils, les articles, les produits du foyer (T3b), les réglages du foyer
+// (`etat.donnees.reglages`, nouvel objet à chaque instantané : ordre des rayons, `frigoJoursDefaut`…) et le jour sont
+// les mêmes objets.
 let memoListe = { cles: null, liste: null };
 
 function listeCourante(aujourdhui = dateDuJour()) {
   const semaine = semaineCourante(aujourdhui);
   const reglages = etat.donnees.reglages ?? null;
-  const cles = [semaine, etat.plats, etat.profils, etat.articles, reglages, aujourdhui];
+  const cles = [semaine, etat.plats, etat.profils, etat.articles, etat.produits, reglages, aujourdhui];
   if (!memoListe.cles || cles.some((cle, i) => cle !== memoListe.cles[i])) {
     memoListe = {
       cles,
       liste: listeDeCourses(semaine, {
         tousLesPlats: etat.plats,
         profils: etat.profils,
-        produitsFoyer: {}, // T3b : produits/{id}
+        produitsFoyer: produitsFoyerCourants(),
         articles: etat.articles,
         reglages,
         evaluer: compat,
@@ -496,6 +518,10 @@ function instructionsAJour() {
  * moment… »), sinon null ; `articles`, documents `articles/{id}` bruts (`articlesCharges`, `articlesDepuisCache`) ;
  * `liste`, liste de courses de la semaine montrée (coeur/liste.js › listeDeCourses, jamais écrite ; même objet tant que
  * rien ne change) ; `enLigne`, réseau du téléphone (navigator.onLine).
+ * Au drive (T3b) : `produits`, documents `produits/{id}` bruts ; `produitsFoyer`, les mêmes par identifiant (table figée,
+ * même objet tant qu'ils ne changent pas : `produitsFoyer` de coeur/liste.js › ecrituresRecherche) ; `produitsCharges`,
+ * `produitsDepuisCache`. Le drive du foyer se lit dans `reglages` (coeur/liste.js › reglagesCourses) ; le mode Drive /
+ * Magasin est retenu par l'écran Courses sur ce téléphone.
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -540,6 +566,10 @@ function contexteCourant() {
     articlesDepuisCache: etat.articlesDepuisCache,
     liste: listeCourante(aujourdhui),
     enLigne: navigator.onLine,
+    produits: etat.produits,
+    produitsFoyer: produitsFoyerCourants(),
+    produitsCharges: etat.produitsCharges,
+    produitsDepuisCache: etat.produitsDepuisCache,
     actions,
   };
 }
@@ -1039,23 +1069,26 @@ const actions = {
     feuilleQuiEtesVous = feuille;
   },
   /**
-   * Télécharge une sauvegarde (CLAUDE.md §8), construite depuis les données de ce téléphone. Synchrone : à appeler
-   * dans le toucher (le navigateur bloque un téléchargement lancé après une attente). En ligne seulement, la date est
-   * marquée dans `reglages/foyer.derniereSauvegarde` et appliquée tout de suite sur ce téléphone ; hors ligne, le
-   * fichier ne compte pas comme dernière sauvegarde.
+   * Télécharge une sauvegarde (CLAUDE.md §8), construite depuis les données de ce téléphone : plats, profils et, depuis
+   * T3b, réglages des produits (`produits/{id}`) et drive du foyer (`reglages/foyer.drive`, seul réglage sauvegardé).
+   * Synchrone : à appeler dans le toucher (le navigateur bloque un téléchargement lancé après une attente). En ligne
+   * seulement, et si plats, profils, produits et réglages viennent du serveur, la date est marquée dans
+   * `reglages/foyer.derniereSauvegarde` et appliquée tout de suite sur ce téléphone ; sinon, le fichier est donné mais
+   * ne compte pas comme dernière sauvegarde (`horsLigne`).
    * → { resume, aCorriger, horsLigne }, ou null tant que plats et profils ne sont pas chargés (rien n'est téléchargé).
    */
   sauvegarder() {
     if (!etat.platsCharges || !etat.profilsCharges) return null;
     const maintenant = new Date();
     const { nomFichier, texte, resume, aCorriger } = creerSauvegarde(
-      { plats: etat.plats, profils: etat.profils },
+      { plats: etat.plats, profils: etat.profils, produits: etat.produits, reglages: etat.donnees.reglages ?? null },
       { maintenant },
     );
     telecharger(nomFichier, texte);
-    // Copie du téléphone pas encore confirmée par le serveur (réseau absent ou médiocre) : le fichier est donné,
-    // mais il ne compte pas comme dernière sauvegarde.
-    const horsLigne = !navigator.onLine || etat.platsDepuisCache || etat.profilsDepuisCache;
+    // Copie du téléphone pas encore confirmée par le serveur (réseau absent ou médiocre ; produits pas encore lus, T3b) :
+    // le fichier est donné, mais il ne compte pas comme dernière sauvegarde.
+    const horsLigne = !navigator.onLine || etat.platsDepuisCache || etat.profilsDepuisCache
+      || !etat.produitsCharges || etat.produitsDepuisCache || Boolean(etat.donnees.depuisCache);
     if (!horsLigne) {
       ecrire(donnees.marquerSauvegarde(maintenant), 'La date de la sauvegarde n’a pas pu être enregistrée.');
       if (etat.donnees.reglages) {
@@ -1065,7 +1098,11 @@ const actions = {
     }
     return { resume, aCorriger, horsLigne };
   },
-  /** Profils, plats et demandes lus sur le serveur (restauration). → promesse ; rejetée hors ligne. */
+  /**
+   * Données lues sur le serveur (restauration) : { plats, profils, demandes, produits } (documents { id, ...champs }) et
+   * { reglages } (le document `reglages/foyer`, ou null), à passer tels quels à coeur/sauvegarde.js ›
+   * preparerRestauration. → promesse ; rejetée hors ligne.
+   */
   lireDepuisServeur() {
     if (!navigator.onLine) return Promise.reject(new Error('Hors ligne.'));
     return donnees.lireDepuisServeur();
@@ -1391,7 +1428,9 @@ const actions = {
    * écrit `coches.<cle>` de la semaine montrée (la quantité affichée au moment du toucher, coeur/liste.js ›
    * ecrituresCoche) ou l'efface ; un article à la main (`article:<id>`, ou son identifiant) écrit `articles/{id}.coche`
    * (un article supprimé entre-temps n'est jamais recréé : refus silencieux). Rien n'est écrit si la ligne est déjà dans
-   * l'état voulu. Aucune annonce : la progression de Courses le dit.
+   * l'état voulu. Courses terminées (« Revoir la liste ») : l'article qui garde la ligne pour la prochaine fois
+   * (coeur/liste.js › articleGardeDeLaLigne) est coché ou décoché avec elle, par sa propre écriture (un article supprimé
+   * ailleurs n'empêche jamais la coche de la ligne). Aucune annonce : la progression de Courses le dit.
    * → { code } : ok, chargement, inutile (clé inconnue de la liste), invalide, echec, refuse.
    */
   cocher(cle, oui) {
@@ -1403,28 +1442,20 @@ const actions = {
     const echec = 'La liste n’a pas pu être mise à jour. Réessayez.';
     const article = liste.articles.find((a) => a.cle === cle || a.articleId === cle);
     if (article) {
-      if (Boolean(article.cochee) === voulu) return { code: 'ok' };
-      const ecritures = ecrituresCocheArticle(article, voulu, { maintenant });
-      if (ecritures.code) return ecritures;
-      let envoi;
-      try {
-        envoi = donnees.modifierArticle(ecritures.articleId, ecritures.champs);
-      } catch {
-        annoncer(echec);
-        return { code: 'echec' };
-      }
-      ecrire(envoi, echec);
-      etat.articles = etat.articles.map((a) => (a.id === ecritures.articleId ? appliquerChamps(a, ecritures.champs) : a));
-      rendre();
-      return { code: 'ok' };
+      const resultat = cocherArticle(article, voulu, maintenant, echec);
+      if (resultat.code === 'ok') rendre();
+      return resultat;
     }
     const ligne = liste.lignes.find((l) => l.cle === cle);
     if (!ligne) return { code: 'inutile' };
     // Déjà prise en entier (cocher) ou rien de pris (décocher) : rien à écrire.
     if (voulu ? ligne.cochee : !ligne.cochee && !ligne.dejaPris) return { code: 'ok' };
-    const ecritures = ecrituresCoche(semaineCourante(), ligne, voulu, { maintenant });
+    const semaine = semaineCourante();
+    const ecritures = ecrituresCoche(semaine, ligne, voulu, { maintenant });
     if (ecritures.code) return ecritures;
     if (!ecrireDansLaSemaine(ecritures, echec)) return { code: 'echec' };
+    const garde = articleGardeDeLaLigne(semaine, ligne, liste);
+    if (garde) cocherArticle(garde, voulu, maintenant, echec);
     rendre();
     return { code: 'ok' };
   },
@@ -1506,6 +1537,151 @@ const actions = {
     const message = `«\u00A0${nom}\u00A0» retiré de la liste.`;
     if (!silencieux) annoncer(message, { action: { libelle: 'Annuler', faire: () => remettreArticle(article) } });
     return { code: 'ok', message };
+  },
+
+  // ——— Au drive et fin des courses (T3b, les deux membres, aperçu compris) ———
+  // Comme en T3a : chaque geste part par un lot (hors ligne : plus tard ; aucune transaction, rien ne doit être refusé
+  // en magasin), appliqué tout de suite sur ce téléphone, puis l'écran est redessiné. Rien n'est écrit à l'ouverture
+  // d'un écran ni d'une feuille.
+
+  /**
+   * Drive du foyer (feuille « Votre drive », les deux membres, depuis Courses ou Réglages) : `drive`, un drive lu
+   * ({ nom, urlRecherche } : « Enregistrer » avec le modèle de coeur/drive.js › modeleDrive, ou « Annuler » de « Ne plus
+   * chercher au drive »), l'adresse collée elle-même (texte, lue par modeleDrive), ou null (« Ne plus chercher au
+   * drive »). Écrit `reglages/foyer.drive` ({ nom, urlRecherche }, ou effacé) par `update` du seul champ (hors ligne :
+   * plus tard ; jamais un `set` du document), appliqué tout de suite (`ctx.reglages`, 🔍 de Courses). N'annonce rien :
+   * la feuille le fait (« Votre drive : drive.exemple.fr », annonce de l'arrêt avec « Annuler »).
+   * → { code: 'ok', drive (null : plus de drive) } | { code: 'vide' | 'https' | 'absent' | 'longue', message }
+   *   (adresse refusée, ERREURS_DRIVE : rien n'est écrit) | { code: 'invalide' | 'chargement' | 'echec' | 'refuse' }
+   *   (echec : lot impossible à construire, annoncé). null sans drive réglé : { code: 'ok', drive: null }, rien d'écrit.
+   */
+  reglerDrive(drive) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.donnees.reglages) return { code: 'chargement' };
+    let voulu = drive;
+    if (typeof drive === 'string') {
+      const lu = modeleDrive(drive);
+      if (lu.erreur) return { code: lu.erreur, message: ERREURS_DRIVE[lu.erreur] ?? null };
+      voulu = { nom: lu.nom, urlRecherche: lu.modele };
+    }
+    if (voulu !== null && (!voulu || typeof voulu !== 'object')) return { code: 'invalide' };
+    // Rien à effacer : aucun drive n'est écrit.
+    if (voulu === null && !Object.hasOwn(etat.donnees.reglages, 'drive')) return { code: 'ok', drive: null };
+    const ecritures = ecrituresDrive(voulu);
+    if (ecritures.code) return ecritures;
+    const echec = voulu === null
+      ? 'Ce réglage n’a pas pu être enregistré. Réessayez.'
+      : 'Le drive n’a pas pu être enregistré. Réessayez.';
+    if (!ecrireLesReglages(ecritures.champs, echec)) return { code: 'echec' };
+    rendre();
+    return { code: 'ok', drive: voulu === null ? null : ecritures.champs.drive };
+  },
+  /**
+   * « Au drive, je cherche » (feuille ⋮ d'une ligne ou d'un article, « Changer le mot cherché » au retour du drive ; les
+   * deux membres) : `cle`, la clé de la ligne (`ligne.cle` de ctx.liste, placard compris ; `article:<id>` ou
+   * l'identifiant d'un article) ; `saisie`, le mot tapé (coeur/liste.js › ecrituresRecherche). Un mot de 60 caractères
+   * au plus est écrit sous le produit de la ligne (`produits/{id}.rechercheDrive`, `set` + `mergeFields` ; hors ligne :
+   * plus tard) ; vide, ou le nom de la ligne : retour au nom (« Revenir à « pâtes courtes » »), le mot effacé sous chaque
+   * clé de la ligne qui en porte un. Appliqué tout de suite : le 🔍 cherche aussitôt le nouveau mot. N'annonce rien : la
+   * feuille, qui se ferme, annonce `message` (« C’est noté : « penne » servira les prochaines fois. » ; retour au nom :
+   * avec le nom de la ligne) ; `annoncer: true` : l'action l'annonce elle-même.
+   * → { code: 'ok', terme (le mot ; null : retour au nom), message } | { code: 'long', message } (« 60 caractères au
+   *   plus. », rien n'est écrit) | { code: 'chargement' (semaines, articles, plats, profils ou produits pas encore lus) |
+   *   'inutile' (clé inconnue de la liste) | 'invalide' | 'echec' | 'refuse' }.
+   */
+  changerRecherche(cle, saisie, { annoncer: annoncerMessage = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues() || !etat.produitsCharges) return { code: 'chargement' };
+    const ligne = ligneDeLaListe(cle);
+    if (!ligne) return { code: 'inutile' };
+    const produitsFoyer = produitsFoyerCourants();
+    const resultat = ecrituresRecherche(ligne, saisie, { produitsFoyer });
+    if (resultat.erreur) return { code: resultat.erreur, message: ERREURS_ARTICLE[resultat.erreur] ?? null };
+    if (resultat.code) return resultat;
+    // Le même mot, déjà écrit sous ce produit : rien à réécrire.
+    const deja = resultat.terme !== null && produitsFoyer[ligne.produitId]?.rechercheDrive === resultat.terme;
+    const ecritures = deja ? [] : resultat.ecritures;
+    if (ecritures.length) {
+      const echec = 'Le mot cherché n’a pas pu être enregistré. Réessayez.';
+      let envoi;
+      try {
+        envoi = donnees.ecrireProduits(ecritures);
+      } catch {
+        annoncer(echec);
+        return { code: 'echec' };
+      }
+      ecrire(envoi, echec);
+      appliquerProduits(ecritures);
+      rendre();
+    }
+    const message = texteMotNote(resultat.terme ?? ligne.libelle);
+    if (annoncerMessage) annoncer(message);
+    return { code: 'ok', terme: resultat.terme, message };
+  },
+  /**
+   * « Courses terminées » (Courses, les deux membres) sur la semaine montrée (coeur/liste.js › preparerFinDesCourses) :
+   * un lot (statut `courses_faites`, `statutAvant`, `coursesFaitesLe`, `coursesFaitesPar`, `coursesFaitesA` ; tous les
+   * articles cochés supprimés, cachés compris ; avec `garder`, chaque ligne restée à acheter devient un article
+   * `garde--<semaine>--<produit>` avec la quantité qui manque, et les articles pas cochés restent ; sans `garder`
+   * (« Terminer sans eux »), les articles pas cochés sont supprimés aussi), puis la date des plats cuisinés
+   * (`derniereFois` = début de la semaine, jamais en arrière, un lot par plat, sans message). Hors ligne : part plus
+   * tard. Appliqué tout de suite. Annonce « Courses terminées. Bon appétit ! » avec « Annuler », qui remet le statut, les
+   * articles et les dates des plats comme avant (seulement si la liste n'a pas été rouverte entre-temps) ;
+   * `silencieux: true` : aucune annonce. L'écran ouvre d'abord la feuille « Courses terminées ? » s'il reste quelque
+   * chose à acheter (coeur/liste.js › restesFinDesCourses).
+   * → { code: 'ok', gardes (articles créés pour la prochaine fois) } | { code: 'chargement' | 'invalide' (aucune semaine
+   *   montrée) | 'deja' (courses déjà terminées) | 'echec' (lot impossible à construire : annoncé) | 'refuse' }.
+   */
+  terminerCourses({ garder = true, silencieux = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineCourante();
+    if (!semaine) return { code: 'invalide' };
+    const uid = etat.utilisateur.uid;
+    const preparation = preparerFinDesCourses(semaine, {
+      liste: listeCourante(),
+      articles: etat.articles,
+      tousLesPlats: etat.plats,
+      profils: etat.profils,
+      evaluer: compat,
+      reglages: etat.donnees.reglages ?? null,
+      garder: Boolean(garder),
+      auteur: etat.utilisateur.email,
+      aujourdhui: dateDuJour(),
+      maintenant: Date.now(),
+    });
+    if (preparation.code) return preparation;
+    if (!ecrireFinDesCourses(preparation.lot, 'La fin des courses n’a pas pu être enregistrée. Réessayez.')) {
+      return { code: 'echec' };
+    }
+    ecrireDates(preparation.derniereFois);
+    rendre();
+    if (!silencieux) {
+      annoncer(TEXTES_FIN_DES_COURSES.annonce, {
+        action: { libelle: 'Annuler', faire: () => annulerFinDesCourses(preparation, uid) },
+      });
+    }
+    return { code: 'ok', gardes: preparation.gardes };
+  },
+  /**
+   * « Rouvrir la liste » (Courses, après « Courses terminées » ; les deux membres) : le statut d'avant revient (une
+   * semaine `validee` redevient `validee`, jamais plus loin), et les articles gardés pour la prochaine fois par ces
+   * courses repartent : pas encore cochés, leurs lignes reviennent à acheter ; cochés depuis (achetés), leurs lignes
+   * reviennent cochées (coeur/liste.js › ecrituresRouvrirListe). La date des plats reste. Hors ligne : part plus tard.
+   * Annonce « La liste est rouverte. ».
+   * → { code: 'ok' } | { code: 'chargement' | 'invalide' | 'statut' (courses pas terminées) | 'echec' | 'refuse' }.
+   */
+  rouvrirListe() {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineCourante();
+    if (!semaine) return { code: 'invalide' };
+    const ecritures = ecrituresRouvrirListe(semaine, { articles: etat.articles, liste: listeCourante(), maintenant: Date.now() });
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'La liste n’a pas pu être rouverte. Réessayez.')) return { code: 'echec' };
+    rendre();
+    annoncer(TEXTES_FIN_DES_COURSES.rouverte);
+    return { code: 'ok' };
   },
 };
 
@@ -1600,6 +1776,135 @@ function remettreDans(semaineId, platId, remettre = []) {
   const ecritures = ecrituresRemise(semaine, platId, { maintenant: Date.now(), remettre });
   if (ecritures.code) return;
   if (ecrireDansLaSemaine(ecritures, `${citerPlat(platId)} n’a pas pu être remis dans la semaine. Réessayez.`)) rendre();
+}
+
+// ——— Au drive et fin des courses (T3b) ———
+
+/** Ligne ou article de la liste montrée par sa clé (`ligne.cle`, placard compris ; `article:<id>` ou `<id>`), ou null. */
+function ligneDeLaListe(cle) {
+  if (typeof cle !== 'string' || !cle) return null;
+  const liste = listeCourante();
+  return [...liste.lignes, ...liste.maison].find((l) => l.cle === cle)
+    ?? liste.articles.find((a) => a.cle === cle || a.articleId === cle)
+    ?? null;
+}
+
+/** Produits du foyer écrits ([{ id, champs }], EFFACER retire le champ) appliqués tout de suite sur ce téléphone. */
+function appliquerProduits(ecritures) {
+  let produits = etat.produits;
+  for (const { id, champs } of ecritures) {
+    const existant = produits.find((p) => p?.id === id);
+    const maj = { ...appliquerChamps(existant ?? {}, champs), id };
+    produits = existant ? produits.map((p) => (p === existant ? maj : p)) : [...produits, maj];
+  }
+  etat.produits = produits;
+}
+
+/**
+ * Réglages des courses (`drive`, préparés par coeur/drive.js › ecrituresDrive) : envoyés par un lot (donnees.js ›
+ * ecrireReglages ; hors ligne : plus tard ; un refus du serveur est annoncé avec `echec`), puis appliqués tout de suite
+ * sur ce téléphone. Lot impossible à construire : `echec` annoncé, rien d'appliqué. → vrai si le lot est parti.
+ */
+function ecrireLesReglages(champs, echec) {
+  let envoi;
+  try {
+    envoi = donnees.ecrireReglages(champs);
+  } catch {
+    annoncer(echec);
+    return false;
+  }
+  ecrire(envoi, echec);
+  if (etat.donnees.reglages) {
+    etat.donnees = { ...etat.donnees, reglages: appliquerChamps(etat.donnees.reglages, champs) };
+  }
+  return true;
+}
+
+/**
+ * Lot de la fin des courses ({ id, champs, articles, supprimer }, coeur/liste.js › preparerFinDesCourses : `lot`, ou
+ * `avant` pour « Annuler ») : envoyé (donnees.js › terminerCourses ; hors ligne : plus tard ; un refus du serveur est
+ * annoncé avec `echec`), puis appliqué tout de suite sur ce téléphone : champs de la semaine, articles supprimés, puis
+ * articles écrits tels quels (`set` sans fusion). Lot impossible à construire : `echec` annoncé, rien d'appliqué.
+ * → vrai si le lot est parti.
+ */
+function ecrireFinDesCourses(lot, echec) {
+  let envoi;
+  try {
+    envoi = donnees.terminerCourses({ lot });
+  } catch {
+    annoncer(echec);
+    return false;
+  }
+  ecrire(envoi, echec);
+  const { id, champs = {}, articles = [], supprimer = [] } = lot;
+  const existante = etat.semaines.find((semaine) => semaine?.id === id) ?? null;
+  if (existante && Object.keys(champs).length) {
+    const maj = { ...appliquerChamps(existante, champs), id };
+    etat.semaines = etat.semaines.map((semaine) => (semaine === existante ? maj : semaine));
+  }
+  const partis = new Set(supprimer);
+  const ecrits = new Map(articles.map((article) => [article.id, article]));
+  if (partis.size || ecrits.size) {
+    etat.articles = [
+      ...etat.articles.filter((a) => !partis.has(a?.id) && !ecrits.has(a?.id)),
+      ...[...ecrits.values()].map((article) => ({ ...article })),
+    ];
+  }
+  return true;
+}
+
+/**
+ * Date des plats de la fin des courses (`derniereFois` de preparerFinDesCourses ; avec `annuler`, la valeur d'avant) :
+ * un lot par plat, sans message (donnees.js › ecrireDernieresFois), appliquée tout de suite sur ce téléphone.
+ */
+function ecrireDates(derniereFois, { annuler = false } = {}) {
+  const ecritures = ecrituresDernieresFois(derniereFois, { annuler });
+  if (!ecritures.length) return;
+  donnees.ecrireDernieresFois(ecritures).catch(() => {});
+  const parId = new Map(ecritures.map(({ platId, champs }) => [platId, champs.derniereFois]));
+  etat.plats = etat.plats.map((plat) => {
+    if (!parId.has(plat?.id)) return plat;
+    const valeur = parId.get(plat.id);
+    const maj = { ...plat };
+    if (valeur === EFFACER) delete maj.derniereFois;
+    else maj.derniereFois = valeur;
+    return maj;
+  });
+}
+
+/**
+ * « Annuler » de « Courses terminées. Bon appétit ! » : statut, articles et dates des plats remis comme avant
+ * (`avant` de preparerFinDesCourses), pour le même compte et seulement si les courses de cette semaine sont toujours
+ * terminées (une liste rouverte entre-temps, ici ou sur l'autre téléphone, n'est pas touchée). Sans autre annonce.
+ */
+function annulerFinDesCourses(preparation, uid) {
+  if (etat.utilisateur?.uid !== uid) return;
+  const semaine = semaineParId(preparation.avant.id);
+  if (!semaine || statutSemaine(semaine) !== 'courses_faites') return;
+  if (!ecrireFinDesCourses(preparation.avant, 'Les courses n’ont pas pu être rouvertes. Réessayez.')) return;
+  ecrireDates(preparation.derniereFois, { annuler: true });
+  rendre();
+}
+
+/**
+ * Coche (`voulu`) d'un article de la liste (`liste.articles` : { articleId, cochee }) : `articles/{id}.coche`, appliquée
+ * tout de suite sur ce téléphone (un article supprimé entre-temps n'est jamais recréé : refus silencieux). Rien n'est
+ * écrit s'il est déjà dans l'état voulu. Ne redessine pas. → { code } : ok, invalide, echec.
+ */
+function cocherArticle(article, voulu, maintenant, echec) {
+  if (Boolean(article.cochee) === voulu) return { code: 'ok' };
+  const ecritures = ecrituresCocheArticle(article, voulu, { maintenant });
+  if (ecritures.code) return ecritures;
+  let envoi;
+  try {
+    envoi = donnees.modifierArticle(ecritures.articleId, ecritures.champs);
+  } catch {
+    annoncer(echec);
+    return { code: 'echec' };
+  }
+  ecrire(envoi, echec);
+  etat.articles = etat.articles.map((a) => (a.id === ecritures.articleId ? appliquerChamps(a, ecritures.champs) : a));
+  return { code: 'ok' };
 }
 
 /** « Annuler » de « « Piles » retiré de la liste. » : le même document revient (même identifiant). */
@@ -1790,10 +2095,14 @@ function prevenirDemande(id, type, plat, envoi, jeton) {
   }, () => {});
 }
 
-/** Vrai quand réglages, plats et profils viennent du serveur (et non de la seule copie du téléphone). */
+/**
+ * Vrai quand réglages, plats, profils et produits du foyer (T3b) viennent du serveur (et non de la seule copie du
+ * téléphone).
+ */
 function copieConfirmee() {
   return etat.donnees.statut === 'ok' && !etat.donnees.depuisCache
-    && etat.platsCharges && !etat.platsDepuisCache && etat.profilsCharges && !etat.profilsDepuisCache;
+    && etat.platsCharges && !etat.platsDepuisCache && etat.profilsCharges && !etat.profilsDepuisCache
+    && etat.produitsCharges && !etat.produitsDepuisCache;
 }
 
 /**
@@ -2005,10 +2314,14 @@ function oublierDonnees() {
     articles: [],
     articlesCharges: false,
     articlesDepuisCache: false,
+    produits: [],
+    produitsCharges: false,
+    produitsDepuisCache: false,
     apercu: false,
   });
   memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
   memoListe = { cles: null, liste: null };
+  memoProduits = { produits: null, parId: Object.freeze({}) };
 }
 
 async function seDeconnecter() {
@@ -2070,6 +2383,7 @@ function suivreDonnees() {
         if (maj.demandes) etat.demandesChargees = true;
         if (maj.semaines) etat.semainesChargees = true;
         if (maj.articles) etat.articlesCharges = true;
+        if (maj.produits) etat.produitsCharges = true;
         verifierConfirmation();
         rendre();
       }, (code) => {

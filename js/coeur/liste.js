@@ -1,6 +1,8 @@
 // Liste de courses (T3a, CLAUDE.md §9 « Liste ») : calculée sur chaque téléphone, jamais écrite. On n'écrit que les
-// gestes : les coches (`coches.<cle>` : ce qui a été pris), « À racheter » (`racheter.<cle>`) et les articles ajoutés à
-// la main (`articles/{id}`). Logique pure : ni DOM ni Firebase.
+// gestes : les coches (`coches.<cle>` : ce qui a été pris), « À racheter » (`racheter.<cle>`), les articles ajoutés à
+// la main (`articles/{id}`), et en T3b le mot cherché au drive (`produits/{id}.rechercheDrive`) et « Courses
+// terminées » (statut de la semaine, articles achetés retirés, `derniereFois` des plats). Logique pure : ni DOM ni
+// Firebase.
 // - Une ligne par produit (produits.js › idProduit), unités réunies (« Beurre · 230 g + 2 c. à soupe »).
 // - Seule la version servie compte : ses ajouts pour les portions de ce profil ; ce qu'elle retire n'est pas acheté
 //   pour sa part (décision 16).
@@ -12,11 +14,12 @@ import { cleDeRepli, ficheProduit, idProduit, indexDesRecettes } from './produit
 import { quantiteLisible } from './plats.js';
 import { deNom } from './notes.js';
 import {
-  EFFACER, RANGS_STATUT, cheminSur, coefDe, lireSemaine, peutPreparerLaSuivante, platsDeLaSemaine, semaineSuivante,
-  semaineVisee, statutSemaine, texteDates, texteJour,
+  EFFACER, RANGS_STATUT, articlesDesRestes, cheminSur, coefDe, ecrituresRouvrir, idGarde, jourValide, lireSemaine,
+  peutPreparerLaSuivante, platsDeLaSemaine, semaineSuivante, semaineVisee, statutSemaine, texteDates, texteJour,
 } from './semaine.js';
 import { LIBELLES_RAYON } from './edition.js';
 import { LIBELLES_STYLE } from './vocabulaire.js';
+import { RECHERCHE_MAX, lireDrive } from './drive.js';
 
 /** Unité → [famille, facteur vers l'unité de base] : masse (g), volume (ml), puis une famille par autre unité. */
 export const FAMILLES = Object.freeze({
@@ -118,14 +121,16 @@ export function texteQuantites(totaux) {
 /**
  * Réglages des courses avec leurs défauts (§3.5 du plan) → { rayons, drive, apero } : `rayons` (ordre du parcours,
  * `reglages.rayons` du foyer, T3d) : rayons inconnus et doublons ignorés, rayons manquants ajoutés à la fin dans l'ordre
- * de départ (LIBELLES_RAYON) ; `drive` : null jusqu'à T3b ; `apero` : { incontournables: [] } jusqu'à T3e.
+ * de départ (LIBELLES_RAYON) ; `drive` (T3b) : { nom, urlRecherche } du foyer (drive.js › lireDrive : modèle https:
+ * avec `{q}`), sinon null (pas réglé : aucun défaut, le dépôt est public) ; `apero` : { incontournables: [] } jusqu'à
+ * T3e.
  */
 export function reglagesCourses(reglages) {
   const depart = Object.keys(LIBELLES_RAYON);
   const lus = [...new Set(listeDe(reglages?.rayons).filter((rayon) => depart.includes(rayon)))];
   return {
     rayons: [...lus, ...depart.filter((rayon) => !lus.includes(rayon))],
-    drive: null,
+    drive: lireDrive(reglages?.drive),
     apero: { incontournables: [] },
   };
 }
@@ -301,10 +306,13 @@ const portionsBaseDe = (plat) => (estNombre(plat?.portionsBase) && plat.portions
  *   base illisibles : `produit` null ; quantité ou unité illisible : le nom, la ligne existe sans quantité).
  * Ligne : { type: 'ligne', cle, produitId, repli (la première de `replis`), replis (clés de repli), nom (majuscule), libelle (minuscules), rayon, totaux (exacts, par
  *   famille, en unités de base), quantite (affichée), sources: [{ type: 'plat', platId, nom, pour?, style?, totaux }],
- *   placard (produit du placard sous son seuil), rachetee, cochee, dejaPris, reste, recherche }.
+ *   placard (produit du placard sous son seuil), rachetee, cochee, dejaPris, reste, recherche, rechercheFoyer }.
  * Article : { type: 'article', cle: 'article:<id>', articleId, produitId, nom, libelle, precision, rayon, totaux: {},
  *   quantite (la précision), sources: [], placard: false, rachetee: false, cochee, cocheLe, creeLe, dejaPris: null,
- *   reste: null, recherche }.
+ *   reste: null, recherche, rechercheFoyer }.
+ * `recherche` (T3b) : le mot cherché au drive, celui que le foyer a écrit (`rechercheFoyer` : `produits/{id}
+ * .rechercheDrive` de la ligne, sinon de sa première clé de repli qui en a un, comme une coche), sinon `libelle` ;
+ * `rechercheFoyer` : ce mot, ou null (« Revenir à « pâtes courtes » » seulement s'il existe).
  * `index` : indexDesRecettes(tousLesPlats) (calculé sinon) ; `produitsFoyer` : produits/{id} par id (T3b) ;
  * `evaluer` : celui de l'app (mémorisé). Rien n'est modifié en entrée.
  */
@@ -418,9 +426,11 @@ export function listeDeCourses(semaine, {
     const coche = cocheReunie([produitId, ...replis].filter((cle) => Object.hasOwn(coches, cle)).map((cle) => coches[cle]));
     const etat = placard && !rachetee ? { cochee: false, dejaPris: null, reste: null } : etatCoche(totaux, coche);
     const libelle = fiche.nom.valeur || saisie;
+    const rechercheFoyer = motDuFoyer(produitsFoyer, [produitId, ...replis]);
     const ligne = {
       type: 'ligne', cle: produitId, produitId, repli, replis, nom: majuscule(libelle), libelle, rayon: fiche.rayon.valeur,
-      totaux, quantite: texteQuantites(totaux), sources, placard, rachetee, ...etat, recherche: fiche.recherche.valeur,
+      totaux, quantite: texteQuantites(totaux), sources, placard, rachetee, ...etat, recherche: rechercheFoyer ?? libelle,
+      rechercheFoyer,
     };
     (placard && !rachetee ? sortie.maison : sortie.lignes).push(ligne);
   }
@@ -439,11 +449,12 @@ export function listeDeCourses(semaine, {
     const produitId = idProduit(libelle);
     const fiche = ficheProduit(produitId, { produitsFoyer, index: idx, saisie: libelle });
     const precision = reduireQuantite(article.precision) || null;
+    const rechercheFoyer = motDuFoyer(produitsFoyer, [produitId]);
     sortie.articles.push({
       type: 'article', cle: `article:${article.id}`, articleId: article.id, produitId, nom: majuscule(libelle), libelle,
       precision, rayon: fiche.rayon.valeur, totaux: {}, quantite: precision ?? '', sources: [], placard: false,
       rachetee: false, cochee, cocheLe, creeLe: estNombre(article.creeLe) ? article.creeLe : null, dejaPris: null,
-      reste: null, recherche: fiche.recherche.source === 'foyer' ? fiche.recherche.valeur : libelle,
+      reste: null, recherche: rechercheFoyer ?? libelle, rechercheFoyer,
     });
   }
 
@@ -455,6 +466,23 @@ export function listeDeCourses(semaine, {
   sortie.articles.sort(parRayon);
   sortie.maison.sort((a, b) => comparerNoms(a.nom, b.nom) || parId(a.cle, b.cle));
   return sortie;
+}
+
+/** `produits/{id}` du foyer (objet par id ou Map), ou null. */
+function produitDuFoyer(produitsFoyer, id) {
+  if (typeof id !== 'string' || id === '') return null;
+  const valeur = produitsFoyer instanceof Map ? produitsFoyer.get(id)
+    : estObjet(produitsFoyer) && Object.hasOwn(produitsFoyer, id) ? produitsFoyer[id] : null;
+  return estObjet(valeur) ? valeur : null;
+}
+
+/** Mot cherché au drive écrit par le foyer sous la première de ces clés qui en a un (`rechercheDrive`), ou null. */
+function motDuFoyer(produitsFoyer, cles) {
+  for (const cle of cles) {
+    const mot = reduire(produitDuFoyer(produitsFoyer, cle)?.rechercheDrive);
+    if (mot) return mot;
+  }
+  return null;
 }
 
 /**
@@ -486,6 +514,15 @@ function arrondirTotaux(totaux) {
   return propres;
 }
 
+/** Rang d'un rayon dans l'ordre du foyer (`rayons`, sinon l'ordre de départ) ; un rayon inconnu va à la fin. */
+function rangeurDeRayons(rayons) {
+  const ordre = Array.isArray(rayons) && rayons.length ? rayons : ordreRayons(null);
+  const rangs = new Map(ordre.map((rayon, i) => [rayon, i]));
+  return (rayon) => rangs.get(rayon) ?? rangs.size;
+}
+
+const parNomDeLigne = (a, b) => comparerNoms(a.nom, b.nom) || parId(a.cle, b.cle);
+
 /**
  * Écran Courses : rayons dans l'ordre du foyer → { aAcheter: [{ rayon, libelle, lignes }], maison, panier, total, pris,
  * vide }. Lignes et articles à acheter rangés par rayon puis par nom ; `panier` : ceux qui sont cochés (« Dans le
@@ -494,10 +531,7 @@ function arrondirTotaux(totaux) {
  * `rayons` : ordreRayons(reglages) (ordre de départ sinon).
  */
 export function grouperParRayon(liste, { rayons = null } = {}) {
-  const ordre = Array.isArray(rayons) && rayons.length ? rayons : ordreRayons(null);
-  const rangs = new Map(ordre.map((rayon, i) => [rayon, i]));
-  const rang = (rayon) => rangs.get(rayon) ?? rangs.size;
-  const parNom = (a, b) => comparerNoms(a.nom, b.nom) || parId(a.cle, b.cle);
+  const rang = rangeurDeRayons(rayons);
   const elements = [...listeDe(liste?.lignes), ...listeDe(liste?.articles)];
   const groupes = new Map();
   for (const element of elements.filter((e) => !e.cochee)) {
@@ -505,12 +539,61 @@ export function grouperParRayon(liste, { rayons = null } = {}) {
     groupes.get(element.rayon).push(element);
   }
   const aAcheter = [...groupes].sort(([a], [b]) => rang(a) - rang(b) || parId(a, b))
-    .map(([rayon, lignes]) => ({ rayon, libelle: LIBELLES_RAYON[rayon] ?? LIBELLES_RAYON.divers, lignes: lignes.sort(parNom) }));
-  const panier = elements.filter((e) => e.cochee).sort((a, b) => rang(a.rayon) - rang(b.rayon) || parNom(a, b));
+    .map(([rayon, lignes]) => ({ rayon, libelle: LIBELLES_RAYON[rayon] ?? LIBELLES_RAYON.divers, lignes: lignes.sort(parNomDeLigne) }));
+  const panier = elements.filter((e) => e.cochee).sort((a, b) => rang(a.rayon) - rang(b.rayon) || parNomDeLigne(a, b));
   return {
     aAcheter, maison: listeDe(liste?.maison), panier, total: elements.length, pris: panier.length,
     vide: elements.length === 0,
   };
+}
+
+/**
+ * Écran Courses en mode Drive (T3b, décision 17) → { pourCetteSemaine, commeChaqueSemaine, panier, maison, total,
+ * pris, vide } : trois listes à plat, sans en-têtes de rayon, chacune rangée par rayon (ordre du foyer) puis par nom :
+ * `pourCetteSemaine` (lignes des plats et articles ajoutés à la main, à acheter), `commeChaqueSemaine` (habituels et
+ * préparations de chaque semaine : vide jusqu'à T3d), `panier` (cochés, « Dans le panier ») ; `maison`, `total`,
+ * `pris` et `vide` comme grouperParRayon (mêmes comptes dans les deux modes).
+ */
+export function grouperDrive(liste, { rayons = null } = {}) {
+  const rang = rangeurDeRayons(rayons);
+  const ordre = (a, b) => rang(a.rayon) - rang(b.rayon) || parNomDeLigne(a, b);
+  const elements = [...listeDe(liste?.lignes), ...listeDe(liste?.articles)];
+  const panier = elements.filter((e) => e.cochee).sort(ordre);
+  return {
+    pourCetteSemaine: elements.filter((e) => !e.cochee).sort(ordre),
+    commeChaqueSemaine: [],
+    panier,
+    maison: listeDe(liste?.maison),
+    total: elements.length,
+    pris: panier.length,
+    vide: elements.length === 0,
+  };
+}
+
+/**
+ * « Au drive, je cherche » (T3b) pour une ligne ou un article → { terme, ecritures: [{ id, champs: { rechercheDrive:
+ * terme | EFFACER } }] } (`produits/{id}` : `set` + `mergeFields` du seul champ, donnees.js) | { erreur: 'long' }
+ * (ERREURS_ARTICLE.long : 60 caractères au plus) | { code: 'invalide' } (pas de produit lisible) :
+ * - un mot (espaces réduits) → écrit sous le produit de la ligne (`produitId`), `terme` : ce mot ;
+ * - vide, ou le nom de la ligne (casse ignorée, accents comptés : « Pâtes courtes » pour « pâtes courtes », mais
+ *   « pates courtes » est un mot choisi) → retour au nom
+ *   (« Revenir à « pâtes courtes » ») : `terme` null, le mot effacé sous chaque clé de la ligne qui en porte un (son
+ *   produit et ses clés de repli, comme une coche) ; aucune écriture si aucune n'en porte.
+ * `produitsFoyer` : produits/{id} par id (objet ou Map).
+ */
+export function ecrituresRecherche(ligne, saisie, { produitsFoyer = {} } = {}) {
+  const produitId = ligne?.produitId;
+  if (!cheminSur('produits', typeof produitId === 'string' ? produitId : '')) return { code: 'invalide' };
+  const terme = reduire(saisie);
+  if (terme.length > RECHERCHE_MAX) return { erreur: 'long' };
+  const libelle = reduire(ligne.libelle);
+  if (terme && terme.toLocaleLowerCase('fr-FR') !== libelle.toLocaleLowerCase('fr-FR')) {
+    return { terme, ecritures: [{ id: produitId, champs: { rechercheDrive: terme } }] };
+  }
+  const cles = [...new Set([produitId, ...clesDeRepli(ligne)])].filter((cle) => cheminSur('produits', cle));
+  const ecritures = cles.filter((cle) => reduire(produitDuFoyer(produitsFoyer, cle)?.rechercheDrive))
+    .map((cle) => ({ id: cle, champs: { rechercheDrive: EFFACER } }));
+  return { terme: null, ecritures };
 }
 
 // ——— Textes ———
@@ -620,21 +703,38 @@ export function bandeauxCourses(liste) {
 }
 
 /**
+ * Lignes calculées restées à acheter → [{ libelle, precision, produitId }] (`precision` : le reste d'une ligne prise en
+ * partie, sinon sa quantité, arrondis à l'achat, 40 caractères au plus ; '' sans quantité). Ni le placard (« Déjà à la
+ * maison ? »), ni les articles à la main.
+ */
+function lignesRestantes(liste) {
+  return listeDe(liste?.lignes).filter((ligne) => !ligne.cochee).map((ligne) => ({
+    libelle: ligne.libelle, precision: texteQuantites(ligne.reste ?? ligne.totaux).slice(0, PRECISION_MAX),
+    produitId: ligne.produitId,
+  }));
+}
+
+/**
  * Lignes restées à acheter d'une semaine dont les courses ont commencé (au moins une coche : `coches` de la semaine
  * ou un article coché visible) et ne sont pas terminées (statut avant `courses_faites`) → [{ libelle, precision,
  * produitId }] (`precision` : le reste d'une ligne prise en partie, sinon sa quantité, arrondis à l'achat ; '' sans
  * quantité ; `produitId` : fixe l'identifiant de l'article, semaine.js › idReste). Ni
- * le placard (« Déjà à la maison ? »), ni les articles à la main (ils restent d'eux-mêmes).
+ * le placard (« Déjà à la maison ? »), ni les articles à la main (ils restent d'eux-mêmes), ni une ligne dont le produit
+ * a déjà un article pas coché (il la rappellera : jamais deux « Beurre » sur la nouvelle liste). Une fois les courses
+ * terminées (T3b), rien : ce qui manquait a été gardé, ou laissé, par « Courses terminées ».
  */
 export function restes(liste, semaine) {
   const lue = lireSemaine(semaine);
   if (!lue || RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites) return [];
   const commencees = Object.values(lue.coches).some(estObjet) || listeDe(liste?.articles).some((a) => a?.cochee);
   if (!commencees) return [];
-  return listeDe(liste?.lignes).filter((ligne) => !ligne.cochee).map((ligne) => ({
-    libelle: ligne.libelle, precision: texteQuantites(ligne.reste ?? ligne.totaux).slice(0, PRECISION_MAX),
-    produitId: ligne.produitId,
-  }));
+  return sansArticleDuMemeProduit(lignesRestantes(liste), liste);
+}
+
+/** Lignes restantes dont le produit n'a pas déjà un article pas coché (ajouté à la main, reste, article gardé). */
+function sansArticleDuMemeProduit(restants, liste) {
+  const notes = new Set(articlesPasCoches(liste).map((a) => a.produitId).filter((id) => typeof id === 'string' && id));
+  return restants.filter((reste) => !notes.has(reste.produitId));
 }
 
 /**
@@ -661,6 +761,265 @@ export function phraseRestes(liste) {
     : `Il reste ${noms.length}\u00A0articles de la semaine qui finit\u00A0: ${quoi}. Ils passeront sur la nouvelle liste.`;
 }
 
+// ——— « Courses terminées » (T3b) ———
+
+/** Textes fixes de « Courses terminées » (Courses, Semaine). */
+export const TEXTES_FIN_DES_COURSES = Object.freeze({
+  bouton: 'Courses terminées',
+  annonce: 'Courses terminées. Bon appétit\u00A0!',
+  titre: 'Courses terminées\u00A0?',
+  garder: 'Les garder pour la prochaine fois',
+  sansEux: 'Terminer sans eux',
+  continuer: 'Continuer les courses',
+  prochaines: 'Pour les prochaines courses',
+  revoir: 'Revoir la liste',
+  rouvrir: 'Rouvrir la liste',
+  rouverte: 'La liste est rouverte.',
+  panier: 'Dites-le dans Courses quand c’est fini.',
+});
+
+/** Vrai si les courses de la semaine sont terminées (statut `courses_faites` ou plus loin). */
+export function coursesFaites(semaine) {
+  const lue = lireSemaine(semaine);
+  return Boolean(lue) && RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites;
+}
+
+/**
+ * Ce qui reste à acheter au moment de « Courses terminées » → [{ type: 'ligne' | 'article', libelle, precision,
+ * produitId, articleId? }] : les lignes calculées pas cochées (avec la quantité qui manque : le reste d'une ligne prise
+ * en partie), puis les articles ajoutés à la main pas cochés (leur précision). Un produit n'est nommé qu'une fois : une
+ * ligne passe avant un article du même produit (un article « beurre » ajouté à la main et la ligne « beurre » des plats :
+ * « Il reste 1 article : beurre. »). Ni le placard, ni ce qui est coché. Vide : « Courses terminées » finit tout de
+ * suite ; sinon la feuille « Courses terminées ? » le dit (phraseRestesFin).
+ */
+export function restesFinDesCourses(liste) {
+  const vus = new Set();
+  const premier = ({ produitId }) => {
+    if (typeof produitId !== 'string' || produitId === '') return true;
+    if (vus.has(produitId)) return false;
+    vus.add(produitId);
+    return true;
+  };
+  return [
+    ...lignesRestantes(liste).map((reste) => ({ type: 'ligne', ...reste })),
+    ...articlesPasCoches(liste).map((a) => ({
+      type: 'article', libelle: a.libelle, precision: a.precision ?? '', produitId: a.produitId, articleId: a.articleId,
+    })),
+  ].filter(premier);
+}
+
+/** Articles de la liste (ajoutés à la main, restes, gardés) pas cochés. */
+function articlesPasCoches(liste) {
+  return listeDe(liste?.articles).filter((a) => a && !a.cochee);
+}
+
+/**
+ * Phrase de la feuille « Courses terminées ? » : « Il reste 3 articles : beurre, sel et piles. », « Il reste 1 article :
+ * beurre. » ; au-delà de trois, « beurre, sel, piles et 2 autres ». '' sans reste.
+ */
+export function phraseRestesFin(liste) {
+  const noms = listeDe(liste).map((r) => reduire(r?.libelle)).filter(Boolean);
+  if (!noms.length) return '';
+  const autres = noms.length - 3;
+  const quoi = autres > 0 ? `${noms.slice(0, 3).join(', ')} et ${pluriel(autres, 'autre')}` : enumerer(noms);
+  return `Il reste ${pluriel(noms.length, 'article')}\u00A0: ${quoi}.`;
+}
+
+/** Date « AAAA-MM-JJ » d'une `derniereFois` lue (texte, ou horodatage à sa date locale) ; null sinon. */
+function jourDeDerniereFois(valeur) {
+  if (typeof valeur === 'string') return jourValide(valeur) ? valeur : null;
+  let date = null;
+  if (valeur instanceof Date) date = valeur;
+  else if (estObjet(valeur) && typeof valeur.toDate === 'function') {
+    try {
+      date = valeur.toDate();
+    } catch {
+      date = null;
+    }
+  } else if (estObjet(valeur) && estNombre(valeur.seconds)) date = new Date(valeur.seconds * 1000);
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const deux = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${deux(date.getMonth() + 1)}-${deux(date.getDate())}`;
+}
+
+/** Copie d'un article tel qu'il est (`{ id, ...champs }`), pour le remettre par « Annuler » ; aucune valeur undefined. */
+function copieArticle(valeur) {
+  if (Array.isArray(valeur)) return valeur.map(copieArticle);
+  if (!estObjet(valeur)) return valeur;
+  return Object.fromEntries(Object.entries(valeur).filter(([, v]) => v !== undefined).map(([c, v]) => [c, copieArticle(v)]));
+}
+
+/**
+ * « Courses terminées » (T3b, un geste, décisions 11 et 12) → { lot, derniereFois, avant, gardes } | { code } :
+ * - `lot` : { id (la semaine), champs, articles, supprimer }, un seul lot (donnees.js) :
+ *   `champs` : `statut: 'courses_faites'`, `statutAvant` (le statut d'avant s'il est écrit : `validee` ; rien s'il était
+ *   absent, effacé s'il en traînait un), `coursesFaitesLe` (`aujourdhui`, date du téléphone), `coursesFaitesPar`
+ *   (`auteur`), `coursesFaitesA` (`maintenant`, l'heure du téléphone : « N articles ajoutés depuis ») ;
+ *   `supprimer` : **tous** les articles cochés (`articles` : tous les documents, cachés compris) ; sans `garder`, les
+ *   articles pas cochés aussi ;
+ *   `articles` (avec `garder`) : une ligne pas cochée = un article (semaine.js › articlesDesRestes, la même fonction
+ *   que les restes d'une semaine suivante : { id: `garde--<semaine>--<produit>`, libelle, precision (la quantité qui
+ *   manque : le reste d'une ligne prise en partie, pas son total), creePar?, creeLe }), écrit par un `set` sans fusion
+ *   (un article de même identifiant est remplacé, jamais doublé) ; les articles pas cochés restent tels quels, et une
+ *   ligne dont le produit a déjà un article pas coché n'en reçoit pas un de plus (`liste.articles`, `produitId`) ;
+ * - `derniereFois` : [{ platId, avant (valeur lue, null si absente), apres }] : `debut` de la semaine, pour chaque plat
+ *   de la semaine (pas retiré, ni de la corbeille ni supprimé, ⏳ compris) dont au moins une portion est cuisinée,
+ *   seulement si elle est plus récente que celle de la fiche (jamais en arrière) ; un lot par plat (ecrituresDernieresFois) ;
+ * - `avant` : { id, champs, articles, supprimer } : de quoi tout remettre (« Annuler ») : les champs d'avant (EFFACER
+ *   pour un champ absent), les articles supprimés tels qu'ils étaient (`set` sans fusion, même identifiant), les
+ *   articles créés à retirer ; avec `derniereFois` (ecrituresDernieresFois(…, { annuler: true })) ;
+ * - `gardes` : le nombre d'articles créés pour la prochaine fois.
+ * { code: 'invalide' } : semaine illisible, `aujourdhui` ou `maintenant` illisible ; { code: 'deja' } : courses déjà
+ * terminées (statut `courses_faites` ou plus loin : un statut ne recule jamais, et n'avance que d'ici).
+ * `liste` : listeDeCourses de cette semaine ; `plats` : platsDeLaSemaine (calculé sinon, avec `tousLesPlats`,
+ * `profils`, `evaluer`, `reglages`). Rien n'est modifié en entrée.
+ */
+export function preparerFinDesCourses(semaine, {
+  liste = null, articles = [], plats = null, tousLesPlats = [], profils = [], evaluer = undefined, reglages = null,
+  garder = true, auteur = null, aujourdhui = null, maintenant = null,
+} = {}) {
+  const lue = lireSemaine(semaine);
+  if (!lue || !jourValide(aujourdhui) || !estNombre(maintenant)) return { code: 'invalide' };
+  if (RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites) return { code: 'deja' };
+
+  // Statut et traces de la fin des courses.
+  const champs = { statut: 'courses_faites' };
+  if (lue.statut !== undefined) champs.statutAvant = lue.statut;
+  else if (Object.hasOwn(lue, 'statutAvant')) champs.statutAvant = EFFACER;
+  champs.coursesFaitesLe = aujourdhui;
+  const par = reduire(auteur);
+  if (par) champs.coursesFaitesPar = par;
+  else if (Object.hasOwn(lue, 'coursesFaitesPar')) champs.coursesFaitesPar = EFFACER;
+  champs.coursesFaitesA = maintenant;
+
+  // Articles : cochés retirés (cachés compris) ; pas cochés gardés, ou retirés sans `garder`. Une ligne dont le produit
+  // a déjà un article pas coché (ajouté à la main, reste ou article gardé d'avant) n'en reçoit pas un de plus : cet
+  // article, gardé tel quel, la rappellera (jamais deux « Beurre » sur la liste suivante).
+  const documents = listeDe(articles).filter((a) => estObjet(a) && typeof a.id === 'string' && a.id !== '');
+  const existants = new Set(documents.map((a) => a.id));
+  const crees = garder
+    ? articlesDesRestes(sansArticleDuMemeProduit(lignesRestantes(liste), liste),
+      { semaineId: lue.id, auteur: par, maintenant, garde: true }).filter((a) => a.id)
+    : [];
+  const idsCrees = new Set(crees.map((a) => a.id));
+  const supprimes = documents.filter((a) => (estObjet(a.coche) || !garder) && !idsCrees.has(a.id)).map((a) => a.id);
+
+  // Dates des plats : le début de la semaine, jamais en arrière.
+  const elements = Array.isArray(plats) ? plats
+    : platsDeLaSemaine(lue, { tousLesPlats, profils, reglages, ...(typeof evaluer === 'function' ? { evaluer } : {}) });
+  const derniereFois = [];
+  for (const element of elements) {
+    if (!estObjet(element) || !cheminSur('plats', element.platId ?? '') || !estObjet(element.plat)) continue;
+    if (element.etat !== 'ok' && element.etat !== 'sansRecette') continue;
+    if (!((element.aCuire ?? 0) + (element.aCongeler ?? 0) > 0)) continue;
+    const valeur = element.plat.derniereFois;
+    const connue = jourDeDerniereFois(valeur);
+    if (connue && connue >= lue.debut) continue;
+    if (!derniereFois.some((d) => d.platId === element.platId)) {
+      derniereFois.push({ platId: element.platId, avant: valeur ?? null, apres: lue.debut });
+    }
+  }
+
+  const avantChamps = {};
+  for (const champ of Object.keys(champs)) avantChamps[champ] = Object.hasOwn(lue, champ) ? lue[champ] : EFFACER;
+  return {
+    lot: { id: lue.id, champs, articles: crees, supprimer: supprimes },
+    derniereFois,
+    avant: {
+      id: lue.id,
+      champs: avantChamps,
+      // Remis tels qu'ils étaient : les articles supprimés, et ceux qu'un article gardé a remplacés.
+      articles: documents.filter((a) => supprimes.includes(a.id) || idsCrees.has(a.id)).map(copieArticle),
+      supprimer: crees.map((a) => a.id).filter((id) => !existants.has(id)),
+    },
+    gardes: crees.length,
+  };
+}
+
+/**
+ * Écritures de `derniereFois` (preparerFinDesCourses › derniereFois) → [{ platId, champs: { derniereFois } }], une par
+ * plat (un lot chacun : un plat supprimé entre-temps n'empêche que le sien) : `apres` ; avec `annuler`, la valeur
+ * d'avant (EFFACER si elle était absente). Ni `majPar` ni `majLe`.
+ */
+export function ecrituresDernieresFois(derniereFois, { annuler = false } = {}) {
+  return listeDe(derniereFois).filter((d) => estObjet(d) && cheminSur('plats', d.platId ?? ''))
+    .map(({ platId, avant, apres }) => ({
+      platId,
+      champs: { derniereFois: annuler ? (avant === null || avant === undefined ? EFFACER : avant) : apres },
+    }))
+    .filter(({ champs }) => champs.derniereFois !== undefined);
+}
+
+/**
+ * L'article qui garde une ligne pour la prochaine fois (T3b) : une fois les courses de la semaine terminées, l'article
+ * `garde--<semaine>--<produit>` de la ligne (« Les garder pour la prochaine fois »), s'il est dans `liste.articles` ;
+ * sinon null (courses pas terminées, article à la main, rien de gardé). Cocher ou décocher la ligne dans « Revoir la
+ * liste » coche ou décoche aussi cet article (app.js › actions.cocher) : une seule chose dit ce qui manque, et le
+ * produit n'est jamais acheté deux fois.
+ */
+export function articleGardeDeLaLigne(semaine, ligne, liste) {
+  const lue = lireSemaine(semaine);
+  if (!lue || RANGS_STATUT[statutSemaine(lue)] < RANGS_STATUT.courses_faites || !estObjet(ligne) || ligne.type === 'article') {
+    return null;
+  }
+  const id = idGarde(lue.id, ligne.produitId);
+  return id ? listeDe(liste?.articles).find((a) => a?.articleId === id) ?? null : null;
+}
+
+/**
+ * « Rouvrir la liste » avec la liste du moment (T3b) : semaine.js › ecrituresRouvrir (le statut d'avant revient ; les
+ * articles gardés par ces courses et pas cochés repartent, leurs lignes reviennent à acheter), et un article gardé
+ * coché depuis (acheté) rend sa coche à sa ligne : `coches.<cle>` à la quantité de la ligne (ecrituresCoche), s'il
+ * n'y est pas déjà, et l'article repart aussi ; la ligne revient « dans le panier », jamais à acheter une seconde fois.
+ * Sans ligne (plat retiré depuis), l'article coché reste. `articles` : les documents (`{ id, coche? }`) ; `liste` :
+ * listeDeCourses de cette semaine ; `maintenant` : l'heure du téléphone. → { id, champs, supprimer? } | { code }.
+ */
+export function ecrituresRouvrirListe(semaine, { articles = [], liste = null, maintenant = null } = {}) {
+  const resultat = ecrituresRouvrir(semaine, { articles });
+  if (resultat.code) return resultat;
+  const lue = lireSemaine(semaine);
+  const champs = { ...resultat.champs };
+  const supprimer = [...(resultat.supprimer ?? [])];
+  const documents = listeDe(articles).filter((a) => estObjet(a) && typeof a.id === 'string' && estObjet(a.coche));
+  for (const ligne of listeDe(liste?.lignes)) {
+    const id = idGarde(lue.id, ligne?.produitId);
+    if (!id || !documents.some((a) => a.id === id) || supprimer.includes(id)) continue;
+    if (!ligne.cochee) {
+      const coche = ecrituresCoche(lue, ligne, true, { maintenant });
+      if (coche.code) continue;
+      Object.assign(champs, coche.champs);
+    }
+    supprimer.push(id);
+  }
+  return supprimer.length ? { id: resultat.id, champs, supprimer } : { id: resultat.id, champs };
+}
+
+/**
+ * Lignes arrivées après « Courses terminées » (« Revoir la liste » : « 2 articles ajoutés depuis ») : lignes pas
+ * cochées dont au moins un plat est entré (ou revenu) dans la semaine après la fin des courses (`plats.<id>.ajouteLe`
+ * plus tard que `coursesFaitesA`). 0 si les courses ne sont pas terminées ou si l'heure de la fin est inconnue.
+ */
+export function lignesAjouteesDepuis(liste, semaine) {
+  const lue = lireSemaine(semaine);
+  if (!lue || RANGS_STATUT[statutSemaine(lue)] < RANGS_STATUT.courses_faites || !estNombre(lue.coursesFaitesA)) return 0;
+  const apres = (platId) => estObjet(lue.plats[platId]) && estNombre(lue.plats[platId].ajouteLe)
+    && lue.plats[platId].ajouteLe > lue.coursesFaitesA;
+  return listeDe(liste?.lignes).filter((ligne) => !ligne.cochee
+    && listeDe(ligne.sources).some((source) => source?.type === 'plat' && apres(source.platId))).length;
+}
+
+/** « 1 article ajouté depuis », « 2 articles ajoutés depuis » ; '' pour 0. */
+export function texteAjoutesDepuis(n) {
+  if (!Number.isInteger(n) || n < 1) return '';
+  return `${pluriel(n, 'article ajouté', 'articles ajoutés')} depuis`;
+}
+
+/** En-tête de Courses après la fin des courses : « Courses faites ✓ le samedi 10 octobre » (sans date lisible : « Courses faites ✓ »). */
+export function texteCoursesFaites(semaine) {
+  const jour = texteJour(semaine?.coursesFaitesLe, { jourSemaine: true });
+  return jour ? `Courses faites ✓ le ${jour}` : 'Courses faites ✓';
+}
+
 /**
  * Carte « prochaine action » de Semaine (le seul bouton principal de l'écran) → { cas, titre, texte, fin, boutons,
  * suivante } ; `boutons` : [{ action: 'choisir' | 'courses' | 'preparer', libelle, principal }] ; `suivante` : la
@@ -670,9 +1029,13 @@ export function phraseRestes(liste) {
  *   quand elle commence plus tard : « Que mange-t-on du 17 au 23 octobre ? ») ;
  * - 'liste' : « Courses : 32 articles », puis « Courses : encore 12 articles » ;
  * - 'sansRecette' : rien à acheter et des plats ⏳ ; 'rien' : rien à acheter (personne n'en mange) ;
- * - 'panier' : tout est coché (au moins une ligne ou un article).
+ * - 'panier' : tout est coché (au moins une ligne ou un article) : « Tout est dans le panier 🎉 », « Dites-le dans
+ *   Courses quand c'est fini. » (T3b) ;
+ * - 'faites' (T3b) : courses terminées : « Courses faites ✓ », « Le samedi 10 octobre. Bon appétit ! », sans bouton
+ *   principal (la semaine qu'on cuisine reste à l'écran), « Voir la liste › » secondaire.
  * En plus, si la semaine a des plats et finit dans 2 jours au plus : `fin` (« Cette semaine se termine vendredi 16
- * octobre. ») et « Préparer la semaine du 17 au 23 octobre » (principal quand tout est dans le panier).
+ * octobre. ») et « Préparer la semaine du 17 au 23 octobre » (principal quand tout est dans le panier ou les courses
+ * faites, ou sans autre bouton principal).
  * `plats` : platsDeLaSemaine ; `liste` : listeDeCourses ; `groupes` : grouperParRayon.
  */
 export function carteProchaineAction(semaine, {
@@ -703,7 +1066,14 @@ export function carteProchaineAction(semaine, {
     ? `${pluriel(actifs.length, 'plat')} et ${pluriel(nbArticles, 'article ajouté', 'articles ajoutés')} à la main.`
     : `${pluriel(actifs.length, 'plat')}.`;
   let resultat;
-  if (total === 0) {
+  if (RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites) {
+    const jour = texteJour(lue.coursesFaitesLe, { jourSemaine: true });
+    resultat = {
+      cas: 'faites', titre: 'Courses faites ✓',
+      texte: jour ? `Le ${jour}. Bon appétit\u00A0!` : 'Bon appétit\u00A0!',
+      boutons: [{ action: 'courses', libelle: 'Voir la liste ›', principal: false }],
+    };
+  } else if (total === 0) {
     resultat = actifs.some((e) => e.etat === 'sansRecette')
       ? {
         cas: 'sansRecette', titre: 'Courses',
@@ -716,7 +1086,7 @@ export function carteProchaineAction(semaine, {
       };
   } else if (pris >= total) {
     resultat = {
-      cas: 'panier', titre: 'Tout est dans le panier 🎉', texte: 'Bon appétit\u00A0!',
+      cas: 'panier', titre: 'Tout est dans le panier 🎉', texte: TEXTES_FIN_DES_COURSES.panier,
       boutons: [{ action: 'courses', libelle: 'Voir la liste ›', principal: false }],
     };
   } else {
@@ -736,7 +1106,7 @@ export function carteProchaineAction(semaine, {
       sortie.boutons = [...sortie.boutons, {
         action: 'preparer',
         libelle: `Préparer la semaine ${texteDates(suivante.debut, suivante.fin)}`,
-        principal: sortie.cas === 'panier' || !sortie.boutons.some((b) => b.principal),
+        principal: sortie.cas === 'panier' || sortie.cas === 'faites' || !sortie.boutons.some((b) => b.principal),
       }];
     }
   }
