@@ -23,6 +23,9 @@
 //   à la quantité ; dans le doute, pas de placard ;
 // - `equivalences` (T3a, omis sinon) : `{ <unité>: { qte, unite: 'g' | 'ml' } }`, propres au produit (une gousse d'ail
 //   pèse 5 g) ; elles ne servent qu'à comparer au seuil du placard (jamais sur un produit sans seuil).
+// - `recette: false` (T3d, omis sinon) : produit hors cuisine (hygiène, entretien, divers : piles, lessive, éponge),
+//   pour la liste de courses seulement : reconnu par l'identifiant d'une ligne (produits.js › idProduit) et proposé par
+//   « Ajouter à la liste », jamais par « Modifier la recette » (ni reconnu, ni suggéré) ; ni repère, ni placard.
 // Sens prudent : un nom ambigu reste hors du dictionnaire (« pâte », « pâté », « crème », « fromage », « bouillon »,
 // « steak », « saucisse », « farce » seuls) ; la question « C'est… ? » reste alors posée. Hors du dictionnaire aussi :
 // un nom qui, accents ôtés, désigne un autre produit que la saisie ne distingue pas (clé hors de HOMOGRAPHES) :
@@ -746,4 +749,66 @@ export const DICTIONNAIRE = Object.freeze([
   { id: 'eau', nom: 'eau', rayon: 'boissons', unite: 'l', alias: ['eau froide', 'eau chaude', 'eau tiède', 'eau bouillante'], placard: {} },
   { id: 'eau-gazeuse', nom: 'eau gazeuse', rayon: 'boissons', unite: 'cl', alias: ['eau pétillante'] },
   { id: 'cola', nom: 'cola', rayon: 'boissons', unite: 'cl', marqueurs: ['cafeine'] },
+
+  // ——— Hors cuisine (T3d, `recette: false`) : hygiène ———
+  { id: 'papier-toilette', nom: 'papier toilette', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['papier hygiénique'] },
+  { id: 'mouchoir', nom: 'mouchoir', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['mouchoir en papier'] },
+  { id: 'coton', nom: 'coton', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['disque de coton'] },
+  { id: 'coton-tige', nom: 'coton-tige', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'dentifrice', nom: 'dentifrice', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'brosse-a-dent', nom: 'brosse à dents', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'fil-dentaire', nom: 'fil dentaire', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'bain-de-bouche', nom: 'bain de bouche', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'shampooing', nom: 'shampooing', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['shampoing'] },
+  { id: 'apre-shampooing', nom: 'après-shampooing', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['après-shampoing'] },
+  { id: 'gel-douche', nom: 'gel douche', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'savon', nom: 'savon', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'deodorant', nom: 'déodorant', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'rasoir', nom: 'rasoir', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'mousse-a-raser', nom: 'mousse à raser', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'serviette-hygienique', nom: 'serviette hygiénique', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'tampon-hygienique', nom: 'tampon hygiénique', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'protege-slip', nom: 'protège-slip', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'couche', nom: 'couches', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'lingette', nom: 'lingette', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'pansement', nom: 'pansement', rayon: 'hygiene', unite: 'pc', recette: false },
+
+  // ——— Hors cuisine : entretien ———
+  { id: 'eponge', nom: 'éponge', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'lavette', nom: 'lavette', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'serpilliere', nom: 'serpillière', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'gant-de-menage', nom: 'gant de ménage', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'essuie-tout', nom: 'essuie-tout', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'liquide-vaisselle', nom: 'liquide vaisselle', rayon: 'entretien', unite: 'pc', recette: false, alias: ['produit vaisselle'] },
+  { id: 'liquide-de-rincage', nom: 'liquide de rinçage', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'pastille-lave-vaisselle', nom: 'pastille lave-vaisselle', rayon: 'entretien', unite: 'pc', recette: false, alias: ['tablette lave-vaisselle'] },
+  { id: 'sel-regenerant', nom: 'sel régénérant', rayon: 'entretien', unite: 'pc', recette: false, alias: ['sel lave-vaisselle'] },
+  { id: 'lessive', nom: 'lessive', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'adoucissant', nom: 'adoucissant', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'detachant', nom: 'détachant', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'eau-de-javel', nom: 'eau de javel', rayon: 'entretien', unite: 'pc', recette: false, alias: ['javel'] },
+  { id: 'nettoyant-wc', nom: 'nettoyant wc', rayon: 'entretien', unite: 'pc', recette: false, alias: ['gel wc'] },
+  { id: 'nettoyant-vitre', nom: 'nettoyant vitres', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'nettoyant-multi-usage', nom: 'nettoyant multi-usage', rayon: 'entretien', unite: 'pc', recette: false, alias: ['nettoyant ménager'] },
+  { id: 'vinaigre-menager', nom: 'vinaigre ménager', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'sac-poubelle', nom: 'sac poubelle', rayon: 'entretien', unite: 'pc', recette: false },
+  { id: 'papier-aluminium', nom: 'papier aluminium', rayon: 'entretien', unite: 'pc', recette: false, alias: ['papier alu', 'aluminium'] },
+  { id: 'film-alimentaire', nom: 'film alimentaire', rayon: 'entretien', unite: 'pc', recette: false, alias: ['film étirable'] },
+  { id: 'papier-cuisson', nom: 'papier cuisson', rayon: 'entretien', unite: 'pc', recette: false, alias: ['papier sulfurisé'] },
+  { id: 'sac-congelation', nom: 'sac congélation', rayon: 'entretien', unite: 'pc', recette: false, alias: ['sac de congélation'] },
+
+  // ——— Hors cuisine : divers ———
+  { id: 'pile', nom: 'piles', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'ampoule', nom: 'ampoule', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'allumette', nom: 'allumette', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'bougie', nom: 'bougie', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'briquet', nom: 'briquet', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'ruban-adhesif', nom: 'ruban adhésif', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'litiere', nom: 'litière', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'gobelet', nom: 'gobelet', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'assiette-en-carton', nom: 'assiette en carton', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'serviette-en-papier', nom: 'serviette en papier', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'cure-dent', nom: 'cure-dent', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'pique-a-brochette', nom: 'pique à brochette', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'ficelle-de-cuisine', nom: 'ficelle de cuisine', rayon: 'divers', unite: 'pc', recette: false },
 ].map(Object.freeze));

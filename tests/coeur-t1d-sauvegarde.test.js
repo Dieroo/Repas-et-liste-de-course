@@ -14,7 +14,7 @@ import {
   demandesSatisfaites,
 } from '../js/coeur/paquet.js';
 import { preparerProfil, preparerReliure } from '../js/coeur/profils.js';
-import { egalProfonde } from '../js/coeur/edition.js';
+import { LIBELLES_RAYON, egalProfonde } from '../js/coeur/edition.js';
 import { routeAutorisee, resoudreRoute, parametreDe } from '../js/coeur/roles.js';
 
 // ——— Fixtures génériques (aucune donnée du foyer) ———
@@ -333,7 +333,7 @@ test('creerSauvegarde : résumé ; une fiche abîmée est signalée, le reste re
   abimee.nom = 'Tarte abîmée';
   delete abimee.ingredients[0].rayon;
   const r = creerSauvegarde({ plats: [...etat.plats, abimee], profils: etat.profils }, { maintenant: MAINTENANT });
-  assert.deepEqual(r.resume, { plats: 4, profils: 3, notes: 3, produits: 0, drive: false }); // T3b : produits et drive
+  assert.deepEqual(r.resume, { plats: 4, profils: 3, notes: 3, produits: 0, drive: false, rayons: false }); // T3b : produits et drive ; T3d : rayons
   assert.deepEqual(r.aCorriger, [{ id: 'tarte-abimee', nom: 'Tarte abîmée' }]);
   const validation = validerSauvegarde(lireSauvegarde(r.texte).sauvegarde);
   assert.equal(validation.valide, true);
@@ -857,6 +857,7 @@ test('résumé : comptes exacts', () => {
     reperesGardes: [], // T2d : aucune recette reprise
     produitsRemis: 0, // T3b : ni produits ni drive dans ce fichier
     driveRemis: null,
+    rayonsRemis: false, // T3d : ni ordre des rayons
   });
   assert.equal(r.recettesDifferentes.length, 1);
   assert.equal(r.rien, false);
@@ -1073,7 +1074,7 @@ const REGLAGES_FOYER = {
 const PRODUITS = [
   { id: 'pate', rechercheDrive: 'penne' },
   { id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' },
-  { id: 'farine', placard: { actif: false } }, // T3d : rien de sauvegardé en T3b
+  { id: 'farine', placard: { actif: false } }, // T3d : sauvegardé depuis T3d (rien en T3b)
 ];
 const etatT3b = () => ({ ...etatDeBase(), produits: clone(PRODUITS), reglages: structuredClone(REGLAGES_FOYER) });
 
@@ -1082,10 +1083,12 @@ test('T3b creerSauvegarde : `reglages` (le drive seul) et `produits` (mot cherch
   const fichier = JSON.parse(r.texte);
   assert.deepEqual(Object.keys(fichier), [...CLES_SAUVEGARDE]);
   assert.deepEqual(fichier.reglages, { drive: DRIVE });
-  assert.deepEqual(fichier.produits, [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'pate', rechercheDrive: 'penne' }]);
-  assert.deepEqual(r.resume, { plats: 3, profils: 3, notes: 3, produits: 2, drive: true });
+  // T3d : le placard réglé par le foyer est sauvegardé aussi (farine éteinte).
+  assert.deepEqual(fichier.produits, [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' },
+    { id: 'farine', placard: { actif: false } }, { id: 'pate', rechercheDrive: 'penne' }]);
+  assert.deepEqual(r.resume, { plats: 3, profils: 3, notes: 3, produits: 3, drive: true, rayons: false });
   for (const absent of ['gestionnaire', 'notifications', 'ntfy', 'repas-abc', 'instructionsCopiees', 'derniereSauvegarde',
-    'frigoJoursDefaut', 'placard', 'semaines', 'articles', 'coches']) {
+    'frigoJoursDefaut', 'semaines', 'articles', 'coches']) {
     assert.equal(r.texte.includes(absent), false, absent);
   }
   assert.equal(contientUndefined(fichier), false);
@@ -1112,7 +1115,8 @@ test('T3b validerSauvegarde : produits et drive lus ; un ancien fichier (sans ce
   assert.equal(v.valide, true);
   assert.deepEqual(v.avertissements, []);
   assert.deepEqual(v.reglages, { drive: DRIVE });
-  assert.deepEqual(v.produits, [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'pate', rechercheDrive: 'penne' }]);
+  assert.deepEqual(v.produits, [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' },
+    { id: 'farine', placard: { actif: false } }, { id: 'pate', rechercheDrive: 'penne' }]); // T3d : le placard aussi
   // Fichier d'avant T3b : ni `reglages` ni `produits`, aucun avertissement.
   const ancien = validerSauvegarde(fichierAvec([clone(RECETTE_TARTE)]));
   assert.equal(ancien.valide, true);
@@ -1143,9 +1147,11 @@ test('T3b validerSauvegarde : drive et produits illisibles ignorés avec un aver
 });
 
 test('T3b validerSauvegarde : un réglage ou un champ de produit d’une app plus récente → « Une partie du fichier… », le reste repris', () => {
+  // T3d a rendu `rayons`, `rayon` et `habituel` connus : des champs encore réservés (apéro de T3e, achats et unité
+  // par défaut d'un produit) jouent ici le rôle d'une app plus récente.
   const v = validerSauvegarde(fichierAvec([], clone(PROFILS), {
-    reglages: { drive: DRIVE, rayons: ['boissons'], gestionnaire: 'a@example.com' },
-    produits: [{ id: 'pate', rechercheDrive: 'penne', rayon: 'epicerie_salee' }, { id: 'lait', habituel: { actif: true } }],
+    reglages: { drive: DRIVE, apero: { incontournables: {} }, gestionnaire: 'a@example.com' },
+    produits: [{ id: 'pate', rechercheDrive: 'penne', achats: ['2026-10-10'] }, { id: 'lait', uniteDefaut: 'l' }],
   }));
   assert.equal(v.valide, true);
   assert.deepEqual(v.avertissements, ['Une partie du fichier n’est pas encore reprise par l’app : elle a été ignorée.']);
@@ -1169,13 +1175,14 @@ test('T3b aller-retour : sur une base vide, produits et drive reviennent à l’
   const etat = etatT3b();
   const vide = { plats: [], profils: [], demandes: [], email: 'a@example.com', produits: [], reglages: { gestionnaire: 'a@example.com' } };
   const r = preparerRestauration(relue(etat), vide);
-  assert.equal(r.resume.produitsRemis, 2);
+  assert.equal(r.resume.produitsRemis, 3); // T3d : le placard éteint de la farine revient aussi
   assert.equal(r.resume.driveRemis, 'drive.exemple.fr');
   // Profils d'abord, puis le drive, puis les produits, puis les plats.
   assert.deepEqual([...new Set(ecrituresDe(r).map((e) => e.collection))], ['profils', 'reglages', 'produits', 'plats']);
   const apres = appliquer({ plats: [], profils: [], produits: [], reglages: [{ id: 'foyer', gestionnaire: 'a@example.com' }] }, r.lots);
   assert.deepEqual(apres.produits.sort((a, b) => (a.id < b.id ? -1 : 1)),
-    [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'pate', rechercheDrive: 'penne' }]);
+    [{ id: 'creme-fraiche-epaisse', rechercheDrive: 'crème fraîche 30 %' }, { id: 'farine', placard: { actif: false } },
+      { id: 'pate', rechercheDrive: 'penne' }]);
   // Le drive revient ; le gestionnaire reste (jamais un set du document).
   assert.deepEqual(apres.reglages, [{ id: 'foyer', gestionnaire: 'a@example.com', drive: DRIVE }]);
   const encore = preparerRestauration(relue(etat), {
@@ -1196,8 +1203,11 @@ test('T3b restauration additive : un mot cherché ou un drive présents ne sont 
   assert.deepEqual(ecrituresDe(r).filter((e) => e.collection !== 'plats' && e.collection !== 'profils'), [{
     collection: 'produits', id: 'creme-fraiche-epaisse', mode: 'update', donnees: { rechercheDrive: 'crème fraîche 30 %' },
     condition: { champsAbsents: ['rechercheDrive'] },
+  }, {
+    // T3d : la farine, absente de l'app, revient entière avec son placard éteint.
+    collection: 'produits', id: 'farine', mode: 'fusion', donnees: { placard: { actif: false } }, condition: { absent: true },
   }]);
-  assert.deepEqual([r.resume.produitsRemis, r.resume.driveRemis], [1, null]);
+  assert.deepEqual([r.resume.produitsRemis, r.resume.driveRemis], [2, null]);
   // Drive absent de l'app : `update` du seul champ `drive`, à condition qu'il manque encore.
   const sansDrive = preparerRestauration(v, { ...app, reglages: { gestionnaire: 'a@example.com' } });
   const ecriture = ecrituresDe(sansDrive).find((e) => e.collection === 'reglages');
@@ -1224,8 +1234,13 @@ test('T3b envoi : drive ou mot cherché posés ailleurs entre-temps → rien ; d
 
 test('T3b garde-fou : chaque champ de produit et chaque réglage sauvegardés survivent au voyage', () => {
   // Une tranche qui ajoute un champ à CHAMPS_PRODUIT ou CHAMPS_REGLAGES doit le mettre ici, et dans la sauvegarde.
-  const produit = { id: 'pate', rechercheDrive: 'penne' };
-  const reglages = { drive: DRIVE };
+  // T3d : rayon, placard et habituel d'un produit ; ordre des rayons.
+  const produit = {
+    id: 'pate', rechercheDrive: 'penne', rayon: 'divers', placard: { actif: true },
+    habituel: { actif: true, qte: 500, unite: 'g', libelle: 'pâtes' },
+  };
+  const rayons = ['boissons', ...Object.keys(LIBELLES_RAYON).filter((r) => r !== 'boissons')];
+  const reglages = { drive: DRIVE, rayons };
   for (const champ of CHAMPS_PRODUIT) assert.ok(champ in produit, `champ ${champ} absent du produit d’essai`);
   for (const champ of CHAMPS_REGLAGES) assert.ok(champ in reglages, `réglage ${champ} absent des réglages d’essai`);
   const v = relue({ plats: [], profils: [], produits: [produit], reglages });

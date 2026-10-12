@@ -8,7 +8,8 @@ import { statutDe } from './plats.js';
 import { normaliserEmail } from './roles.js';
 import { preparerProfil, trierProfils } from './profils.js';
 import { cheminNote, noteValide } from './notes.js';
-import { egalProfonde } from './edition.js';
+import { LIBELLES_RAYON, egalProfonde } from './edition.js';
+import { lireHabituel, lirePlacardFoyer, lireRayonFoyer } from './produits.js';
 import { stylesAttendus, validerRegles } from './regles.js';
 import { estRegleAge, naissanceLisible } from './age.js';
 import { styleDe } from './compatibilite.js';
@@ -44,10 +45,10 @@ const EXCLUSIONS_PROFIL = [];
 export const CLES_SAUVEGARDE = Object.freeze(['format', 'sauvegardeLe', 'reglages', 'profils', 'produits', 'plats']);
 // Champs d'un produit (`produits/{id}`) sauvegardés : ceux qu'écrit un geste (T3b : le mot cherché au drive ; T3d :
 // rayon, placard, habituel). Jamais une valeur recopiée des produits courants (ils sont du code).
-export const CHAMPS_PRODUIT = Object.freeze(['rechercheDrive']);
-// Réglages du foyer sauvegardés (T3b : le drive ; T3d : rayons ; T3e : apéro). Jamais le gestionnaire, le sujet des
-// notifications, la version des instructions copiée ni la date de la dernière sauvegarde.
-export const CHAMPS_REGLAGES = Object.freeze(['drive']);
+export const CHAMPS_PRODUIT = Object.freeze(['rechercheDrive', 'rayon', 'placard', 'habituel']);
+// Réglages du foyer sauvegardés (T3b : le drive ; T3d : l'ordre des rayons ; T3e : apéro). Jamais le gestionnaire, le
+// sujet des notifications, la version des instructions copiée ni la date de la dernière sauvegarde.
+export const CHAMPS_REGLAGES = Object.freeze(['drive', 'rayons']);
 const AVERTISSEMENT_PARTIE_IGNOREE = 'Une partie du fichier n’est pas encore reprise par l’app\u00A0: elle a été ignorée.';
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
@@ -75,12 +76,45 @@ function documentsProduits(produits) {
   return entrees.filter(([id, p]) => typeof id === 'string' && ID.test(id) && estObjet(p)).map(([id, p]) => ({ ...p, id }));
 }
 
+/**
+ * Valeur lue d'un champ de produit sauvegardé (CHAMPS_PRODUIT) → la valeur propre, ou null si elle est illisible :
+ * `rechercheDrive` (texte de 1 à 60 caractères), `rayon` (un des 14, produits.js › lireRayonFoyer), `placard` ({ actif }
+ * booléen, lirePlacardFoyer), `habituel` ({ actif, qte?, unite?, libelle? }, lireHabituel). Sert aussi à vérifier une
+ * écriture avant l'envoi (donnees.js) : une valeur écrivable se relit à l'identique.
+ */
+export function lireChampProduit(champ, valeur) {
+  if (champ === 'rechercheDrive') return (typeof valeur === 'string' && motCherche(valeur)) || null;
+  if (champ === 'rayon') return lireRayonFoyer(valeur);
+  if (champ === 'placard') return lirePlacardFoyer(valeur);
+  if (champ === 'habituel') return lireHabituel(valeur);
+  return null;
+}
+
 /** Champs sauvegardés d'un produit (CHAMPS_PRODUIT), lisibles seulement ; {} si aucun. */
 function champsDuProduit(produit) {
   const champs = {};
-  const mot = typeof produit?.rechercheDrive === 'string' ? motCherche(produit.rechercheDrive) : '';
-  if (mot) champs.rechercheDrive = mot;
+  for (const champ of CHAMPS_PRODUIT) {
+    const lu = estObjet(produit) ? lireChampProduit(champ, produit[champ]) : null;
+    if (lu !== null) champs[champ] = lu;
+  }
   return champs;
+}
+
+/** Nombre de champs de produit présents (ni absents ni nuls) mais illisibles. */
+function champsIllisibles(produit) {
+  return CHAMPS_PRODUIT.filter((champ) => produit?.[champ] != null && lireChampProduit(champ, produit[champ]) === null).length;
+}
+
+/**
+ * Ordre des rayons du foyer (`reglages/foyer.rayons`, T3d) → les 14 rayons, ceux du foyer d'abord dans son ordre
+ * (inconnus et doublons ignorés), les autres à la suite dans l'ordre de départ, comme liste.js › reglagesCourses ; null
+ * si ce n'est pas une liste ou si aucun rayon n'est connu.
+ */
+export function lireOrdreRayons(valeur) {
+  if (!Array.isArray(valeur)) return null;
+  const depart = Object.keys(LIBELLES_RAYON);
+  const lus = [...new Set(valeur.filter((rayon) => typeof rayon === 'string' && depart.includes(rayon)))];
+  return lus.length ? [...lus, ...depart.filter((rayon) => !lus.includes(rayon))] : null;
 }
 
 // ——— Dates ———
@@ -237,10 +271,11 @@ export function nomFichierSauvegarde(date, { avantRestauration = false } = {}) {
 /**
  * Fichier de sauvegarde, à partir des plats, des profils, des produits du foyer (documents { id, ...champs } ; T3b) et
  * des réglages du foyer (`reglages/foyer`, T3b). Clés dans cet ordre : format, sauvegardeLe, reglages (seulement
- * `drive`, lu par drive.js › lireDrive ; {} sans drive), profils, produits (triés par id, CHAMPS_PRODUIT seulement ; un
- * produit sans champ sauvegardé est omis ; [] sinon), plats. Jamais le gestionnaire, les notifications, les instructions
- * copiées, la date de sauvegarde, les semaines ni les articles ajoutés à la main.
- * → { nomFichier, texte, resume: { plats, profils, notes, produits, drive }, aCorriger: [{ id, nom }] }
+ * `drive`, lu par drive.js › lireDrive, et T3d `rayons`, l'ordre des rayons lu par lireOrdreRayons ; {} sans eux),
+ * profils, produits (triés par id, CHAMPS_PRODUIT seulement : T3d, rayon, placard et habituel en plus du mot cherché ;
+ * un produit sans champ sauvegardé est omis ; [] sinon), plats. Jamais le gestionnaire, les notifications, les
+ * instructions copiées, la date de sauvegarde, les semaines ni les articles ajoutés à la main.
+ * → { nomFichier, texte, resume: { plats, profils, notes, produits, drive, rayons }, aCorriger: [{ id, nom }] }
  *   `aCorriger` : plats dont la recette ne pourrait pas être reprise depuis ce fichier (fiche abîmée) ; le reste
  *   du fichier reste restaurable.
  */
@@ -258,10 +293,11 @@ export function creerSauvegarde({ plats = [], profils = [], produits = [], regla
     .filter((produit) => Object.keys(produit).length > 1)
     .sort(parId);
   const drive = lireDrive(reglages?.drive);
+  const rayons = lireOrdreRayons(reglages?.rayons);
   const fichier = {
     format: FORMAT,
     sauvegardeLe: quand.toISOString(),
-    reglages: drive ? { drive } : {},
+    reglages: { ...(drive ? { drive } : {}), ...(rayons ? { rayons } : {}) },
     profils: profilsFichier,
     produits: produitsFichier,
     plats: platsFichier,
@@ -284,6 +320,7 @@ export function creerSauvegarde({ plats = [], profils = [], produits = [], regla
       notes: platsFichier.reduce((total, plat) => total + Object.keys(plat.notes ?? {}).length, 0),
       produits: produitsFichier.length,
       drive: Boolean(drive),
+      rayons: Boolean(rayons),
     },
     aCorriger,
   };
@@ -399,9 +436,10 @@ function validerProfils(bruts, erreurs, avertissements) {
 }
 
 /**
- * Réglages des courses et produits du fichier (T3b), lus seulement si `cles` les comprend → { reglages: { drive? },
- * produits: [{ id, rechercheDrive? }], ignoree, avertissements } : un drive illisible (drive.js › lireDrive), un
- * produit illisible ou en double sont ignorés avec un avertissement, jamais bloquants ; un réglage ou un champ de
+ * Réglages des courses et produits du fichier (T3b, T3d), lus seulement si `cles` les comprend → { reglages: { drive?,
+ * rayons? }, produits: [{ id, rechercheDrive?, rayon?, placard?, habituel? }], ignoree, avertissements } : un drive
+ * illisible (drive.js › lireDrive), un ordre des rayons illisible (lireOrdreRayons), un produit illisible ou en double,
+ * un champ de produit illisible sont ignorés avec un avertissement, jamais bloquants ; un réglage ou un champ de
  * produit d'une version plus récente de l'app (`ignoree`) donne l'avertissement « Une partie du fichier… ».
  */
 function validerCourses(sauvegarde, cles) {
@@ -415,6 +453,11 @@ function validerCourses(sauvegarde, cles) {
         const drive = lireDrive(sauvegarde.reglages.drive);
         if (drive) sortie.reglages.drive = drive;
         else sortie.avertissements.push('Le drive du fichier est illisible\u00A0: il a été ignoré.');
+      }
+      if (sauvegarde.reglages.rayons != null) {
+        const rayons = lireOrdreRayons(sauvegarde.reglages.rayons);
+        if (rayons) sortie.reglages.rayons = rayons;
+        else sortie.avertissements.push('L’ordre des rayons du fichier est illisible\u00A0: il a été ignoré.');
       }
     }
   }
@@ -433,7 +476,7 @@ function validerCourses(sauvegarde, cles) {
       ids.add(brut.id);
       if (Object.keys(brut).some((cle) => cle !== 'id' && !CHAMPS_PRODUIT.includes(cle))) sortie.ignoree = true;
       const champs = champsDuProduit(brut);
-      if (brut.rechercheDrive != null && !champs.rechercheDrive) illisibles += 1;
+      illisibles += champsIllisibles(brut);
       if (Object.keys(champs).length) sortie.produits.push({ id: brut.id, ...champs });
     }
     if (illisibles === 1) sortie.avertissements.push('Un réglage de produit illisible a été ignoré.');
@@ -446,8 +489,9 @@ function validerCourses(sauvegarde, cles) {
  * Vérifie une sauvegarde lue par lireSauvegarde. Seules les fautes du fichier entier bloquent (liste des plats
  * illisible, trop de plats, identifiants en double) ; une recette abîmée n'est simplement pas reprise.
  * → { date (Date ou null), plats: [{ id, nom, recette (null si abîmée), notes, derniereFois?, modifieeLe? (Date),
- *     modifieePar?, corbeille? ({ le (Date), par? }), reperesRelus? (entier ≥ 1, T2d) }], profils, reglages: { drive? }
- *     (T3b), produits: [{ id, rechercheDrive? }] (T3b), erreurs: [texte], avertissements: [texte], valide }
+ *     modifieePar?, corbeille? ({ le (Date), par? }), reperesRelus? (entier ≥ 1, T2d) }], profils, reglages: { drive?,
+ *     rayons? } (T3b, T3d), produits: [{ id, rechercheDrive?, rayon?, placard?, habituel? }] (T3b, T3d), erreurs:
+ *     [texte], avertissements: [texte], valide }
  *   Marque de la corbeille illisible (pas un objet, ou sans date lisible) : ignorée, avec un avertissement. Un fichier
  *   d'avant T3b (sans `reglages` ni `produits`) reste lisible.
  * `cles` : clés de premier niveau que l'app comprend (CLES_SAUVEGARDE) ; une clé hors de cette liste est ignorée avec
@@ -598,10 +642,12 @@ function enLots(ecritures, taille) {
  * `naissanceAbsente`, pour qu'elle ne soit pas annulée avec ses règles) ; `resume.naissancesRemises` : [nom].
  * Réglages des courses (T3b) : `reglages` (le document `reglages/foyer` lu) ; le drive du fichier revient seulement
  * s'il manque dans l'app (`update` du seul champ `drive`, condition `champsAbsents` : jamais un `set` du document, le
- * gestionnaire et le sujet des notifications restent intacts) ; `resume.driveRemis` : son nom, sinon null. Produits
- * (T3b) : `produits` (documents `produits/{id}`, liste, table par id ou Map) ; un produit absent revient entier (fusion,
- * condition `absent`), un produit présent ne reçoit que ses champs absents (`update`, condition `champsAbsents`) ;
- * `resume.produitsRemis` : le nombre de produits écrits.
+ * gestionnaire et le sujet des notifications restent intacts) ; `resume.driveRemis` : son nom, sinon null. L'ordre des
+ * rayons (T3d) de même : seulement s'il manque, dans la même écriture que le drive (`update` des seuls champs absents) ;
+ * `resume.rayonsRemis` : vrai s'il revient. Produits (T3b ; T3d : rayon, placard, habituel) : `produits` (documents
+ * `produits/{id}`, liste, table par id ou Map) ; un produit absent revient entier (fusion, condition `absent`), un
+ * produit présent ne reçoit que ses champs absents (`update`, condition `champsAbsents`) ; `resume.produitsRemis` : le
+ * nombre de produits écrits.
  * `resume.precautionsARemettre` : [nom] des profils présents dont la date revient, ou dont le fichier porte des
  * précautions d'âge absentes de l'app sans que leurs règles reviennent : l'écran invite à ouvrir « 🧸 Ce que <Enfant>
  * mange » (aucune précaution n'est écrite par la restauration sur un profil qui a déjà des règles).
@@ -654,6 +700,7 @@ export function preparerRestauration(validation, {
     reperesGardes: [],
     produitsRemis: 0,
     driveRemis: null,
+    rayonsRemis: false,
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -903,14 +950,25 @@ export function preparerRestauration(validation, {
     return { id: pour, ordre: profil?.ordre, nom: reduire(profil?.nom) || pour };
   })).map(({ id, nom }) => ({ pour: id, nom, nombre: versionsRemises.get(id) }));
 
-  // Réglages des courses (T3b) : le drive, seulement s'il manque dans l'app.
+  // Réglages des courses (T3b, T3d) : le drive et l'ordre des rayons, chacun seulement s'il manque dans l'app ; une
+  // seule écriture de `reglages/foyer` (`update` des seuls champs absents, jamais un `set` du document).
   const ecrituresReglages = [];
+  const reglagesARemettre = {};
   const drive = lireDrive(validation?.reglages?.drive);
   if (drive && !champPresent(reglages, 'drive')) {
-    ecrituresReglages.push({
-      collection: 'reglages', id: 'foyer', mode: 'update', donnees: { drive }, condition: { champsAbsents: ['drive'] },
-    });
+    reglagesARemettre.drive = drive;
     resume.driveRemis = drive.nom;
+  }
+  const rayons = lireOrdreRayons(validation?.reglages?.rayons);
+  if (rayons && !champPresent(reglages, 'rayons')) {
+    reglagesARemettre.rayons = rayons;
+    resume.rayonsRemis = true;
+  }
+  if (Object.keys(reglagesARemettre).length) {
+    ecrituresReglages.push({
+      collection: 'reglages', id: 'foyer', mode: 'update', donnees: reglagesARemettre,
+      condition: { champsAbsents: Object.keys(reglagesARemettre) },
+    });
   }
   // Produits (T3b) : un produit absent revient entier ; un produit présent ne reçoit que ses champs absents.
   const ecrituresProduits = [];
@@ -941,7 +999,8 @@ export function preparerRestauration(validation, {
 
 /**
  * Lignes de l'aperçu pour les réglages des courses qui reviennent (T3b) : « 12 réglages de produits reviennent. »,
- * « 1 réglage de produit revient. », « Le drive revient (drive.exemple.fr). » ; [] si rien ne revient.
+ * « 1 réglage de produit revient. », « Le drive revient (drive.exemple.fr). », T3d « L'ordre des rayons revient. » ;
+ * [] si rien ne revient.
  */
 export function phrasesCoursesRemises(resume) {
   const lignes = [];
@@ -950,6 +1009,7 @@ export function phrasesCoursesRemises(resume) {
   else if (Number.isInteger(n) && n > 1) lignes.push(`${n}\u00A0réglages de produits reviennent.`);
   const nom = reduire(resume?.driveRemis);
   if (nom) lignes.push(`Le drive revient (${nom}).`);
+  if (resume?.rayonsRemis === true) lignes.push('L’ordre des rayons revient.');
   return lignes;
 }
 

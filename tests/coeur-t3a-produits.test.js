@@ -145,10 +145,13 @@ test('ficheProduit : nom le plus fréquent des recettes, à égalité le plus co
   assert.deepEqual(ficheProduit('pate', { index: egalite }).nom, { valeur: 'pâtes', source: 'recettes' });
   const memeLongueur = indexDesRecettes([plat('d', [ing('oignons', 1, 'pc'), ing('oignon', 1, 'pc'), ing('oignonx', 1, 'pc')])]);
   assert.equal(ficheProduit('oignon-jaune', { index: memeLongueur }).nom.valeur, 'oignon');
-  // Sans recette : le nom courant, puis la saisie, puis rien.
+  // Sans recette : le nom courant, puis la saisie, puis rien. (T3d : « piles » est devenu un produit courant hors
+  // cuisine ; un produit inconnu de l'app prend sa place.)
   assert.deepEqual(ficheProduit('pate', {}).nom, { valeur: 'pâtes', source: 'courants' });
-  assert.deepEqual(ficheProduit('pile', { saisie: '  Piles ' }).nom, { valeur: 'Piles', source: 'saisie' });
-  assert.deepEqual(ficheProduit('pile').nom, { valeur: '', source: 'defaut' });
+  assert.deepEqual(ficheProduit('croquette-pour-chat', { saisie: '  Croquettes pour chat ' }).nom,
+    { valeur: 'Croquettes pour chat', source: 'saisie' });
+  assert.deepEqual(ficheProduit('croquette-pour-chat').nom, { valeur: '', source: 'defaut' });
+  assert.deepEqual(ficheProduit('pile', { saisie: '  Piles ' }).nom, { valeur: 'piles', source: 'courants' });
 });
 
 test('ficheProduit : rayon du foyer > le plus fréquent des recettes > courant > divers', () => {
@@ -158,7 +161,10 @@ test('ficheProduit : rayon du foyer > le plus fréquent des recettes > courant >
     { valeur: 'surgeles', source: 'foyer' });
   assert.deepEqual(ficheProduit('oignon-jaune', { index, produitsFoyer: { 'oignon-jaune': { rayon: 'inconnu' } } }).rayon.source, 'recettes');
   assert.deepEqual(ficheProduit('oignon-jaune').rayon, { valeur: 'fruits_legumes', source: 'courants' });
-  assert.deepEqual(ficheProduit('pile', { saisie: 'piles' }).rayon, { valeur: 'divers', source: 'defaut' });
+  assert.deepEqual(ficheProduit('croquette-pour-chat', { saisie: 'croquettes pour chat' }).rayon, { valeur: 'divers', source: 'defaut' });
+  // T3d : un produit hors cuisine a son rayon (piles en Divers, lessive en Entretien).
+  assert.deepEqual(ficheProduit('pile', { saisie: 'piles' }).rayon, { valeur: 'divers', source: 'courants' });
+  assert.deepEqual(ficheProduit('lessive').rayon, { valeur: 'entretien', source: 'courants' });
   // Égalité entre deux rayons des recettes : l'ordre du vocabulaire (fruits et légumes avant l'épicerie).
   const egalite = indexDesRecettes([plat('b', [ing('oignon', 1, 'pc', 'epicerie_salee'), ing('oignon', 1, 'pc', 'fruits_legumes')])]);
   assert.equal(ficheProduit('oignon-jaune', { index: egalite }).rayon.valeur, 'fruits_legumes');
