@@ -19,7 +19,7 @@ import { estDansCorbeille } from './coeur/corbeille.js';
 import { empreinteRelecture, appliquerReperes } from './coeur/relecture.js';
 import { VERSION_REPERES } from './coeur/vocabulaire.js';
 import { lireIdDemande } from './coeur/demandes.js';
-import { EFFACER, cheminSur, champsValides } from './coeur/semaine.js';
+import { EFFACER, cheminSur, champsValides, jourValide, ecartJours, DUREE_MAX_JOURS } from './coeur/semaine.js';
 import { ARTICLE_MAX, PRECISION_MAX } from './coeur/liste.js';
 import { CHAMPS_PRODUIT } from './coeur/sauvegarde.js';
 import { RECHERCHE_MAX, lireDrive } from './coeur/drive.js';
@@ -888,6 +888,22 @@ function idDocumentSur(id) {
 }
 
 const CHAMPS_CREATION_SEMAINE = new Set(['debut', 'fin', 'creePar', 'creeLe']);
+
+/**
+ * Dates d'une semaine changées (T3c, « Les dates de la semaine ») : `debut` et `fin` toujours ensemble (deux téléphones
+ * qui changeraient l'un le début, l'autre la fin pourraient laisser une semaine illisible, qui disparaîtrait avec ses
+ * plats), jours réels « AAAA-MM-JJ », jamais effacés, fin au plus tôt le jour du début, DUREE_MAX_JOURS jours au plus.
+ * Vrai aussi pour une écriture qui ne touche pas aux dates.
+ */
+function datesSures(champs) {
+  const aDebut = Object.hasOwn(champs, 'debut');
+  const aFin = Object.hasOwn(champs, 'fin');
+  if (!aDebut && !aFin) return true;
+  if (!aDebut || !aFin || !jourValide(champs.debut) || !jourValide(champs.fin)) return false;
+  const duree = ecartJours(champs.debut, champs.fin);
+  return duree !== null && duree >= 0 && duree + 1 <= DUREE_MAX_JOURS;
+}
+
 const CHAMPS_ARTICLE = new Set(['libelle', 'precision', 'creePar', 'creeLe']);
 
 /**
@@ -909,19 +925,22 @@ function verifierNouvelArticle(donnees) {
 
 /**
  * Écritures d'un geste sur une semaine, préparées par coeur/semaine.js (ecrituresAjout, ecrituresRetrait,
- * ecrituresRemise, ecrituresStyle, ecrituresReglage) ou coeur/liste.js (ecrituresCoche, ecrituresRachat), en un lot :
+ * ecrituresRemise, ecrituresStyle, ecrituresReglage) ou coeur/liste.js (ecrituresCoche, ecrituresRachat), ou par
+ * app.js › changerDates (coeur/semaine.js › validerDates), en un lot :
  * - `creation` ({ id, donnees: { debut, fin, creePar?, creeLe } }, seulement au premier plat) : `set` fusionné de ces
  *   champs seulement (jamais de statut : deux téléphones qui créent la même semaine le même jour se fusionnent) ;
- * - `champs` : `update` des chemins pointés (`plats.<id>.ajouteLe`, `coches.<cle>`…), EFFACER → deleteField() ; deux
- *   téléphones qui touchent deux chemins différents ne s'écrasent jamais ;
+ * - `champs` : `update` des chemins pointés (`plats.<id>.ajouteLe`, `plats.<id>.mange.<p>`,
+ *   `plats.<id>.invites.adultes`, `coches.<cle>`…), EFFACER → deleteField() ; deux téléphones qui touchent deux chemins
+ *   différents ne s'écrasent jamais ; `debut` et `fin` (T3c, dates changées) : toujours ensemble, jours réels,
+ *   14 jours au plus (datesSures) ;
  * - `articles` (restes de la semaine qui finit, seulement avec l'ajout d'un plat, `plats.<id>.ajouteLe`) : un document
  *   `articles/{id}` chacun ({ id?, libelle, precision?, creePar?, creeLe }), `set` fusionné ; `id` donné
  *   (`reste--<semaine>--<produit>`, coeur/semaine.js › idReste) : deux téléphones écrivent le même document, une coche
  *   posée entre-temps reste ; sans lui, identifiant créé ici ;
  * - `supprimer` (identifiants d'articles des restes, coeur/semaine.js › ecrituresRetrait) : supprimés dans le même lot.
  * Lève une erreur avant tout envoi si l'identifiant de la semaine n'est pas `^[a-z0-9-]+$`, si un chemin, une valeur
- * (undefined, NaN, table vide) ou un article est refusé, si la création porte un autre champ, ou s'il n'y a rien à
- * écrire. Hors ligne : part plus tard.
+ * (undefined, NaN, table vide) ou un article est refusé, si la création porte un autre champ, si des dates changées
+ * sont refusées, ou s'il n'y a rien à écrire. Hors ligne : part plus tard.
  * → { envoi, articleIds } : `envoi`, promesse de l'envoi (ne pas l'attendre pour mettre l'écran à jour) ; `articleIds`,
  *   identifiants des articles écrits, dans l'ordre de `articles`.
  */
@@ -950,6 +969,9 @@ export function ecrireSemaine({ creation = null, id, champs = {}, articles = [],
   const aSupprimer = Array.isArray(supprimer) ? supprimer : [];
   if (aSupprimer.some((articleId) => !idDocumentSur(articleId))) throw new Error('Identifiant d’article refusé.');
   if (creation === null && !chemins.length) throw new Error('Rien à écrire dans la semaine.');
+  if (!datesSures(champs)) {
+    throw new Error('Dates de la semaine refusées : début et fin ensemble, jours réels, 14 jours au plus.');
+  }
 
   const reference = doc(db, 'semaines', id);
   const lot = writeBatch(db);

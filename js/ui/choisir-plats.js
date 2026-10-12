@@ -23,6 +23,7 @@ import { phraseRestes } from '../coeur/liste.js';
 
 // Une seule feuille à la fois ; l'écran Semaine la met à jour à chaque rendu (majChoixDesPlats).
 let feuilleOuverte = null;
+const TEXTE_DATES_CHANGEES = 'Les dates de la semaine ont changé\u00A0: touchez de nouveau le plat.';
 // « Choisir les plats › » de Courses : Semaine ouvre la feuille à son arrivée.
 let ouvertureDemandee = false;
 
@@ -63,7 +64,9 @@ function phraseDesRestes(liste, garder) {
  * (rendre le focus au bouton qui l'a ouverte). Une feuille déjà ouverte est rendue telle quelle.
  * Actions : ajouterALaSemaine(platId, { cible, restes, silencieux: true }), retirerDeLaSemaine(platId, { semaineId,
  * silencieux: true }), ajouterPlat(nom) ; un code « chargement », « invalide », « refuse » ou « echec » remet la case
- * (« deja » et « inutile » : la case dit déjà vrai).
+ * (« deja » et « inutile » : la case dit déjà vrai) ; « chevauche » (T3c : la semaine visée, encore sans plat, touche
+ * désormais une semaine qui a des plats, dates changées sur l'autre téléphone) la remet aussi, recalcule la semaine
+ * visée et dit « Les dates de la semaine ont changé : touchez de nouveau le plat. ».
  * → { maj(ctx), fermer }
  */
 export function ouvrirChoixDesPlats(lireCtx, { onFermer } = {}) {
@@ -215,7 +218,20 @@ export function ouvrirChoixDesPlats(lireCtx, { onFermer } = {}) {
     }
   }
 
-  const echoue = (code) => ['chargement', 'invalide', 'refuse', 'echec'].includes(code);
+  const echoue = (code) => ['chargement', 'invalide', 'refuse', 'echec', 'chevauche'].includes(code);
+
+  /**
+   * La semaine visée, figée à l'ouverture, touche désormais une semaine qui a des plats (dates changées sur l'autre
+   * téléphone) : rien n'a été écrit ; la semaine visée est recalculée (le sous-titre dit ses dates) et la feuille le dit.
+   */
+  function recalculerCible() {
+    cible = null;
+    surAutre = false;
+    restesUtilises = false;
+    figerCible();
+    erreur.replaceChildren(el('span', {}, TEXTE_DATES_CHANGEES));
+    erreur.hidden = false;
+  }
 
   function basculer(platId, input) {
     const visee = cibleActive();
@@ -230,11 +246,16 @@ export function ouvrirChoixDesPlats(lireCtx, { onFermer } = {}) {
       const resultat = courant.actions?.ajouterALaSemaine?.(platId, { cible: visee, restes: avecRestes, silencieux: true });
       if (echoue(resultat?.code)) {
         input.checked = false;
+        if (resultat?.code === 'chevauche') {
+          recalculerCible();
+          dessiner();
+        }
         return;
       }
       if (visee.nouvelle || resultat?.creee) restesUtilises = true;
       ajoutes.add(platId);
       enAttente.set(cle, true);
+      erreur.hidden = true;
     } else {
       const resultat = courant.actions?.retirerDeLaSemaine?.(platId, { semaineId: visee.id, silencieux: true });
       if (echoue(resultat?.code)) {
@@ -277,7 +298,7 @@ export function ouvrirChoixDesPlats(lireCtx, { onFermer } = {}) {
         if (visee.nouvelle || ajout?.creee) restesUtilises = true;
         ajoutes.add(resultat.id);
         enAttente.set(`${visee.id}|${resultat.id}`, true);
-      }
+      } else if (ajout?.code === 'chevauche') recalculerCible();
     }
     vibrer();
     focusApres = resultat.id;

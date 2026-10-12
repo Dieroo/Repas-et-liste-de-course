@@ -3321,6 +3321,20 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
   overflow-wrap: anywhere;
 }
 
+/* « En ce moment… » et son « Changer » à la suite du texte (T3c : finir plus tôt la semaine en cours). */
+.bloc-en-ce-moment {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.bloc-en-ce-moment .en-ce-moment { display: inline; }
+
+.bloc-en-ce-moment .bouton-changer-dates {
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 .lien-en-ce-moment {
   display: inline-block;
   margin: -12px 0;
@@ -3659,6 +3673,88 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
 }
 
 .phrase-portions { color: var(--texte-doux); }
+
+/* « Qui en mange ? » (T3c) : une case par profil, côte à côte tant qu'elles tiennent (52 px de haut) ; cochée, la
+   case est olive et la carte teintée d’olive (texte 12,2:1 en clair, 11:1 en sombre ; bord olive 4,7:1 et 5,3:1). */
+.qui-en-mange > legend { margin-top: 0; }
+
+.choix-mangeurs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.choix.choix-mangeur {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 10px;
+  min-width: min(100%, 132px);
+  padding: 6px 14px 6px 12px;
+  text-align: left;
+}
+
+.choix.choix-mangeur .case-choix {
+  position: static;
+  opacity: 1;
+}
+
+.choix.choix-mangeur:has(input:checked) {
+  border-color: var(--olive);
+  background: var(--olive-doux);
+  box-shadow: inset 0 0 0 1px var(--olive);
+}
+
+.choix-mangeur-nom {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Sous les cases : la phrase de chaque profil (« Adulte B : pas encore de version. ») et sa demande. */
+.details-mangeurs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.detail-mangeur {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.phrase-mangeur {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+/* « Des invités ? » : replié ; ouvert, « Adultes » et « Enfants » l'un sous l'autre. */
+.details-invites .depliable-contenu { padding-top: 4px; }
+
+/* ——— Semaine : « Du 10 au 16 octobre » et « Changer » (T3c) ——— */
+
+.dates-semaine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
+}
+
+.bouton.bouton-changer-dates {
+  padding: 0 8px;
+  color: var(--accent);
+  font-size: 0.9375rem;
+}
+
+/* Feuille « Les dates de la semaine » : « Du » et « Au » natifs, pleine largeur. */
+.champ-date {
+  display: block;
+  min-width: 0;
+}
+
+.champ-date::-webkit-date-and-time-value { text-align: left; }
 
 /* ——— Fiche : « ＋ Ajouter à la semaine » ——— */
 
