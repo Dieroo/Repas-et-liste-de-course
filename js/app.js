@@ -48,6 +48,8 @@ import * as importRecettes from './ui/import.js';
 import * as restaurer from './ui/restaurer.js';
 import * as regime from './ui/regime.js';
 import * as ecranDemandes from './ui/demandes.js';
+import * as accueil from './ui/accueil.js';
+import { cleAccueil, lireMarque, valeurVu, valeurOuverture, accueilAuto } from './coeur/accueil.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
 import {
@@ -94,6 +96,8 @@ const ECRANS = {
   restaurer: { titre: 'Restaurer une sauvegarde', module: restaurer, onglet: null },
   regime: { titre: 'Ce que mange', module: regime, onglet: null, sansOnglets: true },
   demandes: { titre: 'Demandes', module: ecranDemandes, onglet: null },
+  // Présentation de première ouverture (T6-0) : sans onglets, la barre « C’est parti » en bas.
+  accueil: { titre: 'Bienvenue', module: accueil, onglet: null, sansOnglets: true },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -160,6 +164,15 @@ const etat = {
   // idée », pour qu'une autre idée ne les rende pas aussitôt (remplacée, jamais modifiée sur place : mémos par objet).
   proposes: new Map(),
   refuses: new Map(),
+  // Présentation (T6-0) : `accueilDecide`, l'ouverture automatique n'est décidée qu'une fois par session et par compte
+  // (remis à faux par oublierDonnees) ; `apresMontage`, arrivée sur Semaine par « C’est parti » : focus sur le titre de
+  // la carte « prochaine action » et anneau sur son bouton principal ({ depuis, focalise, signale, animation,
+  // minuteur }), consommée une fois.
+  accueilDecide: false,
+  apresMontage: null,
+  // Présentation ouverte par « Revoir la présentation » (entrée d'historique ajoutée) : la quitter vers l'écran d'où
+  // elle a été ouverte revient à cette entrée au lieu d'en écrire une seconde.
+  accueilParRevoir: false,
 };
 
 let cleAffichee = '';
@@ -677,6 +690,7 @@ function contexteCourant() {
     reglages: etat.donnees.reglages,
     profils: etat.profils,
     profilsCharges: etat.profilsCharges,
+    profilsDepuisCache: etat.profilsDepuisCache,
     moi: profilDeLEmail(etat.profils, utilisateur.email),
     plats: ECRANS[route]?.avecCorbeille ? etat.plats : actifs,
     platsCorbeille: corbeille,
@@ -724,6 +738,7 @@ function rendreApp() {
   appRendue = true;
   const { utilisateur } = etat;
   if (roleDe(utilisateur.email, etat.donnees.reglages) !== 'gestionnaire') etat.apercu = false;
+  deciderAccueil();
   const { role, roleReel, route, parametre } = routeCourante();
   const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
   if (location.hash !== hashAttendu) history.replaceState(history.state, '', hashAttendu);
@@ -768,6 +783,145 @@ function rendreApp() {
     titre: `${titrePage} · ${NOM_APP}`,
     ctx,
   });
+  signalerCarte(route, ctx);
+}
+
+// ——— Présentation (T6-0) ———
+
+// Arrivée sur Semaine par « C’est parti » : la carte « prochaine action » est attendue au plus ce délai.
+const ATTENTE_CARTE_MS = 3000;
+
+/** Marque « déjà vu » de ce compte sur ce téléphone ({ vu, ouvertures }), ou null si le stockage ne se lit pas. */
+function lireMarqueAccueil(uid) {
+  const cle = cleAccueil(uid);
+  if (!cle) return null;
+  try {
+    return lireMarque(localStorage.getItem(cle));
+  } catch {
+    return null;
+  }
+}
+
+/** Écrit la marque puis la relit : vrai seulement si la valeur relue est la bonne (stockage plein ou bloqué : faux). */
+function ecrireMarqueAccueil(uid, valeur) {
+  const cle = cleAccueil(uid);
+  if (!cle) return false;
+  try {
+    localStorage.setItem(cle, valeur);
+    return localStorage.getItem(cle) === valeur;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ouverture automatique de la présentation, décidée une fois par session et par compte, avant le premier écran de
+ * l'app : rôle réel « Repas et courses », pas encore vue, ouverture ordinaire (coeur/accueil.js › accueilAuto). La
+ * marque compte l'ouverture avant de l'afficher ; si elle ne s'écrit pas, la présentation ne s'ouvre pas (mieux vaut
+ * la manquer que la remontrer à chaque ouverture). Rien n'est écrit dans Firestore.
+ */
+function deciderAccueil() {
+  if (etat.accueilDecide) return;
+  etat.accueilDecide = true;
+  const { uid, email } = etat.utilisateur;
+  const roleReel = roleDe(email, etat.donnees.reglages);
+  const marqueLue = lireMarqueAccueil(uid);
+  if (accueilAuto({ roleReel, marque: marqueLue, hash: location.hash })
+    && ecrireMarqueAccueil(uid, valeurOuverture(marqueLue))) {
+    history.replaceState(history.state, '', '#/accueil');
+  } else if (location.hash === '#/accueil') {
+    // Page rouverte sur la présentation (rechargée par Chrome, ou compte suivant après une déconnexion faite sur elle)
+    // sans qu'elle doive s'ouvrir : Semaine, comme une ouverture ordinaire. « Revoir la présentation » reste possible.
+    history.replaceState(history.state, '', '#/semaine');
+  }
+}
+
+// Après « C’est parti » ou « Dire ce qui me plaît », l'écran suivant se monte sous le doigt (la barre « C’est parti »
+// est à la place des onglets de Semaine, « Dire ce qui me plaît » à celle des gestes de Découvrir) : un second toucher
+// impatient, pendant ce délai, est ignoré, pour qu'il ne change ni d'écran ni de note.
+const GARDE_TOUCHER_MS = 500;
+
+/**
+ * Ignore tout toucher pendant GARDE_TOUCHER_MS, en phase de capture : ni le clic (rien n'est atteint, ni lien, ni
+ * bouton, ni case) ni l'appui qui le précède (le focus, posé sur le titre de la carte, ne part pas sur un onglet).
+ */
+function ignorerToucherFantome() {
+  const bloquer = (evenement) => {
+    evenement.preventDefault();
+    evenement.stopImmediatePropagation();
+  };
+  const types = ['mousedown', 'click'];
+  for (const type of types) window.addEventListener(type, bloquer, true);
+  setTimeout(() => { for (const type of types) window.removeEventListener(type, bloquer, true); }, GARDE_TOUCHER_MS);
+}
+
+/** Fin de l'attente de la carte : sans carte prête, le focus va au titre de l'écran, sans anneau. */
+function finirSignal() {
+  const attente = etat.apresMontage;
+  if (!attente) return;
+  etat.apresMontage = null;
+  clearTimeout(attente.minuteur);
+  if (attente.focalise || routeAffichee !== 'semaine') return;
+  const titre = zone.querySelector('h1');
+  if (!titre) return;
+  if (!titre.hasAttribute('tabindex')) titre.setAttribute('tabindex', '-1');
+  titre.focus();
+}
+
+/**
+ * Fait défiler la page juste assez pour que `noeud` soit entièrement visible au-dessus de la barre d'onglets (police
+ * agrandie, petit écran : le bouton qui s'allume serait sinon caché dessous ou plus bas que l'écran). Le focus ne bouge
+ * pas ; le titre de la carte reste en vue tant que le bouton tient avec lui.
+ */
+function montrerAuDessusDesOnglets(noeud) {
+  const MARGE = 8;
+  const limite = onglets.hidden ? window.innerHeight : Math.min(window.innerHeight, onglets.getBoundingClientRect().top);
+  const boite = noeud.getBoundingClientRect();
+  const depassement = boite.bottom + MARGE - limite;
+  if (depassement > 0) window.scrollBy(0, depassement);
+}
+
+/**
+ * Arrivée sur Semaine par « C’est parti » (`etat.apresMontage`), à chaque rendu pendant ATTENTE_CARTE_MS : une fois la
+ * carte « prochaine action » prête (un bouton, ou toutes les données lues), focus sur son titre, jamais sur un bouton
+ * qui écrit ; son bouton principal, quel qu'il soit, s'allume deux fois d'un anneau terracotta (sauf mouvement
+ * réduit). S'il change pendant l'attente (la proposition arrive), le nouveau s'allume à son tour. Semaine n'est pas
+ * modifiée : aucune classe n'est posée (la carte réécrit les siennes), ni opacité ni échelle (contraste gardé).
+ */
+function signalerCarte(route, ctx) {
+  const attente = etat.apresMontage;
+  if (!attente) return;
+  if (route === 'accueil') return; // « C’est parti » vient d'être touché : Semaine arrive au prochain rendu
+  if (route !== 'semaine') {
+    attente.animation?.cancel();
+    clearTimeout(attente.minuteur);
+    etat.apresMontage = null;
+    return;
+  }
+  if (!attente.minuteur) attente.minuteur = setTimeout(finirSignal, Math.max(0, attente.depuis + ATTENTE_CARTE_MS - Date.now()));
+  const carte = zone.querySelector('.carte-action');
+  const titre = carte?.querySelector('#titre-prochaine-action');
+  if (!carte || !titre) return;
+  const pret = Boolean(carte.querySelector('.actions-carte a, .actions-carte button'))
+    || Boolean(ctx.semainesChargees && ctx.platsCharges && ctx.profilsCharges);
+  if (!pret) return;
+  if (!attente.focalise) {
+    attente.focalise = true;
+    if (!titre.hasAttribute('tabindex')) titre.setAttribute('tabindex', '-1');
+    titre.focus();
+  }
+  const principal = carte.querySelector('.actions-carte .bouton-principal');
+  if (!principal || principal === attente.signale || typeof principal.animate !== 'function') return;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  attente.animation?.cancel();
+  attente.signale = principal;
+  montrerAuDessusDesOnglets(principal);
+  const couleur = getComputedStyle(principal).getPropertyValue('--accent').trim() || 'currentColor';
+  attente.animation = principal.animate([
+    { boxShadow: `0 0 0 0 ${couleur}` },
+    { boxShadow: `0 0 0 6px ${couleur}` },
+    { boxShadow: `0 0 0 0 ${couleur}` },
+  ], { duration: 600, iterations: 2 });
 }
 
 // ——— Actions des écrans ———
@@ -781,6 +935,31 @@ function ecrire(promesse, messageEchec) {
 let instructionsClaude = null;
 
 const actions = {
+  /**
+   * Quitte la présentation par un de ses boutons (T6-0) : marque « vue » sur ce téléphone (sans effet si elle l'était
+   * déjà), puis l'écran demandé, à la place de la présentation dans l'historique (le retour ne la rouvre pas).
+   * `signaler` : à l'arrivée sur Semaine, focus sur le titre de la carte « prochaine action » et anneau sur son bouton
+   * principal. Rien n'est écrit dans Firestore.
+   */
+  quitterAccueil({ route = 'semaine', signaler = false } = {}) {
+    const uid = etat.utilisateur?.uid;
+    if (!uid) return;
+    if (!lireMarqueAccueil(uid)?.vu) ecrireMarqueAccueil(uid, valeurVu());
+    if (etat.apresMontage) {
+      etat.apresMontage.animation?.cancel();
+      clearTimeout(etat.apresMontage.minuteur);
+    }
+    etat.apresMontage = signaler && route === 'semaine'
+      ? { depuis: Date.now(), focalise: false, signale: null, animation: null, minuteur: null }
+      : null;
+    ignorerToucherFantome();
+    const parRevoir = etat.accueilParRevoir;
+    etat.accueilParRevoir = false;
+    // Revue depuis l'écran visé (« Revoir la présentation » sur Semaine, puis « C’est parti ») : retour à son entrée
+    // d'historique, pour ne pas laisser deux « Semaine » de suite (le retour d'Android semblerait ne rien faire).
+    if (parRevoir && history.length > 1 && history.state?.precedente === route) history.back();
+    else location.replace(`#/${route}`);
+  },
   /**
    * Ajoute un plat par son nom (⏳). Rôle effectif « Repas et courses » (aperçu compris, T2e) : la demande de recette
    * part dans le même lot, s'affiche tout de suite (la fiche, ouverte aussitôt, dit « 📬 Demandée… ») et le
@@ -2934,6 +3113,11 @@ function ouvrirPanneauProfil() {
     onAjouterRecettes: () => { location.hash = '#/import'; },
     onApercu: changerApercu,
     onDeconnecter: seDeconnecter,
+    // « 👋 Revoir la présentation » (T6-0), les deux rôles ; absent sur la présentation elle-même.
+    onAccueil: routeCourante().route === 'accueil' ? null : () => {
+      etat.accueilParRevoir = true;
+      location.hash = '#/accueil';
+    },
     onQuiEtesVous: () => {
       if (panneauProfil.open) panneauProfil.close();
       actions.ouvrirQuiEtesVous();
@@ -3016,7 +3200,14 @@ function oublierDonnees() {
     produitsCharges: false,
     produitsDepuisCache: false,
     apercu: false,
+    accueilDecide: false,
+    accueilParRevoir: false,
   });
+  if (etat.apresMontage) {
+    etat.apresMontage.animation?.cancel();
+    clearTimeout(etat.apresMontage.minuteur);
+    etat.apresMontage = null;
+  }
   memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
   memoListe = { cles: null, liste: null };
   memoProduits = { produits: null, parId: Object.freeze({}) };

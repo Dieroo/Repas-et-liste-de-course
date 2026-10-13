@@ -2333,6 +2333,66 @@ select.champ {
   box-shadow: none;
 }
 
+/* Dans la présentation : l'écran porte le titre et la phrase, la carte n'a pas de cadre. */
+.carte-relier.dans-accueil {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ——— Présentation (T6-0, `#/accueil`) ——— */
+
+/* Chaque écran entre en glissant (coupé par prefers-reduced-motion) ; la barre « C’est parti » reprend celle de
+   « Modifier ». */
+.accueil-ecran {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 4px;
+  animation: entree 0.18s ease-out;
+}
+
+.accueil-ecran > .pastille { align-self: flex-start; }
+
+/* Le titre reçoit le focus à chaque écran (lecteurs d'écran) : pas de cadre, comme le titre des autres écrans. */
+.accueil-ecran h1:focus { outline: none; }
+
+.accueil-phrase { font-size: 1.125rem; }
+
+.accueil-liste {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.accueil-liste li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.accueil-liste .pastille {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 1.25rem;
+}
+
+.accueil-liste strong { font-size: 1.0625rem; }
+
+.accueil-decouvrir {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accueil-reconnue {
+  color: var(--olive);
+  font-weight: 600;
+}
+
 /* ——— Réglages › Sauvegarde ——— */
 
 .badge-identique { background: var(--olive-doux); }

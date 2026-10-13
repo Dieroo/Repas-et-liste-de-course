@@ -7,6 +7,7 @@ import { ouvrirFeuille } from './feuille.js';
 import { profilsARelier } from '../coeur/profils.js';
 import { normaliserEmail } from '../coeur/roles.js';
 import { profilsNotables } from '../coeur/notes.js';
+import { TEXTES_ACCUEIL, texteAdressePrise } from '../coeur/accueil.js';
 
 const TITRE = 'Qui êtes-vous\u202F?';
 const TITRE_SANS_PRENOM = 'Votre profil n’est pas encore relié';
@@ -18,8 +19,16 @@ const MESSAGES = {
   echec: 'L’enregistrement n’a pas abouti. Réessayez.',
 };
 
-/** Message d'un résultat de relierProfil ou delierProfil qui n'a pas abouti ({ code, nom? }). */
-export function messageDeReliure({ code, nom } = {}) {
+/**
+ * Message d'un résultat de relierProfil ou delierProfil qui n'a pas abouti ({ code, nom? }). `dansAccueil` : textes de
+ * la présentation (T6-0), sans le mot « profil ».
+ */
+export function messageDeReliure({ code, nom } = {}, { dansAccueil = false } = {}) {
+  if (dansAccueil) {
+    if (code === 'adresse_prise') return texteAdressePrise(nom);
+    if (code === 'change') return TEXTES_ACCUEIL.relierChange;
+    if (code === 'inconnu') return TEXTES_ACCUEIL.relierInconnu;
+  }
   if (code === 'adresse_prise') {
     return nom
       ? `Votre adresse est déjà reliée au profil «\u00A0${nom}\u00A0».`
@@ -34,9 +43,12 @@ let compteur = 0;
 /**
  * Construit la carte. `surSucces(profil, texte)` : profil relié (texte de bienvenue à annoncer).
  * `feuille` (version feuille) : { fermer, definirTitre(texte), titre() } ; la feuille porte alors le titre.
+ * `dansAccueil` (présentation, T6-0) : l'écran porte le titre et la phrase (titre, intro et titre « sans prénom » de la
+ * carte cachés, explication cachée tant que « Je ne suis pas dans la liste » n'est pas touché), pas de cadre de carte,
+ * pas de zone de succès (le passage à l'écran suivant fait l'annonce), textes sans le mot « profil ».
  * → { noeud, maj(ctx), titre() }
  */
-function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
+function construire(ctx, { surNoterPour, surSucces, feuille = null, dansAccueil = false }) {
   compteur += 1;
   const ids = {
     titre: `relier-titre-${compteur}`,
@@ -57,7 +69,7 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
   const boutonsEnfants = new Map(); // profilId → bouton « Noter pour <Enfant> en attendant »
 
   // Nœuds gardés d'une mise à jour à l'autre : le focus (clavier, TalkBack) n'est pas perdu.
-  const titre = el('h2', { id: ids.titre, tabindex: '-1', hidden: Boolean(feuille) });
+  const titre = el('h2', { id: ids.titre, tabindex: '-1', hidden: Boolean(feuille) || dansAccueil });
   const intro = el('p', {}, 'Choisissez votre prénom\u00A0: vos notes seront à votre nom, sur tous vos appareils.');
   const question = el('p', { tabindex: '-1' });
   const succes = el('p', { class: 'aide', role: 'status', hidden: true });
@@ -84,9 +96,12 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
   const finPrenoms = el('span', { hidden: true }); // repère : les prénoms se placent juste avant
   const finEnfants = el('span', { hidden: true }); // repère : les enfants se placent juste avant
 
+  let classeCarte = 'carte carte-relier';
+  if (feuille) classeCarte = 'carte carte-relier dans-feuille';
+  else if (dansAccueil) classeCarte = 'carte-relier dans-accueil';
   const noeud = el('section', {
-    class: feuille ? 'carte carte-relier dans-feuille' : 'carte carte-relier',
-    'aria-labelledby': feuille ? null : ids.titre,
+    class: classeCarte,
+    'aria-labelledby': feuille || dansAccueil ? null : ids.titre,
   },
   titre, intro, question, succes, erreur, finPrenoms,
   boutonOui, boutonRetour, boutonHorsListe, explication, lienReglages, finEnfants);
@@ -99,7 +114,9 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
   }
 
   function focaliserTitre() {
-    (feuille?.titre() ?? titre).focus();
+    // Présentation : le titre de la carte est caché, celui de l'écran (h1, juste au-dessus) prend le focus.
+    const titreEcran = dansAccueil ? noeud.parentElement?.querySelector('h1') : null;
+    (titreEcran ?? feuille?.titre() ?? titre).focus();
   }
 
   function afficherMessage(zone, texte) {
@@ -181,9 +198,11 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
   function dessiner() {
     const sansPrenom = boutonsPrenoms.size === 0;
     const seconde = choisi !== null;
-    const montrerExplication = !seconde && (sansPrenom || deplie);
-    poserTitre(sansPrenom && !seconde ? TITRE_SANS_PRENOM : TITRE);
-    intro.hidden = seconde || sansPrenom;
+    // Présentation : sans prénom, la phrase de l'écran dit déjà l'explication.
+    const montrerExplication = !seconde && ((sansPrenom && !dansAccueil) || deplie);
+    // Présentation : titre caché (l'écran porte le sien), jamais le mot « profil », même dans le DOM.
+    poserTitre(sansPrenom && !seconde && !dansAccueil ? TITRE_SANS_PRENOM : TITRE);
+    intro.hidden = seconde || sansPrenom || dansAccueil;
     for (const bouton of boutonsPrenoms.values()) bouton.hidden = seconde;
     boutonHorsListe.hidden = seconde || sansPrenom;
     boutonHorsListe.setAttribute('aria-expanded', String(montrerExplication));
@@ -211,7 +230,7 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
       && (!entreeChoisie || normaliserEmail(entreeChoisie.profil.email) !== adresseVue)) {
       const focusDansEtape = [question, boutonOui, boutonRetour].includes(document.activeElement);
       choisi = null;
-      afficherMessage(erreur, MESSAGES.change);
+      afficherMessage(erreur, messageDeReliure({ code: 'change' }, { dansAccueil }));
       dessiner();
       if (focusDansEtape) focaliserTitre();
       return;
@@ -274,7 +293,7 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
       const texte = `Bienvenue, ${profil.nom}\u00A0: vos notes seront à votre nom.`;
       choisi = null;
       rafraichir();
-      afficherMessage(succes, texte);
+      if (!dansAccueil) afficherMessage(succes, texte);
       surSucces(profil, texte);
       return;
     }
@@ -282,7 +301,7 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
     // Le profil a changé ou disparu, ou l'adresse est prise : retour au choix des prénoms.
     if (['change', 'inconnu', 'adresse_prise'].includes(resultat?.code)) choisi = null;
     rafraichir();
-    afficherMessage(erreur, messageDeReliure(resultat));
+    afficherMessage(erreur, messageDeReliure(resultat, { dansAccueil }));
     // Le bouton touché garde le focus s'il est encore affiché ; sinon, le titre le prend.
     if (focusSurBouton && (!bouton.isConnected || bouton.hidden)) focaliserTitre();
   }
@@ -303,15 +322,18 @@ function construire(ctx, { surNoterPour, surSucces, feuille = null }) {
  * Carte « Qui êtes-vous ? » à poser dans un écran (Découvrir, quand la personne connectée n'est pas reconnue).
  * `surNoterPour(profilId)` (facultatif) : bouton « Noter pour <Enfant> en attendant », un par enfant notable.
  * `surRelie(profil)` : appelé après « Bienvenue… » (le profil est déjà appliqué sur ce téléphone).
+ * `dansAccueil` (présentation, T6-0) : carte sans titre ni cadre, sans « Noter pour… », sans annonce ni zone de succès
+ * après « C'est moi » (l'écran suivant et son titre focalisé le disent), textes sans le mot « profil ».
  * → { noeud, maj(ctx) } ; maj met à jour les prénoms proposés sans perdre l'étape ni le focus.
  */
-export function carteQuiEtesVous(ctx, { surNoterPour, surRelie } = {}) {
+export function carteQuiEtesVous(ctx, { surNoterPour, surRelie, dansAccueil = false } = {}) {
   const carte = construire(ctx, {
-    surNoterPour,
+    surNoterPour: dansAccueil ? null : surNoterPour,
     surSucces: (profil, texte) => {
-      annoncer(texte);
+      if (!dansAccueil) annoncer(texte);
       surRelie?.(profil);
     },
+    dansAccueil,
   });
   return { noeud: carte.noeud, maj: carte.maj };
 }
