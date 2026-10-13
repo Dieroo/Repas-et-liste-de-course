@@ -4790,3 +4790,390 @@ body:has(.barre-courses) .annonce {
 }
 
 .feuille-desserts .actions-feuille { margin-top: 0; }
+
+/* ——— Cuisiner pas à pas (T5-1, `#/cuisiner/<id>`) ——— */
+
+/* Lisible téléphone posé à un mètre : texte de 1,5 rem (« A+ » : 1,8 rem), titres en Fraunces, barre du bas de 72 px.
+   Ni onglets ni en-tête de l'app : l'écran a son en-tête (« ✕ Quitter », « Étape 3 sur 9 », « A+ »). */
+body:has(.vue.cuisiner) > .entete { display: none; }
+/* Aperçu « Repas et courses » : le bandeau se fait discret, sans son bouton « Quitter » (un seul « Quitter » ici :
+   celui de l'écran ; on quitte l'aperçu depuis les autres écrans). */
+body:has(.vue.cuisiner) .bandeau-apercu {
+  position: static;
+  padding: 4px 16px;
+  font-size: 0.8125rem;
+}
+body:has(.vue.cuisiner) .bandeau-apercu-bouton { display: none; }
+
+.vue.cuisiner {
+  --taille-cuisine: 1.5rem;
+  --taille-titre-cuisine: 1.8rem;
+  gap: 8px;
+  padding-top: max(4px, env(safe-area-inset-top));
+}
+
+.vue.cuisiner.texte-grand {
+  --taille-cuisine: 1.8rem;
+  --taille-titre-cuisine: 2.1rem;
+}
+
+.cuisiner-entete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.bouton-cuisine-quitter,
+.bouton-cuisine-taille {
+  flex: none;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--bordure);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--texte);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bouton-cuisine-taille { font-size: 1.125rem; }
+
+.bouton-cuisine-taille[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-doux);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.cuisiner-ou {
+  /* Police très agrandie : « Étape 3 sur 9 » passe sous « ✕ Quitter » plutôt que d'être écrasé lettre à lettre. */
+  flex: 1 1 0;
+  min-width: 6em;
+  color: var(--texte-doux);
+  font-weight: 700;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.cuisiner-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cuisiner-page h1 {
+  font-size: var(--taille-titre-cuisine);
+  overflow-wrap: anywhere;
+}
+
+/* Le titre reçoit le focus à chaque changement (lecteurs d'écran) : pas de cadre, comme ailleurs. */
+.cuisiner-page h1:focus { outline: none; }
+
+.cuisiner-phrase,
+.cuisiner-duree,
+.cuisiner-frigo {
+  font-size: calc(var(--taille-cuisine) * 0.8);
+  line-height: 1.45;
+}
+
+.cuisiner-frigo { font-weight: 700; }
+
+.cuisiner-allume {
+  color: var(--olive);
+  font-weight: 600;
+}
+
+.cuisiner-avant,
+.cuisiner-fin {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-size: calc(var(--taille-cuisine) * 0.8);
+  line-height: 1.45;
+}
+
+.cuisiner-conseils,
+.cuisiner-rappels-avant {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: var(--rayon);
+  background: var(--ocre-doux);
+  color: var(--texte);
+}
+
+.cuisiner-bloc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cuisiner-bloc h2 { font-size: calc(var(--taille-titre-cuisine) * 0.8); }
+
+.cuisiner-portions .choix { font-size: 1rem; }
+
+.cuisiner-aussi { color: var(--texte-doux); }
+
+.cuisiner-cuissons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.liste-cases,
+.liste-conseils,
+.liste-compacte {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liste-conseils { gap: 10px; }
+
+.liste-conseils li {
+  padding-left: 14px;
+  border-left: 4px solid var(--olive);
+}
+
+.etape-compacte {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon);
+  background: var(--surface);
+}
+
+.etape-compacte-titre { font-weight: 700; }
+.etape-compacte-quantites { font-weight: 600; }
+.etape-compacte-pret { color: var(--olive); font-weight: 600; }
+.etape-compacte-conseil { font-weight: 600; }
+
+/* Case native dans un label (toute la ligne), 56 px au moins. */
+.case-cuisine {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 6px 12px;
+  border: 1px solid var(--bordure);
+  border-radius: 14px;
+  background: var(--surface);
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.case-cuisine input {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+
+.case-cuisine:has(input:checked) > span {
+  color: var(--texte-doux);
+  text-decoration: line-through;
+}
+
+/* Carte d'une étape (ui/etape.js) : rappels, titre, quantités, texte, signe, puces. */
+.carte-etape-cuisine {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.etape-rappels {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Rappels compacts (l'étape doit tenir sur l'écran) ; texte qui passe à la ligne, jamais hors du cadre. */
+.etape-rappel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: var(--rayon);
+  background: var(--ocre-doux);
+  color: var(--texte);
+  font-size: calc(var(--taille-cuisine) * 0.7);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.etape-rappel .case-cuisine { min-height: 48px; padding: 2px 10px; }
+
+/* Ce que demande la part mise de côté, sous le texte de l'étape. */
+.etape-cuisine-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.etape-part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--rayon);
+  background: var(--ocre-doux);
+  color: var(--texte);
+  font-size: calc(var(--taille-cuisine) * 0.7);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.etape-rappel-texte { font-weight: 700; }
+
+.etape-rappel-ajouts {
+  margin: 0;
+  padding-left: 1.2em;
+  font-weight: 600;
+}
+
+.etape-rappel .case-cuisine { font-size: 1.125rem; }
+
+.etape-cuisine-titre {
+  font-size: var(--taille-titre-cuisine);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.etape-cuisine-quantites {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: calc(var(--taille-cuisine) * 0.8);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.etape-cuisine-aussi {
+  font-size: calc(var(--taille-cuisine) * 0.7);
+  font-weight: 600;
+}
+
+.etape-cuisine-texte {
+  font-size: var(--taille-cuisine);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.etape-cuisine-pret {
+  color: var(--olive);
+  font-size: calc(var(--taille-cuisine) * 0.8);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.etape-cuisine-puces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.puce-cuisine {
+  padding: 6px 12px;
+  border: 1px solid var(--bordure);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.etape-cuisine-conseils {
+  padding: 12px 16px;
+  border-radius: var(--rayon);
+  background: var(--olive-doux);
+  color: var(--texte);
+  font-size: calc(var(--taille-cuisine) * 0.75);
+  font-weight: 600;
+}
+
+.etape-cuisine-pendant {
+  color: var(--olive);
+  font-size: calc(var(--taille-cuisine) * 0.8);
+  font-weight: 700;
+}
+
+/* Barre du bas fixe de 72 px : « ‹ » étroit à gauche, l'action principale sur les deux tiers, toujours au même endroit. */
+.barre-cuisiner {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  padding: 8px max(20px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  background: var(--surface);
+  box-shadow: var(--ombre-haute);
+}
+
+.vue.entree > .barre-cuisiner { animation: apparait 0.22s ease-out; }
+
+.barre-cuisiner-contenu {
+  display: grid;
+  /* « ‹ » étroit (76 px), l'action principale prend le reste : les deux tiers au moins, même en police agrandie. */
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  max-width: calc(var(--largeur) - 40px);
+  margin: 0 auto;
+}
+
+.barre-cuisiner .bouton {
+  min-height: 56px;
+  padding: 4px 12px;
+  /* Police très agrandie : le libellé grandit tant qu'un mot tient sur la largeur (7,5 % de l'écran), puis passe à la
+     ligne (la barre grandit), jamais coupé. */
+  font-size: min(1.25rem, max(20px, 7.5vw));
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.barre-cuisiner .bouton-cuisine-precedent { font-size: 1.75rem; }
+
+/* « ↓ La suite plus bas » : petite étiquette au-dessus de la barre tant que la suite est cachée. */
+.cuisiner-suite {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 4px 14px;
+  border: 1px solid var(--bordure);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--ombre);
+  color: var(--texte);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* « ‹ » garde sa place là où il n'a pas de sens (rien ne bouge sous le doigt). */
+.bouton-cuisine-precedent.sans-objet { visibility: hidden; }
+
+/* Paysage (hauteur < 480 px) : barre de 56 px. */
+@media (max-height: 480px) {
+  .barre-cuisiner { padding-top: 4px; padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
+  .barre-cuisiner .bouton { min-height: 48px; }
+  .vue.cuisiner { gap: 10px; }
+}
+
+/* Fiche et feuille du plat de la semaine : « 👩‍🍳 Cuisiner pas à pas ». */
+.bouton-cuisiner { margin-top: 8px; }

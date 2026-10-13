@@ -4,16 +4,17 @@ export const ROUTE_PAR_DEFAUT = 'semaine';
 
 // Écrans connus, et ceux réservés au gestionnaire.
 // `accueil` : la présentation de première ouverture (T6-0), pour les deux rôles (« Revoir la présentation »).
+// `cuisiner` : « Cuisiner pas à pas » d'un plat (T5-1), pour les deux rôles.
 const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'modifier', 'decouvrir', 'reglages', 'import', 'restaurer', 'regime',
-  'demandes', 'accueil'];
+  'demandes', 'accueil', 'cuisiner'];
 const ROUTES_GESTIONNAIRE = ['reglages', 'import', 'restaurer', 'regime', 'demandes'];
 
-// Écrans qui reçoivent un identifiant : « #/plat/<id> » et « #/modifier/<id> » (plat, obligatoire),
-// « #/import/<id> » (plat, facultatif), « #/regime/<profilId> » (profil, obligatoire).
-export const ROUTES_AVEC_PARAMETRE = ['plat', 'modifier', 'import', 'regime'];
-const ROUTES_PARAMETRE_OBLIGATOIRE = ['plat', 'modifier', 'regime'];
+// Écrans qui reçoivent un identifiant : « #/plat/<id> », « #/modifier/<id> » et « #/cuisiner/<id> » (plat,
+// obligatoire), « #/import/<id> » (plat, facultatif), « #/regime/<profilId> » (profil, obligatoire).
+export const ROUTES_AVEC_PARAMETRE = ['plat', 'modifier', 'import', 'regime', 'cuisiner'];
+const ROUTES_PARAMETRE_OBLIGATOIRE = ['plat', 'modifier', 'regime', 'cuisiner'];
 // Écran de repli quand l'identifiant obligatoire manque : la liste d'où l'on vient.
-const REPLI = { plat: 'plats', modifier: 'plats', regime: 'reglages' };
+const REPLI = { plat: 'plats', modifier: 'plats', regime: 'reglages', cuisiner: 'plats' };
 const PARAMETRE_VALIDE = /^[a-z0-9-]+$/;
 
 /** Adresse comparable : sans espaces autour, en minuscules ; '' si absente. */

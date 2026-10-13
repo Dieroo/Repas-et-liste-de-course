@@ -122,3 +122,17 @@ test('routes : « Demandes » réservée au gestionnaire, sans paramètre ; aill
   assert.equal(resoudreRoute('#/demandes/gratin-test', 'gestionnaire'), 'demandes');
   assert.equal(parametreDe('#/demandes/gratin-test', 'demandes'), '');
 });
+
+test('routes : « Cuisiner pas à pas » pour les deux rôles, identifiant du plat obligatoire (T5-1)', () => {
+  for (const role of ['gestionnaire', 'courses']) {
+    assert.equal(routeAutorisee('cuisiner', role), true, role);
+    assert.equal(resoudreRoute('#/cuisiner/gratin-test', role), 'cuisiner', role);
+    // Sans identifiant valide : la liste des plats, comme pour la fiche.
+    assert.equal(resoudreRoute('#/cuisiner', role), 'plats', role);
+    assert.equal(resoudreRoute('#/cuisiner/Majuscules', role), 'plats', role);
+  }
+  assert.equal(resoudreRoute('#/cuisiner/gratin-test', roleEffectif('gestionnaire', true)), 'cuisiner');
+  assert.equal(resoudreRoute('#/cuisiner/gratin-test', null), 'semaine');
+  assert.equal(parametreDe('#/cuisiner/gratin-test', 'cuisiner'), 'gratin-test');
+  assert.equal(parametreDe('#/cuisiner/gratin-test', 'plat'), '');
+});
