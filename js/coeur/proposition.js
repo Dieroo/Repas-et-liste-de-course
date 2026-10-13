@@ -584,8 +584,6 @@ export function peutChangerDIdee(semaine, plat) {
 export const TEXTES_PROPOSER = Object.freeze({
   emoji: '✨',
   texteCarte: 'Laissez l’app proposer, ou choisissez vous-même\u00A0: la liste de courses se fait toute seule.',
-  toucherPlat: 'Touchez un plat pour le changer.',
-  toucherDessert: 'Touchez un dessert pour le changer.',
   pasDAutreDessert: 'Il n’y avait pas d’autre dessert à proposer.',
   complet: 'Les plats de la semaine sont déjà choisis.',
   causes: Object.freeze({
@@ -712,24 +710,27 @@ function phraseCause(cause, profilCause, contexteTexte) {
 }
 
 /**
- * Annonce d'une proposition (plats ou desserts), deux phrases au plus. `resultat` : proposerPlats ou proposerDesserts,
- * dont `choisis` ne garde que les plats vraiment ajoutés (le nombre annoncé est le leur) ; `restes` : nombre (ou liste)
- * d'articles pas pris partis avec le lot.
- * Phrase 1 : « 4 plats proposés pour cette semaine : 2 que vous aimez, 2 à découvrir. », « Un plat proposé pour la
- * semaine du 17 au 23 octobre. », « 2 desserts proposés… » ; « que vous aimez » seulement pour les plats que `moi` a
- * notés 4 ou 5, les autres aimés (et tous, sans `moi`) : « 1 aimé à la maison » ;
- * composition omise si un seul groupe montré (aimé, à découvrir) y figure.
- * Phrase 2, la première qui s'applique : moins que voulu (plats : la cause ; desserts : « Il n’y avait pas d’autre
- * dessert à proposer. ») ; un plat du palier 3 (« Un plat n’a pas encore de version pour Adulte B : c’est écrit sur sa
- * carte. ») ; les restes ; sinon « Touchez un plat pour le changer. ».
+ * Annonce d'une proposition (plats ou desserts), deux phrases au plus, courte : elle passe sur les cartes qu'elle
+ * annonce (retour du propriétaire, 2026-10-13 : « l'étiquette blanche prend trop de place »). `resultat` : proposerPlats
+ * ou proposerDesserts, dont `choisis` ne garde que les plats vraiment ajoutés (le nombre annoncé est le leur).
+ * Phrase 1 : « 4 plats proposés : 2 que vous aimez, 2 à découvrir. », « Un plat proposé. », « 2 desserts proposés… » ;
+ * « que vous aimez » seulement pour les plats que `moi` a notés 4 ou 5, les autres aimés (et tous, sans `moi`) :
+ * « 1 aimé à la maison » ; composition omise si un seul groupe montré (aimé, à découvrir) y figure.
+ * Phrase 2, seulement si elle apprend quelque chose, la première qui s'applique : moins que voulu (plats : la cause ;
+ * desserts : « Il n’y avait pas d’autre dessert à proposer. ») ; un plat du palier 3 (« Un plat n’a pas encore de
+ * version pour Adulte B : c’est écrit sur sa carte. »). Sinon, rien (plus de « Touchez un plat pour le changer. »).
+ * Ni dates ni restes, quel que soit le chemin, car rien de neuf : la semaine proposée est toujours, ensuite, celle que
+ * Semaine montre, ses dates en titre juste au-dessus du bandeau (une semaine qui commence plus tard passe devant dès son
+ * premier plat), et ses dates étaient sur le bouton touché (« Préparer la semaine du 17 au 23 octobre ») et en tête de
+ * la feuille ; les articles pas pris de la semaine qui finit ne partent qu'avec une proposition faite depuis la feuille
+ * qui vient de le dire (« Il reste 4 articles… Ils passeront sur la nouvelle liste. », avec « Ne pas les garder »).
  */
-export function annonceProposition(resultat, { cible = null, aujourdhui = null, moi = null, profils = [], restes = 0 } = {}) {
+export function annonceProposition(resultat, { moi = null, profils = [] } = {}) {
   const dessert = resultat?.type === 'dessert';
   const mot = dessert ? 'dessert' : 'plat';
   const choisis = listeDe(resultat?.choisis).length ? listeDe(resultat.choisis)
     : listeDe(resultat?.ids).map((platId) => ({ platId, groupe: 'autre', palier: 1, ecartes: [] }));
   const n = choisis.length;
-  const pour = plusTard(cible, aujourdhui) ? `pour la semaine ${texteDates(cible.debut, cible.fin)}` : 'pour cette semaine';
   const combien = n === 1 ? `Un ${mot} proposé` : `${n}\u00A0${mot}s proposés`;
   const aimes = choisis.filter((c) => c.groupe === 'aime');
   // « que vous aimez » : seulement les plats que la personne connectée a notés 4 ou 5 ; les autres aimés le sont « à
@@ -741,7 +742,7 @@ export function annonceProposition(resultat, { cible = null, aujourdhui = null, 
   if (vous) parties.push(`${vous}\u00A0que vous aimez`);
   if (maison) parties.push(`${maison}\u00A0${maison > 1 ? 'aimés' : 'aimé'} à la maison`);
   if (decouvrir) parties.push(`${decouvrir}\u00A0à découvrir`);
-  const phrase1 = parties.length > 1 ? `${combien} ${pour}\u00A0: ${parties.join(', ')}.` : `${combien} ${pour}.`;
+  const phrase1 = parties.length > 1 ? `${combien}\u00A0: ${parties.join(', ')}.` : `${combien}.`;
   const contexteTexte = { moi, profils };
   let phrase2 = null;
   if (resultat?.code === 'peu') {
@@ -751,14 +752,7 @@ export function annonceProposition(resultat, { cible = null, aujourdhui = null, 
     const ecarte = choisis.find((c) => c.palier === 3 && listeDe(c.ecartes).length);
     if (ecarte) phrase2 = phraseEcarte(ecarte.ecartes[0], mot, contexteTexte);
   }
-  const nbRestes = Array.isArray(restes) ? restes.length : Number.isInteger(restes) && restes > 0 ? restes : 0;
-  if (!phrase2 && nbRestes) {
-    phrase2 = nbRestes === 1
-      ? 'L’article pas pris de la semaine qui finit passe sur la nouvelle liste.'
-      : `Les ${nbRestes}\u00A0articles pas pris de la semaine qui finit passent sur la nouvelle liste.`;
-  }
-  if (!phrase2) phrase2 = dessert ? TEXTES_PROPOSER.toucherDessert : TEXTES_PROPOSER.toucherPlat;
-  return `${phrase1} ${phrase2}`;
+  return phrase2 ? `${phrase1} ${phrase2}` : phrase1;
 }
 
 /**

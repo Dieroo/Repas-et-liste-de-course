@@ -546,29 +546,59 @@ const choisi = (groupe, palier = 1, ecartes = [], aimePar = ['profil-a']) => ({
 });
 const resultat = (choisis, extra = {}) => ({ type: 'plat', ids: choisis.map((c) => c.platId), choisis, code: 'ok', cause: null, profilCause: null, ...extra });
 
-test('annonceProposition : phrase 1 (nombre, dates, composition, sans moi, singulier)', () => {
+test('annonceProposition : phrase 1 (nombre, composition, sans moi, singulier)', () => {
   const quatre = resultat([choisi('aime'), choisi('aime'), choisi('decouvrir'), choisi('decouvrir')]);
-  assert.equal(annonceProposition(quatre, { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' }),
-    '4\u00A0plats proposés pour cette semaine\u00A0: 2\u00A0que vous aimez, 2\u00A0à découvrir. Touchez un plat pour le changer.');
-  assert.equal(annonceProposition(quatre, { profils: PROFILS, cible: SUIVANTE, aujourdhui: '2026-10-17' }),
-    '4\u00A0plats proposés pour la semaine du 19 au 25 octobre\u00A0: 2\u00A0aimés à la maison, 2\u00A0à découvrir. Touchez un plat pour le changer.');
-  assert.equal(annonceProposition(resultat([choisi('aime')]), { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' }),
-    'Un plat proposé pour cette semaine. Touchez un plat pour le changer.');
-  assert.equal(annonceProposition(resultat([choisi('aime'), choisi('autre')]), { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' }),
-    '2\u00A0plats proposés pour cette semaine. Touchez un plat pour le changer.', 'un seul groupe montré');
-  assert.equal(annonceProposition(resultat([choisi('aime'), choisi('decouvrir'), choisi('decouvrir')]), { profils: PROFILS, cible: CIBLE, aujourdhui: '2026-10-12' }),
-    '3\u00A0plats proposés pour cette semaine\u00A0: 1\u00A0aimé à la maison, 2\u00A0à découvrir. Touchez un plat pour le changer.');
+  // Jamais « pour cette semaine » (retour du propriétaire, 2026-10-13 : annonce plus courte).
+  assert.equal(annonceProposition(quatre, TXT), '4\u00A0plats proposés\u00A0: 2\u00A0que vous aimez, 2\u00A0à découvrir.');
+  assert.equal(annonceProposition(quatre, { profils: PROFILS }), '4\u00A0plats proposés\u00A0: 2\u00A0aimés à la maison, 2\u00A0à découvrir.');
+  assert.equal(annonceProposition(resultat([choisi('aime')]), TXT), 'Un plat proposé.');
+  assert.equal(annonceProposition(resultat([choisi('aime'), choisi('autre')]), TXT), '2\u00A0plats proposés.', 'un seul groupe montré');
+  assert.equal(annonceProposition(resultat([choisi('aime'), choisi('decouvrir'), choisi('decouvrir')]), { profils: PROFILS }),
+    '3\u00A0plats proposés\u00A0: 1\u00A0aimé à la maison, 2\u00A0à découvrir.');
   // Un plat que seul un autre membre aime n'est jamais « que vous aimez ».
   const melange = resultat([choisi('aime', 1, [], ['profil-b']), choisi('aime', 1, [], ['profil-a', 'profil-b']), choisi('decouvrir'), choisi('decouvrir')]);
-  assert.equal(annonceProposition(melange, { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' }),
-    '4\u00A0plats proposés pour cette semaine\u00A0: 1\u00A0que vous aimez, 1\u00A0aimé à la maison, 2\u00A0à découvrir. Touchez un plat pour le changer.');
+  assert.equal(annonceProposition(melange, TXT), '4\u00A0plats proposés\u00A0: 1\u00A0que vous aimez, 1\u00A0aimé à la maison, 2\u00A0à découvrir.');
   const autres = resultat([choisi('aime', 1, [], ['profil-b']), choisi('aime', 1, [], ['enfant']), choisi('decouvrir')]);
-  assert.equal(annonceProposition(autres, { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' }),
-    '3\u00A0plats proposés pour cette semaine\u00A0: 2\u00A0aimés à la maison, 1\u00A0à découvrir. Touchez un plat pour le changer.');
+  assert.equal(annonceProposition(autres, TXT), '3\u00A0plats proposés\u00A0: 2\u00A0aimés à la maison, 1\u00A0à découvrir.');
+  assert.equal(annonceProposition(resultat([choisi('decouvrir'), choisi('decouvrir')])), '2\u00A0plats proposés.');
 });
 
-test('annonceProposition : phrase 2 (cause, palier 3 vu par l’écarté, par un autre, Enfant, « Jamais » de l’enfant ; restes 1 et N)', () => {
-  const base = { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' };
+test('annonceProposition : ni dates ni restes, quel que soit le chemin (Semaine montre ensuite la semaine proposée)', () => {
+  // Relecture du 2026-10-13 : depuis « Préparer la semaine du 17 au 23 octobre », l'annonce disait encore les dates et
+  // les restes (186 caractères, 10 lignes en police agrandie, posées sur le premier plat proposé) ; ses dates sont le
+  // titre de Semaine juste au-dessus du bandeau et étaient sur le bouton touché, ses restes, la feuille venait de les
+  // dire. Les anciennes options (`cible`, `aujourdhui`, `restes`) ne changent plus rien.
+  const deux = resultat([choisi('aime'), choisi('decouvrir')]);
+  const attendu = '2\u00A0plats proposés\u00A0: 1\u00A0que vous aimez, 1\u00A0à découvrir.';
+  for (const options of [
+    { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' },
+    { ...TXT, cible: SUIVANTE, aujourdhui: '2026-10-17' },
+    { ...TXT, cible: SUIVANTE, aujourdhui: '2026-10-17', restes: 4 },
+    { ...TXT, restes: [{ id: 'r' }] },
+  ]) assert.equal(annonceProposition(deux, options), attendu, JSON.stringify(options));
+  const dessert = { ...resultat([choisi('aime')]), type: 'dessert' };
+  assert.equal(annonceProposition(dessert, { ...TXT, cible: SUIVANTE, aujourdhui: '2026-10-17', restes: 2 }), 'Un dessert proposé.');
+});
+
+test('annonceProposition : aucune phrase d’aide par défaut (plats et desserts)', () => {
+  const dessertR = (choisis) => ({ ...resultat(choisis), type: 'dessert' });
+  for (const r of [
+    resultat([choisi('aime'), choisi('decouvrir')]),
+    resultat([choisi('aime')]),
+    dessertR([choisi('aime'), choisi('decouvrir')]),
+    dessertR([choisi('decouvrir')]),
+  ]) {
+    const texte = annonceProposition(r, TXT);
+    assert.doesNotMatch(texte, /Touchez/, texte);
+    assert.equal(texte.split('. ').length, 1, `une seule phrase : ${texte}`);
+    assert.ok(texte.endsWith('.'), texte);
+  }
+  assert.equal(TEXTES_PROPOSER.toucherPlat, undefined, 'texte devenu inutile, retiré');
+  assert.equal(TEXTES_PROPOSER.toucherDessert, undefined, 'texte devenu inutile, retiré');
+});
+
+test('annonceProposition : phrase 2 (cause, palier 3 vu par l’écarté, par un autre, Enfant, « Jamais » de l’enfant)', () => {
+  const base = TXT;
   const deux = [choisi('aime'), choisi('decouvrir')];
   const fin = (r, o = base) => annonceProposition(r, o).split('. ').slice(1).join('. ');
   assert.equal(fin(resultat(deux, { code: 'peu', cause: 'versions', profilCause: 'profil-b' })), 'Les autres plats n’ont pas encore de version pour Adulte B.');
@@ -584,24 +614,27 @@ test('annonceProposition : phrase 2 (cause, palier 3 vu par l’écarté, par un
   assert.equal(fin(resultat(ecarteE)), 'Un plat n’est pas encore pour Enfant\u00A0: c’est écrit sur sa carte.');
   const jamaisE = [choisi('aime'), choisi('autre', 3, [{ profilId: 'enfant', raison: 'jamaisEnfant' }])];
   assert.equal(fin(resultat(jamaisE)), 'Enfant a dit «\u00A0Jamais\u00A0» à un plat\u00A0: c’est écrit sur sa carte.');
-  // La cause passe avant le palier 3, le palier 3 avant les restes.
-  assert.equal(fin(resultat(ecarteB, { code: 'peu', cause: 'recettes' }), { ...base, restes: 3 }), 'Les autres plats n’ont pas encore leur recette.');
-  assert.equal(fin(resultat(ecarteB), { ...base, restes: 3 }), 'Un plat n’a pas encore de version pour Adulte B\u00A0: c’est écrit sur sa carte.');
-  assert.equal(fin(resultat(deux), { ...base, restes: 3 }), 'Les 3\u00A0articles pas pris de la semaine qui finit passent sur la nouvelle liste.');
-  assert.equal(fin(resultat(deux), { ...base, restes: [{ id: 'r' }] }), 'L’article pas pris de la semaine qui finit passe sur la nouvelle liste.');
+  // La cause passe avant le palier 3 ; sans l'une ni l'autre, une seule phrase.
+  assert.equal(fin(resultat(ecarteB, { code: 'peu', cause: 'recettes' })), 'Les autres plats n’ont pas encore leur recette.');
+  assert.equal(fin(resultat(deux)), '');
+  // Textes entiers : la seconde phrase suit la première.
+  assert.equal(annonceProposition(resultat(deux, { code: 'peu', cause: 'versions', profilCause: 'profil-b' }), base),
+    '2\u00A0plats proposés\u00A0: 1\u00A0que vous aimez, 1\u00A0à découvrir. Les autres plats n’ont pas encore de version pour Adulte B.');
+  assert.equal(annonceProposition(resultat(ecarteE), base),
+    '2\u00A0plats proposés. Un plat n’est pas encore pour Enfant\u00A0: c’est écrit sur sa carte.', 'un seul groupe montré');
 });
 
-test('annonceProposition des desserts : pluriel, singulier, dates, moins que choisi, palier 3', () => {
+test('annonceProposition des desserts : pluriel, singulier, moins que choisi, palier 3', () => {
   const dessertR = (choisis, extra = {}) => ({ ...resultat(choisis, extra), type: 'dessert' });
-  const base = { ...TXT, cible: CIBLE, aujourdhui: '2026-10-12' };
-  assert.equal(annonceProposition(dessertR([choisi('aime'), choisi('decouvrir')]), base),
-    '2\u00A0desserts proposés pour cette semaine\u00A0: 1\u00A0que vous aimez, 1\u00A0à découvrir. Touchez un dessert pour le changer.');
-  assert.equal(annonceProposition(dessertR([choisi('aime')]), { ...base, cible: { id: 'x', debut: '2026-10-17', fin: '2026-10-23' }, aujourdhui: '2026-10-15' }),
-    'Un dessert proposé pour la semaine du 17 au 23 octobre. Touchez un dessert pour le changer.');
-  assert.equal(annonceProposition(dessertR([choisi('aime')], { code: 'peu', cause: 'versions', profilCause: 'profil-b' }), base),
-    'Un dessert proposé pour cette semaine. Il n’y avait pas d’autre dessert à proposer.');
-  assert.equal(annonceProposition(dessertR([choisi('autre', 3, [{ profilId: 'profil-a', raison: 'version' }])]), base),
-    'Un dessert proposé pour cette semaine. Un dessert n’a pas encore de version pour vous\u00A0: c’est écrit sur sa carte.');
+  assert.equal(annonceProposition(dessertR([choisi('aime'), choisi('decouvrir')]), TXT), '2\u00A0desserts proposés\u00A0: 1\u00A0que vous aimez, 1\u00A0à découvrir.');
+  assert.equal(annonceProposition(dessertR([choisi('aime')]), TXT), 'Un dessert proposé.');
+  assert.equal(annonceProposition(dessertR([choisi('aime')], { code: 'peu', cause: 'versions', profilCause: 'profil-b' }), TXT),
+    'Un dessert proposé. Il n’y avait pas d’autre dessert à proposer.');
+  assert.equal(annonceProposition(dessertR([choisi('autre', 3, [{ profilId: 'profil-a', raison: 'version' }])]), TXT),
+    'Un dessert proposé. Un dessert n’a pas encore de version pour vous\u00A0: c’est écrit sur sa carte.');
+  // Dessert manquant avant le palier 3.
+  assert.equal(annonceProposition(dessertR([choisi('autre', 3, [{ profilId: 'profil-a', raison: 'version' }])], { code: 'peu', cause: 'catalogue' }), TXT),
+    'Un dessert proposé. Il n’y avait pas d’autre dessert à proposer.');
 });
 
 test('texteSansProposition : recettes, versions (vous ou prénom), récents ; null pour catalogue, « Jamais » et âge', () => {
@@ -735,6 +768,21 @@ test('proposerPlats avec `plafond` (chemin du bouton) : le libellé déjà rédu
   assert.deepEqual(plafonne.choisis.map((c) => c.groupe), ['aime', 'decouvrir']);
   // Sans plafond, comme avant.
   assert.equal(proposerPlats(RICHE, opts({ nombre: 4 })).ids.length, 4);
+});
+
+test('annonce de « Proposer » (✨ et 🍰) : 10 s, une seule durée voulue ; les autres annonces gardent 8 s et 3,5 s', async () => {
+  // Retour du propriétaire (2026-10-13) : 30 s, c'était trop long. La durée vit dans js/app.js (écran), lue ici.
+  const app = await readFile(new URL('../js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /^const DUREE_ANNONCE_PROPOSITION_MS = 10000;$/m);
+  // Seuls les appels d'`annoncer` comptent (une autre `duree:` d'app.js, minuteur d'une étape par exemple, n'est pas une
+  // annonce) : un seul choisit sa durée, celui de la proposition.
+  const annonces = app.match(/\bannoncer\([^;]*?\bduree:/gs) ?? [];
+  assert.equal(annonces.length, 1, `seule l'annonce de la proposition choisit sa durée : ${annonces.join(' | ')}`);
+  assert.match(app, /annoncer\(texte, \{\s*action: \{ libelle: 'Annuler'[^;]*?duree: DUREE_ANNONCE_PROPOSITION_MS,/s);
+  assert.match(app, /duree: DUREE_ANNONCE_PROPOSITION_MS,/);
+  const dom = await readFile(new URL('../js/ui/dom.js', import.meta.url), 'utf8');
+  assert.match(dom, /^const DUREE_ANNONCE_MS = 3500;$/m);
+  assert.match(dom, /^const DUREE_ANNONCE_ACTION_MS = 8000;$/m);
 });
 
 // ——— Carte « prochaine action » ———
