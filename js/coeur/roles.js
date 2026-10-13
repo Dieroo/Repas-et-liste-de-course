@@ -3,8 +3,9 @@
 export const ROUTE_PAR_DEFAUT = 'semaine';
 
 // Écrans connus, et ceux réservés au gestionnaire.
+// `accueil` : la présentation de première ouverture (T6-0), pour les deux rôles (« Revoir la présentation »).
 const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'modifier', 'decouvrir', 'reglages', 'import', 'restaurer', 'regime',
-  'demandes'];
+  'demandes', 'accueil'];
 const ROUTES_GESTIONNAIRE = ['reglages', 'import', 'restaurer', 'regime', 'demandes'];
 
 // Écrans qui reçoivent un identifiant : « #/plat/<id> » et « #/modifier/<id> » (plat, obligatoire),
