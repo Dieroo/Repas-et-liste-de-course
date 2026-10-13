@@ -13,6 +13,9 @@
 //   sous 3 par un mangeur ne prend jamais un emplacement de groupe.
 // - Score : moyenne des notes des mangeurs (non noté = 3) + ancienneté − variété (même protéine, même forme) + un
 //   départage faible (BRUIT_MAX), ordre total.
+// - Légumes (2026-10-13) : au moins LEGUMES_MIN plat avec des légumes (aDesLegumes) dans la cible après ✨, plats de la
+//   cible compris ; sinon échange déterministe d'un plat retenu (même groupe d'abord) ; « 🔄 » garde des légumes quand
+//   l'ancien plat était le seul à en avoir. Jamais pour les desserts.
 // - Aucune écriture ici : semaine.js › ecrituresAjoutGroupe, ecrituresRetraitGroupe, ecrituresRemplacement.
 import {
   RANGS_STATUT, aDesPlats, ajouterJours, ecartJours, estDansLaSemaine, jourDeDerniereFois, jourValide, lireSemaine,
@@ -22,7 +25,8 @@ import { estNote, melanger, noteDe, noteRetenue } from './notes.js';
 import { aSaRecette, categorieDuPlat, typeDe } from './plats.js';
 import { estEnfant, trierProfils } from './profils.js';
 import { evaluer as evaluerParDefaut } from './compatibilite.js';
-import { marqueursEffectifs } from './vocabulaire.js';
+import { code as codeDe, marqueursEffectifs, nombre as lireNombre } from './vocabulaire.js';
+import { cleProduit } from './slug.js';
 
 // ——— Constantes ———
 
@@ -56,8 +60,48 @@ export const NOTE_AIMEE = 4;
 export const NOTE_PLANCHER = 3;
 /** Desserts (D6) : choix de 1 à DESSERTS_MAX dans la feuille « Combien de desserts ? ». */
 export const DESSERTS_MAX = 4;
+/** Légumes (2026-10-13) : plats avec des légumes au moins, dans la cible après « ✨ Proposer » (plats seulement). */
+export const LEGUMES_MIN = 1;
+/** Une portion de légumes (PNNS) : grammes de légumes non aromatiques par portion de la recette (`portionsBase`). */
+export const PORTION_LEGUMES_G = 80;
+/**
+ * Une demi-portion (relecture du 2026-10-13) : un légume principal (a) ou nommé dans le plat (b) dont la quantité se
+ * lit doit en peser autant par portion (une garniture de burger ou de pizza ne suffit pas).
+ */
+export const LEGUME_VISIBLE_G = 40;
+/** Une boîte de légumes, en grammes. */
+export const GRAMMES_PAR_BOITE = 400;
+/** Légumes aromatiques (premier mot de la clé du produit, slug.js › cleProduit) : jamais comptés comme légumes. */
+export const LEGUMES_AROMATIQUES = Object.freeze(['oignon', 'echalote', 'ail', 'cive', 'ciboule']);
+/**
+ * Bases de sauce tomate (relecture du 2026-10-13) : début de la clé du produit (cleProduit, mot entier). Comme les
+ * aromatiques, jamais comptées : une bolognaise, des lasagnes ou un chili ne sont pas des plats « avec des légumes »
+ * pour leur boîte de tomates. Les tomates fraîches comptent (« tomate », « tomate cerise »).
+ */
+export const BASES_DE_SAUCE = Object.freeze([
+  'tomate-concassee', 'tomate-pelee', 'tomate-sechee', 'tomate-en-conserve', 'concassee', 'pulpe', 'couli',
+  'puree-de-tomate', 'concentre', 'double-concentre', 'sauce', 'passata', 'ketchup',
+]);
+/**
+ * Poids moyen d'un légume à la pièce (`pc`), en grammes, par clé de produit : la plus longue suite de premiers mots de
+ * sa clé trouvée ici (« chou-fleur » 800, « chou rouge » → chou 1000, « courge butternut » → courge). Clés au format
+ * cleProduit (« panais » → panai, « radis » → radi). Un légume absent : sa quantité en pièces ne compte pas. Ni pomme
+ * de terre ni patate douce : des féculents, jamais des légumes ici.
+ */
+export const POIDS_PIECE_LEGUMES = Object.freeze({
+  carotte: 100, courgette: 200, aubergine: 250, poivron: 150, tomate: 120, 'tomate-cerise': 15, poireau: 150,
+  navet: 100, panai: 150, betterave: 150, fenouil: 250, concombre: 300, brocoli: 400, 'chou-fleur': 800, chou: 1000,
+  'chou-de-bruxelle': 15, 'celeri-rave': 600, potimarron: 1000, courge: 1000, artichaut: 300,
+  endive: 100, laitue: 300, champignon: 20, radi: 15, 'radi-noir': 250, asperge: 20,
+});
 
 const ID_SUR = /^[a-z0-9-]+$/;
+/** Mots d'un produit qui ne disent pas le légume (couleur, état) : jamais cherchés dans le nom du plat. */
+const MOTS_QUALIFICATIFS = new Set([
+  'rouge', 'vert', 'verte', 'blanc', 'blanche', 'jaune', 'noir', 'noire', 'frai', 'fraiche', 'nouveau', 'nouvelle',
+  'petit', 'petite', 'grand', 'grande', 'grosse', 'douce', 'surgele', 'surgelee', 'hache', 'hachee', 'rape', 'rapee',
+  'emince', 'emincee', 'cuit', 'cuite', 'entier', 'entiere', 'pele', 'pelee', 'concasse', 'concassee', 'seche', 'sechee',
+]);
 const PROTEINES = ['poisson', 'boeuf', 'porc', 'volaille', 'agneau', 'viande'];
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 const listeDe = (valeur) => (Array.isArray(valeur) ? valeur : []);
@@ -215,6 +259,90 @@ function formeDe(plat) {
   return categorie === 'gratin' || categorie === 'pates' ? categorie : null;
 }
 
+// ——— Légumes (2026-10-13) ———
+
+/** Mots d'un nom au format cleProduit : « Purée de carottes » → ['puree', 'de', 'carotte']. */
+const motsCles = (texte) => cleProduit(typeof texte === 'string' ? texte : '').split('-').filter(Boolean);
+
+/** Vrai si la clé `cle` est `prefixe` ou commence par `prefixe` suivi d'un autre mot (« sauce-tomate », jamais « saucisse »). */
+const commencePar = (cle, prefixe) => cle === prefixe || cle.startsWith(`${prefixe}-`);
+
+/**
+ * Légume aromatique : premier mot de la clé parmi LEGUMES_AROMATIQUES (« oignon rouge », « ail des ours » ; jamais
+ * « aile de poulet »), ou « gousse d'ail », « petit oignon » (le premier mot dit la forme ou la taille).
+ */
+function estAromatique(mots) {
+  if (LEGUMES_AROMATIQUES.includes(mots[0])) return true;
+  return (mots[0] === 'gousse' || mots[0] === 'petit') && mots.slice(1).some((m) => LEGUMES_AROMATIQUES.includes(m));
+}
+
+/**
+ * Jamais un légume compté, même marqué `legume` : un aromatique (estAromatique), une base de sauce tomate
+ * (BASES_DE_SAUCE), un féculent par son nom (pomme de terre, « patate », patate douce : comme les produits courants).
+ */
+function nonCompte(mots) {
+  const cle = mots.join('-');
+  return estAromatique(mots) || mots[0] === 'patate' || commencePar(cle, 'pomme-de-terre')
+    || BASES_DE_SAUCE.some((prefixe) => commencePar(cle, prefixe));
+}
+
+/** Poids d'un légume à la pièce : la plus longue suite de premiers mots de sa clé dans POIDS_PIECE_LEGUMES ; null sinon. */
+function poidsALaPiece(mots) {
+  for (let n = mots.length; n > 0; n -= 1) {
+    const cle = mots.slice(0, n).join('-');
+    if (Object.hasOwn(POIDS_PIECE_LEGUMES, cle)) return POIDS_PIECE_LEGUMES[cle];
+  }
+  return null;
+}
+
+/**
+ * Grammes d'un légume de la recette : g et kg tels quels, `boite` ≈ GRAMMES_PAR_BOITE, `pc` par POIDS_PIECE_LEGUMES ;
+ * null si la quantité ne se lit pas (autre unité, pièce de poids inconnu, quantité illisible).
+ */
+function grammesDe(ingredient, mots) {
+  const qte = lireNombre(ingredient.qte);
+  if (!Number.isFinite(qte) || qte <= 0) return null;
+  const unite = codeDe(ingredient.unite);
+  if (unite === 'g') return qte;
+  if (unite === 'kg') return qte * 1000;
+  if (unite === 'boite') return qte * GRAMMES_PAR_BOITE;
+  const poids = unite === 'pc' ? poidsALaPiece(mots) : null;
+  return poids === null ? null : qte * poids;
+}
+
+/**
+ * Vrai si la recette (jamais ses versions) a des légumes, pour l'équilibre des propositions (demande de l'utilisatrice
+ * des courses, 2026-10-13 : « au moins un, même si c'est une purée »). Légume compté : marqueur effectif `legume`, ni
+ * `feculent`, ni nonCompte (aromatique, base de sauce tomate, pomme de terre ou patate douce : des féculents, même en
+ * purée). Il suffit d'un légume compté qui remplit l'une des conditions :
+ * (a) `role: 'principal'` (il se voit et se mange tel quel : ratatouille, poêlée, gratin de courgettes) ;
+ * (b) un mot de son produit de 4 lettres ou plus (clé cleProduit : sans accents, pluriel près ; ni couleur ni état,
+ *     MOTS_QUALIFICATIFS) est un mot du nom du plat : « Purée de carottes », « Velouté de butternut » ;
+ *     pour (a) et (b), le légume pèse LEGUME_VISIBLE_G par portion ou plus quand sa quantité et les portions se lisent
+ *     (sinon il compte sans quantité) : une rondelle de tomate de burger ne suffit pas ;
+ * (c) les légumes comptés pèsent PORTION_LEGUMES_G par portion ou plus (`portionsBase` lisible ; grammesDe).
+ */
+export function aDesLegumes(plat) {
+  if (!estObjet(plat)) return false;
+  const motsDuNom = new Set(motsCles(plat.nom));
+  const portions = lireNombre(plat.portionsBase);
+  const portionsLues = Number.isFinite(portions) && portions > 0;
+  let grammes = 0;
+  for (const ingredient of listeDe(plat.ingredients)) {
+    if (!estObjet(ingredient)) continue;
+    const marqueurs = marqueursEffectifs(ingredient);
+    if (!marqueurs.has('legume') || marqueurs.has('feculent')) continue;
+    const mots = motsCles(ingredient.produit);
+    if (!mots.length || nonCompte(mots)) continue;
+    const poids = grammesDe(ingredient, mots);
+    const visible = poids === null || !portionsLues || arrondi(poids / portions) >= LEGUME_VISIBLE_G;
+    if (visible && codeDe(ingredient.role) === 'principal') return true;
+    if (visible && mots.some((m) => m.length >= 4 && !MOTS_QUALIFICATIFS.has(m) && motsDuNom.has(m))) return true;
+    grammes += poids ?? 0;
+  }
+  return portionsLues && arrondi(grammes / portions) >= PORTION_LEGUMES_G;
+}
+
 const ancienneteDe = (ecart) => (ecart === null ? BONUS_JAMAIS
   : Math.min(Math.floor(ecart / 7), SEMAINES_MAX) * BONUS_PAR_SEMAINE);
 const estRecent = (ecart) => ecart !== null && ecart <= JOURS_RECENTS;
@@ -254,7 +382,7 @@ function analyserPlat(plat, { profils, evaluer, passages, cible }) {
   return {
     platId: plat.id, plat, palier: ecartes.length ? 3 : recent ? 2 : 1, groupe, jamaisAuMenu, moyenne,
     mangeurs: mangeurs.map((p) => p.id), ecartes, ecart, recent, aimePar,
-    proteine: proteineDe(plat), forme: formeDe(plat), base: arrondi(moyenne + ancienneteDe(ecart)),
+    proteine: proteineDe(plat), forme: formeDe(plat), legumes: aDesLegumes(plat), base: arrondi(moyenne + ancienneteDe(ecart)),
   };
 }
 
@@ -295,7 +423,7 @@ function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refus
 /**
  * Plats proposables pour la cible (filtre dur), avec palier, groupe et score de base → [{ platId, plat, palier: 1|2|3,
  * groupe: 'aime'|'decouvrir'|'autre', jamaisAuMenu, moyenne, mangeurs: [profilId], ecartes: [{ profilId, raison:
- * 'version'|'age'|'jamaisEnfant' }], ecart: n|null, recent, aimePar: [profilId], proteine, forme, base }], triés par
+ * 'version'|'age'|'jamaisEnfant' }], ecart: n|null, recent, aimePar: [profilId], proteine, forme, legumes, base }], triés par
  * identifiant. `type` : 'plat' | 'dessert' ; `refuses` : ids écartés pendant la visite (ancien plat d'un 🔄).
  */
 export function candidats(tousLesPlats, { cible, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [] } = {}) {
@@ -358,12 +486,17 @@ function meilleur(pool, palier, presents, rang) {
   return pool.map((c) => ({ ...c, score: scoreDe(c, presents, rang) })).sort(comparerDansLePalier(palier))[0];
 }
 
-/** Raison d'un plat retenu → { code: 'aime', profils } | { code: 'decouvrir' | 'ancien' | 'recent' | 'autre' }. */
+/**
+ * Raison d'un plat retenu → { code: 'aime', profils } | { code: 'decouvrir' | 'ancien' | 'recent' | 'autre' }, avec
+ * `legumes: true` pour un plat (jamais un dessert) qui a des légumes (aDesLegumes).
+ */
 function raisonDe(candidat) {
-  if (candidat.groupe === 'aime') return { code: 'aime', profils: [...candidat.aimePar] };
-  if (candidat.groupe === 'decouvrir') return { code: 'decouvrir' };
-  if (candidat.ecart !== null && Math.floor(candidat.ecart / 7) >= SEMAINES_ANCIEN) return { code: 'ancien' };
-  return { code: candidat.recent ? 'recent' : 'autre' };
+  let raison;
+  if (candidat.groupe === 'aime') raison = { code: 'aime', profils: [...candidat.aimePar] };
+  else if (candidat.groupe === 'decouvrir') raison = { code: 'decouvrir' };
+  else if (candidat.ecart !== null && Math.floor(candidat.ecart / 7) >= SEMAINES_ANCIEN) raison = { code: 'ancien' };
+  else raison = { code: candidat.recent ? 'recent' : 'autre' };
+  return candidat.legumes && typeDe(candidat.plat) === 'plat' ? { ...raison, legumes: true } : raison;
 }
 
 const choisi = (c) => ({
@@ -408,11 +541,10 @@ function causeDe(ctx) {
 }
 
 /** Remplit les emplacements (3.6 du plan) : palier par palier, groupe d'abord, puis tous groupes ; palier 3 limité. */
-function remplir(ctx, nombre, graine, type) {
+function remplir(ctx, nombre, rang, type) {
   const slots = emplacements(nombre);
   const pris = new Array(slots.length).fill(null);
   const utilises = new Set();
-  const rang = rangsDeDepartage(ctx.candidats, graine);
   const presents = presentsDeLaCible(ctx, type);
   let ecartes = ctx.ecartesCible;
   for (const palier of [1, 2, 3]) {
@@ -434,6 +566,47 @@ function remplir(ctx, nombre, graine, type) {
   return pris.filter(Boolean);
 }
 
+/** Plats de la cible avec des légumes : type `plat`, avec leur recette (`ok`), dont quelqu'un mange (sans profil : tous). */
+function legumesDeLaCible(ctx) {
+  const avecProfils = ctx.profils.length > 0;
+  return ctx.elementsCible.filter((e) => e.etat === 'ok' && e.plat && typeDe(e.plat) === 'plat' && aDesLegumes(e.plat)
+    && (!avecProfils || listeDe(e.mangeurs).some((m) => m.mange))).length;
+}
+
+/**
+ * Légumes (LEGUMES_MIN, plats seulement) : si ni la cible ni les plats retenus n'ont de plat avec des légumes, échange
+ * déterministe d'un retenu par un candidat avec des légumes pas encore retenu. Palier par palier (1, puis 2, puis 3,
+ * comme le remplissage : un plat que tout le monde mange passe toujours avant un plat que quelqu'un ne mange pas) :
+ * d'abord, du dernier retenu au premier, le meilleur candidat du palier de son groupe le remplace ; sinon, du dernier
+ * retenu au premier, le meilleur candidat du palier, tous groupes (l'ordre du palier, score face à la cible et aux
+ * autres retenus). Un candidat du palier 3 seulement si ECARTES_MAX le permet encore après l'échange (il peut toujours
+ * remplacer un retenu du palier 3). Aucun candidat : retenus inchangés.
+ */
+function avecDesLegumes(ctx, retenus, rang) {
+  if (!retenus.length || legumesDeLaCible(ctx) + retenus.filter((c) => c.legumes).length >= LEGUMES_MIN) return retenus;
+  const pris = new Set(retenus.map((c) => c.platId));
+  const pool = ctx.candidats.filter((c) => c.legumes && !pris.has(c.platId));
+  if (!pool.length) return retenus;
+  const ecartesRetenus = retenus.filter((c) => c.palier === 3).length;
+  const permis = (ancien, nouveau) => nouveau.palier < 3 || ancien.palier === 3
+    || ctx.ecartesCible + ecartesRetenus + 1 <= ECARTES_MAX;
+  const cible = presentsDeLaCible(ctx, 'plat');
+  const presentsSans = (i) => [...cible, ...retenus.filter((_, j) => j !== i).map((c) => ({ proteine: c.proteine, forme: c.forme }))];
+  const duDernierAuPremier = retenus.map((_, i) => retenus.length - 1 - i);
+  for (const palier of [1, 2, 3]) {
+    const duPalier = pool.filter((c) => c.palier === palier);
+    if (!duPalier.length) continue;
+    for (const parGroupe of [true, false]) {
+      for (const i of duDernierAuPremier) {
+        const possibles = duPalier.filter((c) => (!parGroupe || c.groupe === retenus[i].groupe) && permis(retenus[i], c));
+        const nouveau = meilleur(possibles, palier, presentsSans(i), rang);
+        if (nouveau) return retenus.map((c, j) => (j === i ? nouveau : c));
+      }
+    }
+  }
+  return retenus;
+}
+
 /** Proposition vide d'une cible illisible ou d'un nombre nul. */
 const sansRien = (type, nombre) => ({
   type, ids: [], choisis: [], manque: Math.max(0, nombre), code: 'aucun', cause: null, profilCause: null,
@@ -443,7 +616,9 @@ function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, gra
   const voulu = Number.isInteger(nombre) && nombre > 0 ? nombre : 0;
   const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses });
   if (!ctx || !voulu) return sansRien(type, voulu);
-  const retenus = remplir(ctx, voulu, graine, type);
+  const rang = rangsDeDepartage(ctx.candidats, graine);
+  const remplis = remplir(ctx, voulu, rang, type);
+  const retenus = type === 'plat' ? avecDesLegumes(ctx, remplis, rang) : remplis;
   const manque = voulu - retenus.length;
   const code = !retenus.length ? 'aucun' : manque > 0 ? 'peu' : 'ok';
   const { cause, profilCause } = code === 'ok' ? { cause: null, profilCause: null } : causeDe(ctx);
@@ -458,6 +633,8 @@ function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, gra
  * graineProposition(cible) par défaut. `plafond` (facultatif) : le nombre dit par le libellé du bouton touché ; la
  * proposition vise `nombre` (code 'peu' et sa cause si les plats manquent, même quand le libellé le savait déjà), et
  * si elle trouve plus que `plafond` (plats arrivés depuis l'affichage), elle est refaite pour `plafond` plats.
+ * Légumes : au moins LEGUMES_MIN plat avec des légumes dans la cible après la proposition, s'il en existe un
+ * proposable (avecDesLegumes : échange, même nombre de plats).
  * Déterministe, indépendante de l'ordre des plats en entrée ; rien n'est modifié.
  */
 export function proposerPlats(tousLesPlats, {
@@ -546,6 +723,8 @@ export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], 
  * cible), du même type ; palier par palier, du même groupe d'abord, puis tous groupes ; palier 3 seulement si la cible,
  * SANS l'ancien plat, n'en a pas déjà ECARTES_MAX. Jamais l'ancien, jamais un plat de la cible, jamais un refusé.
  * Variété face aux plats de la cible sans l'ancien. `graine` : graineProposition(cible) + '|autre' par défaut.
+ * Légumes : un plat qui en avait, seul de la cible sans lui, est remplacé d'abord par un plat avec des légumes (même
+ * ordre de recherche), sinon par n'importe lequel.
  */
 export function autreIdee(tousLesPlats, platId, {
   cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, graine = null, refuses = [],
@@ -561,14 +740,20 @@ export function autreIdee(tousLesPlats, platId, {
   const groupe = vu.rejet ? null : vu.groupe;
   const rang = rangsDeDepartage(ctx.candidats, graine ?? `${graineProposition(cible, semaines)}|autre`);
   const presents = presentsDeLaCible(ctx, type);
-  for (const palier of [1, 2, 3]) {
-    if (palier === 3 && ctx.ecartesCible >= ECARTES_MAX) break;
-    const duPalier = ctx.candidats.filter((c) => c.palier === palier);
-    const retenu = meilleur(duPalier.filter((c) => c.groupe === groupe), palier, presents, rang)
-      ?? meilleur(duPalier, palier, presents, rang);
-    if (retenu) return { platId: retenu.platId, groupe: retenu.groupe, palier: retenu.palier, raison: raisonDe(retenu) };
-  }
-  return null;
+  const chercher = (liste) => {
+    for (const palier of [1, 2, 3]) {
+      if (palier === 3 && ctx.ecartesCible >= ECARTES_MAX) break;
+      const duPalier = liste.filter((c) => c.palier === palier);
+      const retenu = meilleur(duPalier.filter((c) => c.groupe === groupe), palier, presents, rang)
+        ?? meilleur(duPalier, palier, presents, rang);
+      if (retenu) return retenu;
+    }
+    return null;
+  };
+  // Légumes : l'ancien plat était le seul de la cible à en avoir → un plat avec des légumes d'abord, sinon tous.
+  const garderDesLegumes = type === 'plat' && aDesLegumes(ancien) && legumesDeLaCible(ctx) < LEGUMES_MIN;
+  const retenu = (garderDesLegumes ? chercher(ctx.candidats.filter((c) => c.legumes)) : null) ?? chercher(ctx.candidats);
+  return retenu ? { platId: retenu.platId, groupe: retenu.groupe, palier: retenu.palier, raison: raisonDe(retenu) } : null;
 }
 
 /** Vrai si « 🔄 Une autre idée » a sa place sur la feuille du plat : plat ou dessert avec sa recette, semaine avant les courses faites. */
@@ -586,6 +771,7 @@ export const TEXTES_PROPOSER = Object.freeze({
   texteCarte: 'Laissez l’app proposer, ou choisissez vous-même\u00A0: la liste de courses se fait toute seule.',
   toucherPlat: 'Touchez un plat pour le changer.',
   toucherDessert: 'Touchez un dessert pour le changer.',
+  legumes: 'avec des légumes',
   pasDAutreDessert: 'Il n’y avait pas d’autre dessert à proposer.',
   complet: 'Les plats de la semaine sont déjà choisis.',
   causes: Object.freeze({
@@ -662,20 +848,27 @@ export function texteAutreIdee({ nouveau, ancien, reglages = false } = {}) {
  * Raison d'un plat proposé, montrée dans sa feuille → texte ou null (recent, autre, raison inconnue) : « ✨ Proposé :
  * vous l’aimez. », « ✨ Proposé : vous et Adulte B l’aimez. », « ✨ Proposé : Adulte B l’aime. », « ✨ Proposé : Adulte A
  * et Enfant l’aiment. », « ✨ Proposé : à découvrir. », « ✨ Proposé : pas au menu depuis longtemps. ». La personne
- * connectée d'abord, puis les autres dans l'ordre des profils ; un profil retiré est ignoré.
+ * connectée d'abord, puis les autres dans l'ordre des profils ; un profil retiré est ignoré. `legumes` (raisonDe, plats
+ * seulement) : « ✨ Proposé : vous l’aimez · avec des légumes. », « ✨ Proposé : à découvrir · avec des légumes. », et
+ * « ✨ Proposé : avec des légumes. » quand il n'y a rien d'autre à dire.
  */
 export function texteRaison(raison, { moi = null, profils = [] } = {}) {
   const debut = `${TEXTES_PROPOSER.emoji} Proposé\u00A0: `;
-  if (raison?.code === 'decouvrir') return `${debut}à découvrir.`;
-  if (raison?.code === 'ancien') return `${debut}pas au menu depuis longtemps.`;
-  if (raison?.code !== 'aime') return null;
+  const legumes = raison?.legumes === true ? TEXTES_PROPOSER.legumes : null;
+  const phrase = (texte) => {
+    const parties = [texte, legumes].filter(Boolean);
+    return parties.length ? `${debut}${parties.join(' · ')}.` : null;
+  };
+  if (raison?.code === 'decouvrir') return phrase('à découvrir');
+  if (raison?.code === 'ancien') return phrase('pas au menu depuis longtemps');
+  if (raison?.code !== 'aime') return phrase(null);
   const ids = new Set(listeDe(raison.profils));
   const moiAussi = [...ids].some((id) => estMoi(id, moi));
   const autres = profilsLus(profils).filter((p) => ids.has(p.id) && !estMoi(p.id, moi)).map(nomDe);
   const noms = [...(moiAussi ? ['vous'] : []), ...autres];
-  if (!noms.length) return null;
+  if (!noms.length) return phrase(null);
   const verbe = moiAussi ? 'l’aimez' : noms.length > 1 ? 'l’aiment' : 'l’aime';
-  return `${debut}${enumerer(noms)} ${verbe}.`;
+  return phrase(`${enumerer(noms)} ${verbe}`);
 }
 
 function plusTard(cible, aujourdhui) {
