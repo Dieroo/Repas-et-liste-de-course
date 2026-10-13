@@ -6,8 +6,9 @@ import { copier, lirePressePapiers, lectureBloquee } from './presse-papiers.js';
 import { choisirFichier, lireTexte } from './fichier.js';
 import {
   extrairePaquet, validerPaquet, preparerImport, filtrerPreparation, estSauvegarde, controlerInstructions,
+  entreesPourImport,
 } from '../coeur/paquet.js';
-import { texteCorrectionPourClaude } from '../coeur/claude.js';
+import { texteCorrectionPourClaude, texteDemandeEtapes } from '../coeur/claude.js';
 import { FICHIER_MAX } from '../coeur/sauvegarde.js';
 import { estDansCorbeille } from '../coeur/corbeille.js';
 import {
@@ -16,6 +17,23 @@ import {
 import {
   natureDuMessage, bilanDuMessage, dejaEnregistre, etatSerie, texteSerie, TEXTES_SERIE,
 } from '../coeur/serie.js';
+import {
+  TEXTES_ETAPES, enteteApercuEtapes, lignesApercuEtapes, platsADetailler,
+} from '../coeur/realisation.js';
+
+// Écran ouvert en série d'étapes (T5-0b) : par « Coller la réponse de Claude » de la carte « 👩‍🍳 Étapes détaillées »
+// (Réglages) ou de la carte des étapes d'une fiche (`platId` : le retour y ramène). Lu une fois, à l'ouverture de
+// l'écran : mémoire de la visite, jamais du téléphone.
+let prochaineSerieEtapes = null;
+
+/** À appeler juste avant d'ouvrir `#/import` depuis une carte d'étapes détaillées. */
+export function ouvrirEnSerieEtapes({ platId = null } = {}) {
+  prochaineSerieEtapes = { platId: typeof platId === 'string' && platId ? platId : null };
+}
+
+// Éléments d'un lot d'étapes qui ne sont pas repris : ils restent à détailler.
+const STATUTS_ETAPES_NON_REPRIS = new Set(['refusee', 'change', 'inconnu', 'attente', 'corbeille']);
+const MESSAGE_ECHEC_ETAPES = 'Les étapes n’ont pas pu être enregistrées. Réessayez.';
 
 // Claude refuse une demande écrite pour d'autres instructions que les siennes (docs/projet-claude.md §0) : mêmes
 // messages pour un collage et pour un fichier.
@@ -80,13 +98,16 @@ const LIBELLES_STATUT = {
   identique: 'Déjà dans l’app',
   deja: 'Déjà dans vos plats',
   corbeille: 'Dans la corbeille',
+  refusee: 'Pas reprise',
 };
 
 /**
  * Éléments de l'aperçu qui ne sont pas repris : idée de Claude (DEMANDE-IDEES) pour un plat qui a déjà sa recette
  * (`deja`), recette ou version pour un plat de la corbeille (`corbeille`) ; leur avertissement dit pourquoi.
  */
-const nonRepris = (element) => element.statut === 'deja' || element.statut === 'corbeille';
+const nonRepris = (element) => element.statut === 'deja' || element.statut === 'corbeille'
+  // Recette entière glissée dans une série d'étapes (T5-0b) : jamais de remplacement.
+  || element.statut === 'refusee';
 
 /** Éléments de l'aperçu qui n'écrivent rien : recette identique à la fiche, ou élément non repris. */
 const sansEcriture = (element) => element.statut === 'identique' || nonRepris(element);
@@ -177,6 +198,14 @@ export function libelleEnregistrer({ recettes = 0, versions = 0 }, aClore = 0) {
 export function creer(ctx) {
   let courant = ctx;
   const cible = ctx.parametre || null;
+  // Série d'étapes (T5-0b) : ouverte depuis une carte d'étapes, ou après un lot d'étapes enregistré dans la visite.
+  const ouverture = prochaineSerieEtapes;
+  prochaineSerieEtapes = null;
+  let serieEtapes = Boolean(ouverture) && !cible;
+  const retourFiche = cible ? null : ouverture?.platId ?? null;
+  let envoi = null; // { etat } : lot d'étapes en cours d'envoi, aperçu figé (« Enregistrement… »)
+  let messageSerie = ''; // copie d'une demande d'étapes depuis la carte de série
+  let detruit = false;
   let texte = ''; // dernier texte collé ou lu dans un fichier
   let colle = false; // vrai dès qu'un collage ou un fichier choisi a eu lieu (même vide)
   let source = 'collage'; // origine du texte : 'collage' ou 'fichier'
@@ -203,8 +232,12 @@ export function creer(ctx) {
   // toucher sur « Enregistrer »).
   // `reprise` : plats écrits par le message dont la carte a proposé « Remettre » (son aperçu recalculé les voit « déjà
   // dans vos plats » : ils ne sont pas redits).
+  // Étapes (T5-0b) : `nature` ('idees' ou 'etapes', celle du dernier message enregistré), `reponses` (lots d'étapes
+  // enregistrés dans la visite : conseil de nouvelle conversation), `refuses` (recettes pas reprises dans la visite :
+  // id → { id, nom, aCorriger }, pour « Redemander ces N recettes »).
   const serie = {
     ajoutes: [], ids: [], dernier: [], autres: [], nonRepris: [], actif: false, montreeA: 0, reprise: new Set(),
+    nature: null, reponses: 0, refuses: new Map(),
   };
   let zoneSerieOuverte = false; // presse-papiers refusé : la carte de série montre sa zone de collage
 
@@ -298,14 +331,16 @@ export function creer(ctx) {
   }
 
   // Ouvert depuis Réglages (carte « 🧸 Relire les recettes », « Ajouter des recettes ») : le retour y ramène.
-  const depuisReglages = () => !cible && courant.routePrecedente === 'reglages';
+  const depuisReglages = () => !cible && !retourFiche && courant.routePrecedente === 'reglages';
+  /** Fiche d'où l'écran a été ouvert en série d'étapes (carte des étapes d'une fiche) ; null sinon. */
+  const ficheDOrigine = () => (retourFiche ? tousLesPlats().find((plat) => plat.id === retourFiche) ?? null : null);
   // Ouvert depuis l'écran Demandes (« Coller la réponse de Claude », T2e) : le retour, et l'enregistrement, y ramènent.
   const depuisDemandes = () => !cible && courant.routePrecedente === 'demandes';
 
   function revenir(evenement) {
     // Venu de cet écran-là : retour dans l'historique, pour que le geste retour d'Android reste naturel.
     let attendu = 'plats';
-    if (cible) attendu = 'plat';
+    if (cible || retourFiche) attendu = 'plat';
     else if (depuisReglages()) attendu = 'reglages';
     else if (depuisDemandes()) attendu = 'demandes';
     if (courant.routePrecedente === attendu && history.length > 1) {
@@ -322,6 +357,9 @@ export function creer(ctx) {
     if (plat) {
       retour.href = `#/plat/${encodeURIComponent(plat.id)}`;
       retour.querySelector('.retour-texte').textContent = plat.nom;
+    } else if (retourFiche) {
+      retour.href = `#/plat/${encodeURIComponent(retourFiche)}`;
+      retour.querySelector('.retour-texte').textContent = ficheDOrigine()?.nom ?? 'Plat';
     } else if (depuisReglages()) {
       retour.href = '#/reglages';
       retour.querySelector('.retour-texte').textContent = 'Réglages';
@@ -418,6 +456,7 @@ export function creer(ctx) {
       lectureEnCours = false;
     }
     source = 'fichier';
+    messageSerie = '';
     erreurFichier = lu.erreur ?? null;
     texte = lu.texte ?? '';
     colle = true;
@@ -459,6 +498,7 @@ export function creer(ctx) {
 
   function effacer() {
     clearTimeout(minuteurSaisie);
+    messageSerie = '';
     serie.actif = false;
     serie.reprise = new Set();
     oublierChoix();
@@ -473,7 +513,10 @@ export function creer(ctx) {
   }
 
   function analyser(nouveau, { manuel }) {
+    // Lot d'étapes en cours d'envoi : l'aperçu reste figé jusqu'à la fin des transactions.
+    if (envoi) return;
     texte = nouveau ?? '';
+    messageSerie = '';
     // Un nouveau collage remplace la carte de série par son aperçu (le compte de la visite reste).
     serie.actif = false;
     serie.reprise = new Set();
@@ -497,7 +540,7 @@ export function creer(ctx) {
     dernierEtat = etat;
     // Carte de série : son « Coller la suite » est la seule action principale (même place, même taille en haut).
     boutonColler.className = `bouton ${etat.type === 'serie' ? 'bouton-secondaire' : 'bouton-principal'} bouton-plein`;
-    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, cases, [...quandMeme], messageEnvoi, navigator.onLine, zoneSerieOuverte]);
+    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, cases, [...quandMeme], messageEnvoi, navigator.onLine, zoneSerieOuverte, Boolean(envoi), messageSerie]);
     if (nouvelleSignature === signature) return;
     signature = nouvelleSignature;
     if (etat.type !== 'pret') preparation = null;
@@ -527,8 +570,32 @@ export function creer(ctx) {
     }
   }
 
-  /** Carte de série (T5-0a) : après l'enregistrement d'un message d'idées, ou un message d'idées recollé. */
-  function etatCarteSerie(recolle = false) {
+  /** Plats encore à détailler, lus dans la base (partagés entre appareils) : la semaine d'abord (T5-0b). */
+  const aDetaillerMaintenant = () => platsADetailler(tousLesPlats(), {
+    semaines: courant.semaines ?? [],
+    aujourdhui: courant.aujourdhui ?? new Date(),
+  });
+
+  /**
+   * Carte de série (T5-0a) : après l'enregistrement d'un message d'idées, ou un message d'idées recollé ; T5-0b :
+   * après un lot d'étapes (« ✓ 4 recettes détaillées », « Encore N recettes à détailler. »).
+   */
+  function etatCarteSerie(recolle = false, nature = serie.nature) {
+    if (nature === 'etapes') {
+      return {
+        type: 'serie',
+        ...etatSerie({
+          nature: 'etapes',
+          ajoutesDepuisOuverture: serie.ajoutes,
+          dernier: recolle ? [] : serie.dernier,
+          nonRepris: recolle ? [] : serie.nonRepris,
+          recolle,
+          aDetailler: aDetaillerMaintenant(),
+          reponses: serie.reponses,
+          refuses: [...serie.refuses.values()],
+        }),
+      };
+    }
     return {
       type: 'serie',
       ...etatSerie({
@@ -544,8 +611,26 @@ export function creer(ctx) {
 
   /** Écran en série : jamais pour « Coller la recette » d'une fiche ni depuis Demandes (retours d'aujourd'hui). */
   const serieIci = () => !cible && !depuisDemandes();
+  /** Série d'étapes en cours : une recette entière collée pour un plat qui a déjà la sienne est refusée (T5-0b). */
+  const serieEtapesActive = () => serieIci() && (serieEtapes || serie.nature === 'etapes');
+
+  /**
+   * Lot d'étapes (réponse à DEMANDE-ETAPES, T5-0b) : chaque entrée vaut pour elle-même, refusée en entier si la
+   * réponse vient d'une autre version des instructions.
+   */
+  function calculerEtapes(extrait, validation) {
+    const controle = controlerInstructions(extrait.paquets);
+    const prepares = preparerImport(entreesPourImport(validation), { plats: tousLesPlats(), controle });
+    if (prepares.refus) return { type: 'refusEtapes', refus: prepares.refus, message: prepares.messageRefus };
+    // Message recollé dans la série : rien de nouveau, la carte le dit.
+    if (serie.nature === 'etapes' && serie.ids.length && serieIci() && dejaEnregistre(prepares, serie.ids)) {
+      return etatCarteSerie(true, 'etapes');
+    }
+    return { type: 'pret', validation, preparation: prepares, instructions: null, relecture: false, lotDEtapes: true };
+  }
 
   function calculer() {
+    if (envoi) return envoi.etat;
     if (serie.actif) return etatCarteSerie();
     if (!colle) return { type: 'rien' };
     if (erreurFichier) return { type: 'illisible', code: erreurFichier === 'trop_gros' ? 'trop_long' : 'illisible' };
@@ -554,11 +639,16 @@ export function creer(ctx) {
     // Une sauvegarde passe par Réglages › Restaurer : ici, elle effacerait les marques « modifiée à la main » et
     // pourrait recréer en double un plat renommé depuis.
     if (estSauvegarde(extrait.paquets)) return { type: 'sauvegarde' };
-    const validation = validerPaquet(extrait.paquets, { profils: courant.profilsCharges ? courant.profils : null });
+    const validation = validerPaquet(extrait.paquets, {
+      profils: courant.profilsCharges ? courant.profils : null,
+      relectureEnCours: courant.actions?.lireRelectureEnCours?.() ?? [],
+      serieEtapes: serieEtapesActive(),
+    });
     if (!validation.valide) return { type: 'erreurs', validation };
     // Sans les plats et les demandes, un plat déjà présent passerait pour nouveau : on attend leur chargement.
     // Sans les profils, une version ne peut pas être jugée.
     if (!courant.platsCharges || !courant.demandesChargees || !courant.profilsCharges) return { type: 'chargement' };
+    if (validation.lotDEtapes) return calculerEtapes(extrait, validation);
     // Lot de relecture des repères (T2d) d'une autre version des instructions : jamais enregistrable.
     const relecture = Boolean(validation.relecture);
     if (relecture && controlerInstructions(extrait.paquets)) return { type: 'illisible', code: 'relecture' };
@@ -570,6 +660,8 @@ export function creer(ctx) {
       choix,
       // Dernier lot de relecture copié sur ce téléphone : des recettes entières rendues à sa place sont une erreur.
       relectureEnCours: courant.actions?.lireRelectureEnCours?.() ?? [],
+      // Série d'étapes (T5-0b) : une recette entière pour un plat qui a déjà la sienne n'est pas reprise.
+      serieEtapes: serieEtapesActive(),
     });
     // Plats gardés sans leurs erreurs (ils n'en ont pas) : la correction pour Claude sait si le lot était de versions.
     if (prepares.erreurs.length) {
@@ -592,7 +684,7 @@ export function creer(ctx) {
     // nouveau, la carte le dit.
     if (serie.ids.length && serieIci() && !relecture && natureDuMessage(validation) === 'idees'
       && dejaEnregistre(prepares, serie.ids)) {
-      return etatCarteSerie(true);
+      return etatCarteSerie(true, 'idees');
     }
     // Réponse écrite avec d'autres instructions que celles de l'app : prévenu, sans bloquer (message seul).
     const instructions = controlerInstructions(extrait.paquets)?.message ?? null;
@@ -672,9 +764,20 @@ export function creer(ctx) {
           copieFaite ? messageCopie() : null,
         )];
       }
+      case 'refusEtapes':
+        // Lot d'étapes d'une autre version des instructions (T5-0b) : rien n'est enregistrable.
+        return [el('section', { class: 'carte resultat-erreur' },
+          titreResultat(TITRES_ALIGNEMENT[etat.refus] ?? TITRES_ALIGNEMENT.instructions),
+          el('p', { role: 'alert' }, etat.message),
+          etat.refus === 'instructions'
+            ? el('a', { class: 'bouton bouton-principal bouton-plein', href: '#/reglages', 'data-action': 'reglages' },
+              'Ouvrir Réglages')
+            : null,
+        )];
       case 'serie':
         return [renduSerie(etat)];
       default:
+        if (etat.lotDEtapes) return [renduEtapes(etat)];
         return [etat.relecture ? renduRelecture(etat) : renduPret(etat)];
     }
   }
@@ -683,11 +786,17 @@ export function creer(ctx) {
    * Carte de série (T5-0a, CLAUDE.md §8) : « ✓ 3 idées ajoutées », noms, « 6 depuis l’ouverture de cet écran. »,
    * aide, « 📋 Coller la suite » (principal), « Terminé » et « Voir les plats › ». Focus sur le titre ; titre, noms et
    * compte dans une zone `role="status"`.
+   * Étapes (T5-0b) : « ✓ 4 recettes détaillées », noms, recettes pas reprises, « Encore N recettes à détailler. » ;
+   * après 5 réponses, le conseil de nouvelle conversation et « 📋 Recopier la demande pour les N restantes » ;
+   * recettes refusées dans la visite et « 📋 Redemander ces N recettes » ; fin « ✓ Toutes vos recettes sont détaillées
+   * 🎉 » : « Terminé » devient principal, « Coller la suite » s'en va.
    */
   function renduSerie(etat) {
     const textes = texteSerie(etat);
+    const etapes = etat.nature === 'etapes';
+    const fini = etapes && !etat.recolle && etat.restants === 0;
     // Message recollé : « Ce message est déjà enregistré. Écrivez « suite » à Claude pour le suivant. » d'un tenant.
-    const aide = el('p', { class: 'aide', id: 'aide-suite' }, textes.aide);
+    const aide = textes.aide ? el('p', { class: 'aide', id: 'aide-suite' }, textes.aide) : null;
     return el('section', { class: 'carte resultat-serie' },
       el('div', { class: 'serie-bilan', role: 'status' },
         titreResultat(textes.titre),
@@ -701,31 +810,82 @@ export function creer(ctx) {
             `⚠️ ${m}`,
             boutonRemettreSerie(etat.nonRepris[i]))))
           : null,
+        etapes && textes.restants ? el('p', { class: fini ? 'serie-fin' : 'texte-doux' }, textes.restants) : null,
         textes.depuis ? el('p', { class: 'texte-doux' }, textes.depuis) : null),
       etat.recolle ? null : aide,
-      el('button', {
+      fini ? null : el('button', {
         class: 'bouton bouton-principal bouton-plein',
         type: 'button',
         'data-action': 'coller-suite',
-        'aria-describedby': 'aide-suite',
+        'aria-describedby': aide ? 'aide-suite' : null,
         onclick: collerLaSuite,
       }, TEXTES_SERIE.collerLaSuite),
-      zoneSerieOuverte ? blocZoneSerie : null,
-      noteHorsLigne,
+      zoneSerieOuverte && !fini ? blocZoneSerie : null,
+      etapes ? (navigator.onLine ? null : el('p', { class: 'aide' }, TEXTES_ETAPES.horsLigne)) : noteHorsLigne,
+      etapes && textes.conseil ? el('p', { class: 'aide' }, textes.conseil) : null,
+      etapes && textes.recopier
+        ? el('button', {
+          class: 'bouton bouton-secondaire bouton-plein',
+          type: 'button',
+          'data-action': 'recopier-etapes',
+          onclick: recopierLaDemande,
+        }, textes.recopier)
+        : null,
+      etapes && textes.refuses ? el('p', {}, textes.refuses) : null,
+      etapes && textes.redemander
+        ? el('button', {
+          class: 'bouton bouton-secondaire bouton-plein',
+          type: 'button',
+          'data-action': 'redemander-etapes',
+          onclick: redemanderLesRefusees,
+        }, textes.redemander)
+        : null,
+      etapes ? el('p', { class: 'aide', role: 'status', 'data-zone': 'copie-serie' }, messageSerie) : null,
       el('div', { class: 'actions-serie' },
         el('button', {
-          class: 'bouton bouton-secondaire',
+          class: `bouton ${fini ? 'bouton-principal' : 'bouton-secondaire'}`,
           type: 'button',
           'data-action': 'terminer-serie',
           onclick: terminerSerie,
         }, TEXTES_SERIE.termine),
-        el('a', {
+        etapes ? null : el('a', {
           class: 'bouton bouton-secondaire',
           href: '#/plats',
           'data-action': 'voir-plats',
           onclick: voirLesPlats,
         }, TEXTES_SERIE.voirLesPlats)),
     );
+  }
+
+  /**
+   * Demande d'étapes copiée depuis la carte de série : la carte dit comment continuer, dans sa zone `role="status"`
+   * (T5-0b ; jamais aussi par `annoncer`, qui recouvrirait la carte du même texte).
+   */
+  function copieDeLaSerie(reussi) {
+    messageSerie = reussi ? TEXTES_ETAPES.annonceCopie : 'La copie n’a pas marché. Réessayez.';
+    dessiner();
+  }
+
+  /** « 📋 Recopier la demande pour les N restantes » : pour une nouvelle conversation Claude (T5-0b). */
+  async function recopierLaDemande() {
+    if (carteTropRecente()) return;
+    const plats = aDetaillerMaintenant();
+    if (!plats.length) return;
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    copieDeLaSerie(await copier(texteDemandeEtapes(plats, { appareils: courant.reglages?.appareils ?? null })));
+  }
+
+  /** « 📋 Redemander ces N recettes » : les recettes pas reprises dans la visite, avec leurs lignes `à corriger:`. */
+  async function redemanderLesRefusees() {
+    if (carteTropRecente()) return;
+    const encore = new Map(aDetaillerMaintenant().map((plat) => [plat.id, plat]));
+    const refuses = [...serie.refuses.values()].filter((plat) => encore.has(plat.id));
+    if (!refuses.length) return;
+    const aCorriger = Object.fromEntries(refuses.filter((plat) => plat.aCorriger.length).map((plat) => [plat.id, plat.aCorriger]));
+    copieDeLaSerie(await copier(texteDemandeEtapes(refuses.map((plat) => encore.get(plat.id)), {
+      appareils: courant.reglages?.appareils ?? null,
+      aCorriger,
+    })));
   }
 
   /**
@@ -804,7 +964,7 @@ export function creer(ctx) {
   function detailDuPlat(element) {
     if (element.statut === 'identique') return 'Identique à la fiche actuelle.';
     if (element.statut === 'corbeille') return 'Rien n’est enregistré pour ce plat.';
-    if (['versions', 'inchange', 'deja'].includes(element.statut)) return 'La recette actuelle est gardée.';
+    if (['versions', 'inchange', 'deja', 'refusee'].includes(element.statut)) return 'La recette actuelle est gardée.';
     if (!element.ingredients) return 'Sans recette pour l’instant (⏳)';
     return [pluriel(element.ingredients, 'ingrédient', 'ingrédients'), element.etapes ? pluriel(element.etapes, 'étape', 'étapes') : null]
       .filter(Boolean).join(' · ');
@@ -833,7 +993,9 @@ export function creer(ctx) {
     // prêtes.
     const deja = prepares.elements.filter((element) => element.statut === 'deja').length;
     const jetes = prepares.elements.filter((element) => element.statut === 'corbeille').length;
-    const n = prepares.elements.length - deja - jetes;
+    // Recette entière glissée dans une série d'étapes (T5-0b) : pas reprise.
+    const refusees = prepares.elements.filter((element) => element.statut === 'refusee').length;
+    const n = prepares.elements.length - deja - jetes - refusees;
     const ecrivables = prepares.elements.filter((element) => !sansEcriture(element));
     const filtree = preparation ?? prepares;
     const comptes = compterEcritures(filtree.ecritures);
@@ -850,7 +1012,8 @@ export function creer(ctx) {
       ...[...validation.avertissements, ...prepares.avertissements].map((a) => a.message),
     ].filter(Boolean);
     let titre;
-    if (!ecrivables.length && jetes && !deja && !n) titre = jetes > 1 ? 'Ces plats sont dans la corbeille.' : 'Ce plat est dans la corbeille.';
+    if (!ecrivables.length && refusees) titre = 'Rien de nouveau à enregistrer.';
+    else if (!ecrivables.length && jetes && !deja && !n) titre = jetes > 1 ? 'Ces plats sont dans la corbeille.' : 'Ce plat est dans la corbeille.';
     else if (!ecrivables.length && jetes) titre = 'Rien de nouveau à enregistrer.';
     else if (!ecrivables.length && deja) {
       if (n) titre = 'Ces recettes sont déjà dans l’app.';
@@ -873,6 +1036,7 @@ export function creer(ctx) {
         const garde = !decoches.has(element.id);
         // Idée non reprise : seul son avertissement compte (ceux de sa recette, jamais écrite, n'ont plus d'objet).
         const avertissements = [
+          element.statut === 'refusee' ? element.raison : null,
           identique || element.statut === 'versions' ? null : avertissementModification(element.modifieeA),
           ...(nonReprise ? [] : (valide?.avertissements ?? []).map((a) => a.message)),
           ...(element.avertissements ?? []),
@@ -924,6 +1088,118 @@ export function creer(ctx) {
       horsLigne ? el('p', { class: 'aide' }, 'Hors ligne\u00A0: il faut être connecté pour ajouter des versions.') : null,
       !horsLigne && comptes.recettes ? noteHorsLigne : null,
     );
+  }
+
+  /**
+   * Aperçu d'un lot d'étapes (T5-0b, CLAUDE.md §8) : « 3 recettes reçoivent leurs étapes détaillées. Le reste des
+   * recettes ne change pas. » ; par recette reprise, « « Gratin » : 9 étapes, dont 21 min de travail. », ses lignes
+   * d'état et « Voir les étapes » (titres numérotés, repliés) ; chaque recette pas reprise dit pourquoi (elle reste à
+   * détailler). Bouton « Enregistrer les étapes de 3 recettes », inactif hors ligne ; « Enregistrement… » pendant
+   * l'envoi (aperçu figé).
+   */
+  function renduEtapes({ preparation: prepares }) {
+    const filtree = preparation ?? prepares;
+    const elements = prepares.elements ?? [];
+    const ecrivables = elements.filter((element) => element.statut === 'etapes');
+    // Cases seulement pour plusieurs recettes : décocher la seule reviendrait à ne rien enregistrer.
+    const avecCases = ecrivables.length > 1;
+    const { entete } = enteteApercuEtapes(prepares);
+    const { bouton, actif } = enteteApercuEtapes(filtree);
+    const horsLigne = !navigator.onLine;
+    const enCours = Boolean(envoi);
+    return el('section', { class: 'carte resultat-pret' },
+      titreResultat(entete ?? 'Aucune recette reprise'),
+      el('ul', { class: 'liste-apercu' }, elements.map((element) => {
+        const lignes = lignesApercuEtapes(element);
+        const ecrivable = element.statut === 'etapes';
+        const garde = !ecrivable || !decoches.has(element.id);
+        const pasReprise = STATUTS_ETAPES_NON_REPRIS.has(element.statut);
+        return el('li', { class: `apercu-plat${avecCases && ecrivable ? ' avec-case' : ''}${garde ? '' : ' decoche'}` },
+          avecCases && ecrivable ? caseDuPlat(element) : null,
+          el('div', { class: 'apercu-corps' },
+            lignes.titre ? el('p', { class: 'apercu-nom' }, lignes.titre) : null,
+            lignes.etat.map((ligne) => el('p', { class: pasReprise ? '' : 'texte-doux' }, pasReprise ? `⚠️ ${ligne}` : ligne)),
+            ecrivable && (element.titres ?? []).length
+              ? el('details', { class: 'depliable apercu-titres' },
+                el('summary', {}, TEXTES_ETAPES.voirLesEtapes),
+                el('ol', { class: 'liste-titres-etapes' }, element.titres.map((titre) => el('li', {}, titre))))
+              : null,
+            lignes.avertissements.length
+              ? el('ul', { class: 'liste-avertissements' }, lignes.avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
+              : null,
+            garde ? null : el('p', { class: 'texte-doux' }, 'Ne sera pas enregistré.'),
+          ));
+      })),
+      messageEnvoi ? el('p', { class: 'message-erreur', role: 'alert' }, messageEnvoi) : null,
+      // Pendant l'envoi, le bouton garde le focus (aria-disabled plutôt que disabled) et dit « Enregistrement… ».
+      el('button', {
+        class: 'bouton bouton-principal bouton-plein',
+        type: 'button',
+        'data-action': 'enregistrer',
+        disabled: !enCours && (!actif || horsLigne),
+        'aria-disabled': enCours ? 'true' : null,
+        'aria-busy': enCours ? 'true' : null,
+        onclick: enregistrer,
+      }, enCours ? TEXTES_ETAPES.enregistrement : bouton),
+      horsLigne && actif ? el('p', { class: 'aide' }, TEXTES_ETAPES.horsLigne) : null,
+    );
+  }
+
+  /**
+   * Lot d'étapes (T5-0b) : en ligne seulement ; une transaction par plat (actions.importer), aperçu figé pendant
+   * l'envoi. Ensuite, la carte de série dit ce qui est détaillé, ce qui ne l'est pas (refus à l'envoi compris) et ce
+   * qui reste à détailler ; l'écran passe en série d'étapes. Échec : l'aperçu revient, avec le message.
+   */
+  function enregistrerEtapes() {
+    if (envoi || !preparation?.ecritures?.length || preparation.refus) return;
+    if (!navigator.onLine) {
+      messageEnvoi = TEXTES_ETAPES.horsLigne;
+      dessiner();
+      annoncer(TEXTES_ETAPES.horsLigne);
+      return;
+    }
+    const envoyee = preparation;
+    // Bilan lu avant l'envoi, sur l'aperçu enregistré (plats décochés retirés).
+    const bilan = bilanDuMessage(envoyee);
+    envoi = { etat: dernierEtat };
+    messageEnvoi = '';
+    dessiner();
+    Promise.resolve(courant.actions.importer(envoyee)).then((resultat) => {
+      envoi = null;
+      if (detruit) return;
+      const refuses = new Set((resultat?.refuses ?? []).map((plat) => plat.id));
+      const ajoutes = bilan.ajoutes.filter((plat) => !refuses.has(plat.id));
+      const pasRepris = [
+        ...bilan.nonRepris,
+        ...bilan.ajoutes.filter((plat) => refuses.has(plat.id)).map((plat) => ({
+          ...plat, raison: TEXTES_ETAPES.refusEnvoi(plat.nom), remettable: false, aCorriger: [],
+        })),
+      ];
+      serieEtapes = true;
+      serie.nature = 'etapes';
+      serie.reponses += 1;
+      serie.ajoutes = [...serie.ajoutes, ...ajoutes];
+      serie.ids = [...serie.ids, ...ajoutes.map((plat) => plat.id)];
+      for (const plat of ajoutes) serie.refuses.delete(plat.id);
+      for (const entree of pasRepris) {
+        if (entree.id) serie.refuses.set(entree.id, { id: entree.id, nom: entree.nom, aCorriger: entree.aCorriger ?? [] });
+      }
+      serie.dernier = ajoutes;
+      serie.autres = [];
+      serie.nonRepris = pasRepris;
+      serie.actif = true;
+      serie.montreeA = performance.now();
+      zoneSerie.value = '';
+      messageSerie = '';
+      oublierChoix();
+      focaliserResultat = true;
+      dessiner();
+    }, (erreur) => {
+      envoi = null;
+      if (detruit) return;
+      messageEnvoi = erreur?.code === 'hors_ligne' ? TEXTES_ETAPES.horsLigne : MESSAGE_ECHEC_ETAPES;
+      dessiner();
+    });
   }
 
   /** Coché ou non : choix de la personne, sinon ajout coché et retrait décoché. Une case par plat et par repère. */
@@ -1096,6 +1372,10 @@ export function creer(ctx) {
   }
 
   function enregistrer() {
+    if (preparation?.lotDEtapes) {
+      enregistrerEtapes();
+      return;
+    }
     if (preparation?.ecritures?.some((ecriture) => ecriture.mode === 'precautions')) {
       if (!enregistre) enregistrerRelecture();
       return;
@@ -1122,6 +1402,7 @@ export function creer(ctx) {
       // plats » ; une idée d'un autre message, déjà écrite plus tôt dans la visite, l'est (Claude l'a reproposée).
       const ecritesAvant = serie.reprise;
       serie.reprise = new Set();
+      serie.nature = 'idees';
       serie.ajoutes = [...serie.ajoutes, ...bilan.ajoutes];
       serie.ids = [...serie.ids, ...bilan.ajoutes.map((p) => p.id), ...bilan.autres.map((p) => p.id)];
       serie.dernier = bilan.ajoutes;
@@ -1187,6 +1468,7 @@ export function creer(ctx) {
       dessiner();
     },
     detruire() {
+      detruit = true;
       clearTimeout(minuteurSaisie);
     },
   };

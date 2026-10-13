@@ -1,7 +1,7 @@
 // Écran « Modifier » une recette : libellés, nature d'un ingrédient, cases « Repères » (T2c-2), catalogue des produits
 // connus (ceux du foyer, puis les produits courants, T3-0), saisie d'un ingrédient, comparaison et préparation de
 // l'enregistrement. Logique pure : ni DOM ni Firebase.
-import { slug } from './slug.js';
+import { cleProduit, slug } from './slug.js';
 import { APPAREILS, NOM_MAX, statutDe, typeDe } from './plats.js';
 import { FORMAT, validerPaquet } from './paquet.js';
 import {
@@ -10,6 +10,9 @@ import {
 import { reporterReperes } from './relecture.js';
 import { reperesAttendus } from './compatibilite.js';
 import { estDansCorbeille } from './corbeille.js';
+import {
+  DUREE_MAX_MIN, TEXTES_ETAPES, TEXTE_MAX, TITRE_MAX, realisationAJour, suivreCuissonPrincipale, titresDe,
+} from './realisation.js';
 import {
   chercheur, connuDuFoyer, elementsDuDictionnaire, formesDe, motDeNature, motDeRepere, natureDe,
   reconnaitre as reconnaitreProduit,
@@ -83,11 +86,13 @@ const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
 const PRODUIT_MAX = 80;
 
 // Champs du modèle d'édition, dans l'ordre des conflits annoncés.
-const CHAMPS_SAISIE = ['nom', 'type', 'portionsBase', 'ingredients', 'etapes', 'cuisson', 'frigoJours', 'congelable',
-  'emporter', 'verifiee'];
+// `realisation` (T5-0b) : étapes détaillées à jour (éditeur réduit), sinon null ; facultative dans un brouillon d'avant.
+const CHAMPS_SAISIE = ['nom', 'type', 'portionsBase', 'ingredients', 'etapes', 'realisation', 'cuisson', 'frigoJours',
+  'congelable', 'emporter', 'verifiee'];
+const CHAMPS_SAISIE_FACULTATIFS = ['realisation'];
 // Champs de recette du format d'import (CLAUDE.md §8) : les seuls soumis à la validation.
 const CHAMPS_RECETTE = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
-  'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
+  'realisation', 'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 const estNombre = (valeur) => typeof valeur === 'number' && Number.isFinite(valeur);
@@ -568,6 +573,8 @@ export function normaliserPourEdition(plat, reglages) {
     portionsBase: Number.isInteger(portions) && portions >= 1 ? portions : 4,
     ingredients: Array.isArray(plat?.ingredients) ? copier(plat.ingredients) : [],
     etapes: Array.isArray(plat?.etapes) ? plat.etapes.map(String) : [],
+    // Étapes détaillées à jour : l'éditeur réduit (T5-0b) ; sinon null, et l'éditeur des étapes courtes.
+    realisation: realisationAJour(plat) ? copier(plat.realisation) : null,
     cuisson: Array.isArray(plat?.cuisson) ? copier(plat.cuisson) : [],
     frigoJours: plat?.conservation?.frigoJours ?? reglages?.frigoJoursDefaut ?? 3,
     congelable: plat?.conservation?.congelable ?? null,
@@ -647,6 +654,29 @@ export function changerCuissonPrincipale(cuisson, { appareil, dureeMin } = {}) {
   return liste;
 }
 
+/**
+ * « Cuit surtout au » changé sur une saisie (T5-0b) : la cuisson change (changerCuissonPrincipale) et, sur une
+ * réalisation à jour, la plus longue étape de l'ancien appareil suit (realisation.js › suivreCuissonPrincipale :
+ * appareil, température, durée). → { cuisson, realisation (null sans étapes détaillées), relire (bandeau « Relisez
+ * l'étape « … » : son texte parle peut-être encore de l'ancien appareil. », ou null) }
+ */
+export function changerCuissonEtEtapes(saisie, { appareil, dureeMin } = {}) {
+  const avant = Array.isArray(saisie?.cuisson) ? saisie.cuisson : [];
+  const cuisson = changerCuissonPrincipale(avant, { appareil, dureeMin });
+  if (!Array.isArray(saisie?.realisation)) return { cuisson, realisation: null, relire: null };
+  const ancien = avant[indexCuissonPrincipale(avant)]?.appareil ?? null;
+  const principale = cuisson[indexCuissonPrincipale(cuisson)] ?? null;
+  const duree = typeof dureeMin === 'string' ? quantite(dureeMin) : dureeMin;
+  const { realisation, suivie } = suivreCuissonPrincipale(saisie.realisation, {
+    ancien,
+    nouveau: principale?.appareil ?? null,
+    tempC: principale?.tempC ?? null,
+    dureeMin: Number.isInteger(duree) ? duree : null,
+  });
+  const relire = suivie && ancien !== principale?.appareil ? TEXTES_ETAPES.relireEtape(realisation[suivie - 1].titre) : null;
+  return { cuisson, realisation, relire };
+}
+
 // ——— Préparer l'enregistrement ———
 
 const dureeValide = (duree) => estNombre(duree) && duree >= 1 && duree <= DUREE_MAX;
@@ -655,7 +685,11 @@ const dureeValide = (duree) => estNombre(duree) && duree >= 1 && duree <= DUREE_
  * Écritures de « Enregistrer ». `base` : saisie figée à l'ouverture ; `saisie` : saisie courante ; `actuel` :
  * document actuel du plat (avec `id`). Seuls les champs touchés (saisie ≠ base) sont écrits : un champ non touché
  * suit la fiche actuelle, même changée ailleurs entre-temps.
- * → { champs, supprimer, demandesAClore, conflits, erreurs: [{ champ, message }], rien }
+ * Étapes détaillées (T5-0b) : une réalisation touchée s'écrit avec `etapes` (ses titres), toujours ensemble ; une étape
+ * sans titre, sans texte ou sans durée lisible est une erreur (champ `realisation`) ; `reperesRelus` n'est jamais
+ * effacée pour des étapes. `avertissements` (textes, jamais bloquants) : un ingrédient cité par une étape qui n'est
+ * plus dans la recette ; des mesures « Et aussi » écrites pour d'autres portions.
+ * → { champs, supprimer, demandesAClore, conflits, erreurs: [{ champ, message }], avertissements, rien }
  */
 export function preparerModification(base, saisie, actuel, { plats = [], demandes = [], reglages = null } = {}) {
   const plat = estObjet(actuel) ? actuel : {};
@@ -716,7 +750,31 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
   if (recetteRecue) champs.statutRecette = saisie.verifiee ? 'validee' : 'brouillon';
   else if (touche('verifiee')) champs.statutRecette = saisie.verifiee ? 'validee' : 'brouillon';
 
-  if (touche('etapes')) {
+  // Étapes : détaillées (éditeur réduit, T5-0b), écrites avec leurs titres ; sinon les étapes courtes, comme avant.
+  const detaillee = Array.isArray(saisie?.realisation);
+  if (detaillee && touche('realisation')) {
+    const realisation = copier(saisie.realisation).filter(estObjet).map((etape) => {
+      const propre = { ...etape, titre: reduire(etape.titre), texte: reduire(etape.texte) };
+      if (estNombre(propre.actif) && estNombre(propre.duree) && propre.actif > propre.duree) propre.actif = propre.duree;
+      return propre;
+    });
+    const fautes = new Set();
+    for (const etape of realisation) {
+      if (!etape.titre) fautes.add(TEXTES_ETAPES.titreManquant);
+      else if ([...etape.titre].length > TITRE_MAX) fautes.add(TEXTES_ETAPES.titreTropLong);
+      if (!etape.texte) fautes.add(TEXTES_ETAPES.texteManquant);
+      else if ([...etape.texte].length > TEXTE_MAX) fautes.add(TEXTES_ETAPES.texteTropLong);
+      if (!(Number.isInteger(etape.duree) && etape.duree >= 1 && etape.duree <= DUREE_MAX_MIN)) fautes.add(TEXTES_ETAPES.dureeInvalide);
+      if (etape.actif !== undefined && !(Number.isInteger(etape.actif) && etape.actif >= 0)) fautes.add(TEXTES_ETAPES.dureeInvalide);
+    }
+    for (const message of fautes) erreur('realisation', message);
+    if (realisation.length) {
+      champs.realisation = realisation;
+      champs.etapes = titresDe(realisation);
+    } else {
+      supprimer.push('realisation', 'etapes');
+    }
+  } else if (!detaillee && touche('etapes')) {
     const etapes = (Array.isArray(saisie.etapes) ? saisie.etapes : []).map(reduire).filter(Boolean);
     if (etapes.length) champs.etapes = etapes;
     else supprimer.push('etapes');
@@ -769,6 +827,27 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
     if (produitNouveau || appareilChange) supprimer.push('reperesRelus');
   }
 
+  // Étapes détaillées gardées telles quelles quand la recette change autour d'elles (T5-0b) : ce qui ne s'affichera
+  // plus, et les mesures « Et aussi » écrites pour d'autres portions, sont dits à l'enregistrement.
+  const avertissements = [];
+  const realisationEnregistree = champs.realisation ?? (detaillee ? saisie.realisation : null);
+  if (Array.isArray(realisationEnregistree) && (ecrireIngredients || touche('realisation'))) {
+    const presents = new Set(ingredients.filter(estObjet).map((i) => cleProduit(i.produit)));
+    realisationEnregistree.forEach((etape, i) => {
+      for (const cite of Array.isArray(etape?.ingredients) ? etape.ingredients : []) {
+        const produit = typeof cite === 'string' ? cite : cite?.produit;
+        if (typeof produit === 'string' && produit && !presents.has(cleProduit(produit))) {
+          avertissements.push(TEXTES_ETAPES.plusDansLaRecette(produit, i + 1));
+        }
+      }
+    });
+  }
+  if (Array.isArray(realisationEnregistree) && touche('portionsBase') && Number.isInteger(base?.portionsBase)
+    && realisationEnregistree.some((etape) => (Array.isArray(etape?.aussi) ? etape.aussi : [])
+      .some((a) => estObjet(a) && a.qte != null && !a.fixe))) {
+    avertissements.push(TEXTES_ETAPES.mesuresPour(base.portionsBase));
+  }
+
   const ouverte = (d) => d?.id === `${plat.id}__recette` && d?.statut === 'ouverte';
   if (recetteRecue && Array.isArray(demandes) && demandes.some(ouverte)) {
     demandesAClore.push(`${plat.id}__recette`);
@@ -785,13 +864,13 @@ export function preparerModification(base, saisie, actuel, { plats = [], demande
       candidat.conservation = { ...(estObjet(plat.conservation) ? copier(plat.conservation) : {}), ...champs.conservation };
     }
     for (const champ of supprimer) delete candidat[champ];
-    const resultat = validerPaquet({ format: FORMAT, plats: [candidat] }, { versionsEnDouble: 'premiere' });
+    const resultat = validerPaquet({ format: FORMAT, plats: [candidat] }, { versionsEnDouble: 'premiere', lotsDEtapes: false });
     for (const e of [...resultat.erreurs, ...resultat.plats.flatMap((p) => p.erreurs)]) erreur('recette', e.message);
   }
 
   for (const [cle, valeur] of Object.entries(champs)) if (valeur === undefined) delete champs[cle];
   const rien = !Object.keys(champs).length && !supprimer.length;
-  return { champs, supprimer, demandesAClore, conflits, erreurs, rien };
+  return { champs, supprimer, demandesAClore, conflits, erreurs, avertissements, rien };
 }
 
 // ——— Brouillon ———
@@ -802,6 +881,7 @@ const TYPES_SAISIE = {
   portionsBase: (v) => estNombre(v),
   ingredients: (v) => Array.isArray(v) && v.every(estObjet),
   etapes: (v) => Array.isArray(v) && v.every((e) => typeof e === 'string'),
+  realisation: (v) => v === null || (Array.isArray(v) && v.every(estObjet)),
   cuisson: (v) => Array.isArray(v) && v.every(estObjet),
   frigoJours: (v) => estNombre(v),
   congelable: (v) => v === null || typeof v === 'boolean',
@@ -812,8 +892,11 @@ const TYPES_SAISIE = {
 function saisieValide(saisie) {
   if (!estObjet(saisie)) return false;
   const cles = Object.keys(saisie);
-  if (cles.length !== CHAMPS_SAISIE.length || cles.some((cle) => !CHAMPS_SAISIE.includes(cle))) return false;
-  return CHAMPS_SAISIE.every((cle) => TYPES_SAISIE[cle](saisie[cle]));
+  if (cles.some((cle) => !CHAMPS_SAISIE.includes(cle))) return false;
+  // Un brouillon d'avant T5-0b n'a pas `realisation` : il reste valide (pas d'étapes détaillées).
+  const obligatoires = CHAMPS_SAISIE.filter((cle) => !CHAMPS_SAISIE_FACULTATIFS.includes(cle));
+  if (obligatoires.some((cle) => !Object.hasOwn(saisie, cle))) return false;
+  return cles.every((cle) => TYPES_SAISIE[cle](saisie[cle]));
 }
 
 /** Vrai pour un brouillon intact : { v: 1, base, saisie, depuis }. Sert à rejeter un brouillon abîmé. */

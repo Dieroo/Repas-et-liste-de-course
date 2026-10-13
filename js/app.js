@@ -77,6 +77,8 @@ import {
 } from './coeur/liste.js';
 import { indexDesRecettes, ficheProduit } from './coeur/produits.js';
 import { modeleDrive, ecrituresDrive, ERREURS_DRIVE, texteMotNote } from './coeur/drive.js';
+// T5-0b « Étapes détaillées » : écriture d'un lot d'étapes (importerEtapes).
+import { TEXTES_ETAPES } from './coeur/realisation.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -1108,6 +1110,13 @@ const actions = {
       return Promise.reject(Object.assign(new Error('Il faut être connecté pour ajouter des versions.'), { code: 'hors_ligne' }));
     }
     if (aRelectures) return importerRelecture(ecritures);
+    // Étapes détaillées (T5-0b) : une transaction par plat, en ligne seulement.
+    if (ecritures.some((ecriture) => ecriture.mode === 'etapes')) {
+      if (!navigator.onLine) {
+        return Promise.reject(Object.assign(new Error(TEXTES_ETAPES.horsLigne), { code: 'hors_ligne' }));
+      }
+      return importerEtapes(ecritures);
+    }
     // Noms lus avant l'envoi : un plat disparu entre-temps n'est plus dans la liste quand la réponse arrive.
     const nomsAvant = new Map(etat.plats.map((plat) => [plat.id, plat.nom]));
     const { envoi, versions } = donnees.importer({ ecritures, demandesAClore }, etat.utilisateur.email);
@@ -1720,7 +1729,7 @@ const actions = {
    * création de la semaine et articles des `restes` avec le premier plat, seulement si la cible n'avait aucun plat).
    * `nombreAnnonce` : le nombre dit par le libellé du bouton, ramené à ce qui manque (coeur/proposition.js ›
    * nombreAProposer : des cases cochées entre-temps comptent) et à ce qui est disponible ; l'annonce dit le vrai
-   * nombre. Annonce (coeur/proposition.js › annonceProposition) avec « Annuler » pendant 30 s (annulerProposition :
+   * nombre. Annonce (coeur/proposition.js › annonceProposition) avec « Annuler » pendant 10 s (annulerProposition :
    * remet tout comme avant, puis `apresAnnulation()`). Les raisons des choix sont gardées sur ce téléphone (ligne
    * « ✨ Proposé : … » de la feuille du plat). `feuille: true` (feuille de choix) : un `chevauche` est rendu tel quel
    * (la feuille recalcule sa semaine visée et le dit) ; sinon, un essai de plus sur la semaine visée du moment, puis la
@@ -1738,7 +1747,7 @@ const actions = {
   /**
    * « 🍰 Proposer 2 desserts » (D6, feuille « Combien de desserts ? », ouverte depuis Semaine ou la feuille de choix) :
    * `nombre` desserts (1 à 4) entrent d'un coup dans la semaine `cible`, comme proposerALaSemaine (même lot, mêmes
-   * restes, même « Annuler » 30 s, même `chevauche` : la feuille reste ouverte et recalcule sa semaine visée).
+   * restes, même « Annuler » 10 s, même `chevauche` : la feuille reste ouverte et recalcule sa semaine visée).
    * → mêmes retours que proposerALaSemaine.
    */
   proposerDessertsALaSemaine({
@@ -2502,8 +2511,11 @@ function remettreDans(semaineId, platId, remettre = []) {
 
 // ——— Proposer les plats de la semaine (T4-0) ———
 
-/** Durée de l'annonce d'une proposition et de son « Annuler » (D2). */
-const DUREE_ANNONCE_PROPOSITION_MS = 30000;
+/**
+ * Durée de l'annonce d'une proposition (✨ ou 🍰) et de son « Annuler » : 10 s (retour du propriétaire, 2026-10-13 :
+ * 30 s, c'était trop long sur les cartes qu'elle annonce) ; elle ne part toujours pas sous le doigt ni sous le focus.
+ */
+const DUREE_ANNONCE_PROPOSITION_MS = 10000;
 
 /**
  * Proposition de plats (`type` 'plat', « ✨ ») ou de desserts ('dessert', « 🍰 ») pour une semaine visée, écrite en un
@@ -2543,14 +2555,14 @@ function proposerDansLaSemaine(type, {
       restes,
       tousLesPlats: platsSepares().actifs,
     });
-    return { visee, proposition, ecritures };
+    return { proposition, ecritures };
   };
   let essai = essayer(cible);
   // Cible devenue impossible (dates changées sur l'autre téléphone) : la feuille recalcule elle-même la sienne et le
   // dit ; ailleurs, un essai de plus sur la semaine visée du moment.
   if (essai.ecritures?.code === 'chevauche' && cible && !feuille) essai = essayer(null);
   if (essai.code) return essai;
-  const { visee, proposition, ecritures } = essai;
+  const { proposition, ecritures } = essai;
   if (ecritures.code === 'chevauche' && !feuille) annoncer(TEXTES_PROPOSER.erreurs.chevauche);
   if (ecritures.code) return ecritures;
   if (typeof avant === 'function') avant(ecritures.ajoutes[0]?.platId ?? null);
@@ -2561,13 +2573,11 @@ function proposerDansLaSemaine(type, {
   for (const c of choisis) etat.proposes.set(`${ecritures.id}|${c.platId}`, c.raison);
   rendre();
   const nbRestes = ecritures.articles?.length ?? 0;
-  const semaine = semaineParId(ecritures.id);
+  // Ni dates ni restes dans l'annonce : la semaine proposée est celle que Semaine montre maintenant, et ses restes, la
+  // feuille venait de les dire (coeur/proposition.js › annonceProposition).
   const texte = annonceProposition({ ...proposition, choisis, ids: choisis.map((c) => c.platId) }, {
-    cible: semaine ?? visee,
-    aujourdhui,
     moi: profilDeLEmail(etat.profils, etat.utilisateur.email),
     profils: etat.profils,
-    restes: nbRestes,
   });
   const semaineId = ecritures.id;
   annoncer(texte, {
@@ -3054,6 +3064,34 @@ function importerRelecture(ecritures) {
   }, (erreur) => {
     annoncer('La relecture n’a pas pu être enregistrée. Réessayez.');
     throw Object.assign(new Error('La relecture n’a pas pu être enregistrée.'), { code: 'echec', cause: erreur });
+  });
+}
+
+/**
+ * Étapes détaillées d'un lot DEMANDE-ETAPES (T5-0b, écritures `mode: 'etapes'`, en ligne seulement : vérifié par
+ * l'appelant). Une transaction par plat (donnees.importer › ecrireEtapes) ; les fiches écrites s'affichent dès la fin
+ * des transactions (coeur/import-local.js › appliquerImport), sans attendre la copie de Firestore, pour que « Encore
+ * N recettes à détailler » soit juste tout de suite. Un plat changé, supprimé ou mis à la corbeille entre-temps n'est
+ * pas écrit : « « Gratin » a changé entre-temps : ses étapes n’ont pas été écrites. Il restera à détailler. »
+ * → promesse de { ecrites: [id], refuses: [{ id, nom }] } ; rejetée avec `code: 'echec'` (rien n'est affiché d'avance).
+ */
+function importerEtapes(ecritures) {
+  const nomsAvant = new Map(etat.plats.map((plat) => [plat?.id, plat?.nom]));
+  const nom = (id) => String(nomsAvant.get(id) ?? id);
+  const { etapes } = donnees.importer({ ecritures, demandesAClore: [] }, etat.utilisateur.email);
+  const uid = etat.utilisateur.uid;
+  return etapes.then(({ ecrites, ...refus }) => {
+    const refuses = Object.values(refus).flat().map((id) => ({ id, nom: nom(id) }));
+    if (etat.utilisateur?.uid === uid) {
+      const faites = new Set(ecrites);
+      etat.plats = appliquerImport(etat.plats, ecritures.filter((ecriture) => faites.has(ecriture.id)));
+      rendre();
+      if (refuses.length) annoncer(refuses.map((plat) => TEXTES_ETAPES.refusEnvoi(plat.nom)).join(' '));
+    }
+    return { ecrites, refuses };
+  }, (erreur) => {
+    annoncer('Les étapes n’ont pas pu être enregistrées. Réessayez.');
+    throw Object.assign(new Error('Les étapes n’ont pas pu être enregistrées.'), { code: 'echec', cause: erreur });
   });
 }
 

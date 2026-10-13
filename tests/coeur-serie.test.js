@@ -32,7 +32,9 @@ const idee = (id, nom, extra = {}) => ({
 const recette = (id, nom, extra = {}) => idee(id, nom, { source: 'Version classique', ...extra });
 const platRempli = (id, nom) => ({ ...recette(id, nom), statutRecette: 'validee' });
 
-const paquet = (...plats) => ({ format: 'paquet@1', instructions: VERSION_INSTRUCTIONS, plats });
+// Fiches rendues avec les instructions d'avant les étapes détaillées (version 6) : leur `realisation` n'est pas
+// attendue ici (T5-0b, coeur-realisation.test.js couvre la version 7).
+const paquet = (...plats) => ({ format: 'paquet@1', instructions: 6, plats });
 function valider(...plats) {
   const validation = validerPaquet([paquet(...plats)], { profils: [] });
   assert.equal(validation.valide, true, JSON.stringify(validation.erreurs));
@@ -295,6 +297,10 @@ test('etatSerie et texteSerie (étapes, T5-0b) : restants lus dans la base, fin,
   assert.equal(fin.aide, null);
   assert.equal(fin.conseil, null);
   assert.equal(etatSerie({ nature: 'etapes', aDetailler: 4 }).restants, 4);
+  // « N depuis l’ouverture de cet écran. » : idées seulement, jamais sous les étapes (plan §8.1).
+  const apres = etatSerie({ nature: 'etapes', ajoutesDepuisOuverture: plats(9), dernier: ['a'], aDetailler: plats(1), reponses: 6 });
+  assert.equal(apres.faits, 9);
+  assert.equal(texteSerie(apres).depuis, null);
 });
 
 test('textes de la série : jamais d’espace insécable littérale, apostrophes typographiques', () => {

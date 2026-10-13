@@ -1554,6 +1554,19 @@ body:not(.dans-app) .annonce { bottom: calc(24px + env(safe-area-inset-bottom));
 
 body.sans-onglets .annonce { bottom: calc(var(--hauteur-barre) + 16px + env(safe-area-inset-bottom)); }
 
+/* Semaine : rien de fixe entre les onglets et le bandeau (les 88 px laissent ailleurs la place du bouton flottant de
+   Plats) ; il descend à la hauteur de ce bouton, au plus près des onglets, et cache moins les cartes qu'il annonce. */
+body.dans-app:not(.sans-onglets):has(.onglet[data-route="semaine"][aria-current="page"]) .annonce {
+  bottom: calc(var(--hauteur-onglets) + 16px + env(safe-area-inset-bottom));
+}
+
+/* … et la page réserve en bas la place d'une annonce de deux lignes (comme Plats celle de son bouton flottant) :
+   défilée jusqu'en bas, sa dernière commande (« 🍰 Proposer des desserts », « 💡 Demander des idées ») reste au-dessus du
+   bandeau, au lieu de passer dessous pendant les 10 s de l'annonce. */
+body.dans-app:not(.sans-onglets):has(.onglet[data-route="semaine"][aria-current="page"]) main {
+  padding-bottom: calc(var(--hauteur-onglets) + 96px + env(safe-area-inset-bottom));
+}
+
 body.sans-onglets:has(.lien-erreurs:not([hidden])) .annonce {
   bottom: calc(var(--hauteur-barre) + 68px + env(safe-area-inset-bottom));
 }
@@ -2873,24 +2886,37 @@ select.champ {
 /* Annonce avec un bouton (« Annuler ») : le bouton garde 48 px de haut ; son contour de focus reste dans le bandeau
    (overflow: hidden), au clair sur le fond sombre de l'annonce. */
 .annonce.avec-action {
-  padding-top: 2px;
-  padding-bottom: 2px;
-  padding-right: 6px;
-  /* Texte et « Annuler » côte à côte, ou l'un sous l'autre quand le texte est long : seul le texte se coupe, jamais le
-     bouton (police agrandie, annonce de deux phrases). */
+  /* Bandeau compact (retour du propriétaire, 2026-10-13) : le texte à gauche, « Annuler » à droite sur la même ligne ;
+     seul le texte se coupe, dans son bloc, jamais le bouton. */
+  padding: 2px 4px 2px 14px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
+  column-gap: 4px;
   max-height: 60vh;
+  line-height: 1.35;
+  text-align: left;
 }
 
+/* Le texte compte pour 18ch au plus quand le bandeau choisit ses lignes (jamais plus que sa longueur : un message court
+   ne pousse jamais le bouton dessous) : « Annuler » ne passe sous le texte que si l'écran ne laisse pas à côté de lui
+   la place de 18 chiffres (une vingtaine de lettres, quelle que soit la police du téléphone), en police très agrandie,
+   ou si le bandeau en est moins haut (`annonce-dessous`, ci-dessous) ; sinon le texte prend toute la place qui reste et
+   s'y coupe. */
 .annonce.avec-action .annonce-texte {
-  flex: 1 1 auto;
+  flex: 1 1 18ch;
   min-width: 0;
+  max-width: max-content;
   max-height: calc(60vh - 52px);
   overflow: hidden;
-  padding: 10px 0;
+  padding: 6px 0;
+}
+
+/* Texte long en police agrandie (dom.js › annoncer, si le bandeau en est moins haut) : le texte sur toute la largeur,
+   « Annuler » dessous, à droite, plutôt qu'une colonne étroite de 2 ou 3 mots par ligne. */
+.annonce.avec-action.annonce-dessous .annonce-texte {
+  flex-basis: 100%;
+  max-width: none;
 }
 
 .annonce-action {
@@ -2898,7 +2924,8 @@ select.champ {
   display: inline-flex;
   align-items: center;
   min-height: 48px;
-  margin-left: 4px;
+  /* Seul sur sa ligne (police très agrandie), il reste à droite. */
+  margin-left: auto;
   padding: 0 12px;
   border: none;
   border-radius: 10px;
@@ -4618,6 +4645,112 @@ body:has(.barre-courses) .annonce {
 /* Réglages : « Ordre des rayons » et « 🏠 Placard ». */
 .carte-rayons p,
 .carte-placard p { overflow-wrap: anywhere; }
+
+/* ——— T5-0b « Étapes détaillées » : fiche, carte de Réglages, aperçu d'un lot d'étapes, « Modifier » réduit ——— */
+
+/* Fiche : une étape détaillée par ligne numérotée ; titre en gras, texte, repères, quantités, signe que c'est prêt. */
+.liste-etapes-detaillees { gap: 16px; }
+
+/* `list-item` (jamais `flex`) : le numéro de l'étape (et le « 6 » du jour du repas, `value`) reste dessiné. */
+.etape-detaillee {
+  display: list-item;
+  overflow-wrap: anywhere;
+}
+
+.etape-detaillee > :not(:first-child) { margin-top: 4px; }
+
+.etape-detaillee p { margin: 0; }
+
+.etape-titre { font-weight: 600; }
+
+.etape-reperes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+}
+
+.etape-ingredients {
+  margin: 0;
+  padding-left: 1.1em;
+  font-size: 0.9375rem;
+}
+
+.etape-aussi { font-size: 0.9375rem; }
+
+.etape-libelle { font-weight: 600; }
+
+.etape-pret {
+  color: var(--olive);
+  font-weight: 600;
+}
+
+.etapes-service {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.etapes-service h3 { font-size: 1.0625rem; }
+
+/* Fiche (gestionnaire) : « Ces étapes sont courtes. … », sous les étapes. */
+.carte-etapes-courtes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--fond);
+}
+
+.carte-etapes-courtes p { margin: 0; }
+
+/* Réglages : carte « 👩‍🍳 Étapes détaillées », comme « 🧸 Relire les recettes ». */
+.carte-etapes { gap: 10px; }
+
+.carte-etapes h2,
+.carte-etapes p { margin: 0; overflow-wrap: anywhere; }
+
+.carte-etapes-phrases {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* « Ajouter des recettes » : titres d'une recette détaillée, repliés ; fin de la série. */
+.liste-titres-etapes {
+  margin: 0;
+  padding-left: 1.4em;
+  overflow-wrap: anywhere;
+}
+
+.serie-fin {
+  color: var(--olive);
+  font-weight: 600;
+}
+
+/* « Modifier » : une étape détaillée, son titre en gras, son texte sur deux lignes au plus. */
+.ligne-etape-detaillee .ligne-texte {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+}
+
+.ligne-etape-titre { font-weight: 600; }
+
+.ligne-etape-texte {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--texte-doux);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
 
 /* ——— Proposer les plats de la semaine (T4-0) ——— */
 

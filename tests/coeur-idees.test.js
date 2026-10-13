@@ -19,9 +19,10 @@ const ENFANT = { id: 'enfant', nom: 'Enfant', email: '', ordre: 3, coefPortion: 
 const PROFILS = [ENFANT, ADULTE_B, ADULTE_A];
 
 const DEBUT = ['DEMANDE-IDEES paquet@1', `instructions: ${VERSION_INSTRUCTIONS}`];
-const CRITERES = 'critères: plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts.';
+const CRITERES = 'critères: plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts ; au moins un plat sur trois avec des légumes bien présents (visibles, en purée ou en velouté ; la pomme de terre ne compte pas).';
 const APPAREILS_DEFAUT = 'appareils: plaque, four, cookeo, airfryer';
-const CONSIGNE = '(Rends 5 fiches complètes par message, chacune avec un `id` nouveau (slug du nom), `"statutRecette": "brouillon"` et `"source": "Idée de Claude"`, et leurs variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l\'app ». Après chaque message, attends « suite » pour les 5 suivantes. Un seul bloc par message.)';
+// Version 7 (T5-0b) : 3 fiches par message, chacune avec sa réalisation.
+const CONSIGNE = '(Rends 3 fiches complètes par message, chacune avec un `id` nouveau (slug du nom), `"statutRecette": "brouillon"`, `"source": "Idée de Claude"`, sa `realisation` (section 2 bis) et ses variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l\'app ». Après chaque message, attends « suite » pour les 3 suivantes. Un seul bloc par message.)';
 const VERSION_B = '- pour: profil-b — Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel. — styles: mer, vegetal';
 const VERSION_ENFANT = '- pour: enfant — Ne mange ni viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni poisson, ni fruits de mer, ni bouillon ou fond de viande, de volaille ou de poisson, ni gélatine animale, ni graisse animale. Mange des œufs, du fromage (même à présure animale) et du miel. — styles: vegetal';
 
@@ -66,7 +67,9 @@ const platRempli = (id, nom, extra = {}) => ({
 /** Plat ajouté par son nom (⏳). */
 const platAttente = (id, nom) => ({ id, nom });
 
-const paquet = (...plats) => ({ format: 'paquet@1', instructions: VERSION_INSTRUCTIONS, plats });
+// Fiches rendues avec les instructions d'avant les étapes détaillées (version 6) : leur `realisation` n'est pas
+// attendue ici (T5-0b, coeur-realisation.test.js couvre la version 7).
+const paquet = (...plats) => ({ format: 'paquet@1', instructions: 6, plats });
 function valides(...plats) {
   const resultat = validerPaquet([paquet(...plats)], { profils: PROFILS });
   assert.equal(resultat.valide, true, JSON.stringify(resultat.erreurs.concat(resultat.plats.flatMap((p) => p.erreurs))));
@@ -78,10 +81,10 @@ const elementDe = (preparation, id) => preparation.elements.find((e) => e.id ===
 
 // ——— texteDemandeIdees ———
 
-test('constantes : 5, 10 ou 15 idées (15 par défaut), 5 par message, envie de 120 caractères, 20 noms', () => {
+test('constantes : 5, 10 ou 15 idées (15 par défaut), 3 par message (version 7), envie de 120 caractères, 20 noms', () => {
   assert.deepEqual(IDEES_NOMBRES, [5, 10, 15]);
   assert.equal(IDEES_NOMBRE_DEFAUT, 15);
-  assert.equal(IDEES_PAR_MESSAGE, 5);
+  assert.equal(IDEES_PAR_MESSAGE, 3);
   assert.equal(IDEES_ENVIE_MAX, 120);
   assert.equal(IDEES_NOMS_MAX, 20);
   assert.equal(SOURCE_IDEE, 'Idée de Claude');
@@ -358,7 +361,7 @@ test('réponse entière de Claude : texte, bloc, idée déjà là et idée nouve
 
 test('message d’idées refusé : la correction redemande toutes les fiches du message, les autres telles quelles', () => {
   const sansForme = idee('poulet-sans-forme', 'Poulet sans forme', { ingredients: [{ ...POULET, forme: undefined }, PATATE, MISO, RIZ] });
-  const message = [idee('idee-a', 'Idée A'), idee('idee-b', 'Idée B'), sansForme, idee('idee-d', 'Idée D'), idee('idee-e', 'Idée E')];
+  const message = [idee('idee-a', 'Idée A'), sansForme, idee('idee-d', 'Idée D')];
   assert.equal(message.length, IDEES_PAR_MESSAGE);
   const v = validerPaquet([paquet(...message)], { profils: PROFILS });
   assert.equal(v.valide, false);
@@ -366,15 +369,15 @@ test('message d’idées refusé : la correction redemande toutes les fiches du 
     'CORRECTION paquet@1',
     `instructions: ${VERSION_INSTRUCTIONS}`,
     'id: poulet-sans-forme',
-    '- plats[2] (poulet-sans-forme) ingredients[0] « haut de cuisse de poulet » : forme manquante ou inconnue pour une viande : `hachee`, `fine`, `morceaux`, `effilochable`',
-    '- Rien n’a été enregistré : rends aussi, telles quelles, les autres fiches du message (idee-a, idee-b, idee-d, idee-e).',
+    '- plats[1] (poulet-sans-forme) ingredients[0] « haut de cuisse de poulet » : forme manquante ou inconnue pour une viande : `hachee`, `fine`, `morceaux`, `effilochable`',
+    '- Rien n’a été enregistré : rends aussi, telles quelles, les autres fiches du message (idee-a, idee-d).',
     '(Rends toutes les fiches du message, corrigées, en un seul bloc.)',
   ].join('\n'));
   // Recoller le message d'origine bute sur la même erreur ; le message rendu corrigé s'enregistre en entier.
   assert.equal(validerPaquet([paquet(...message)], { profils: PROFILS }).valide, false);
-  const corrige = importer([...message.slice(0, 2), { ...sansForme, ingredients: [POULET, PATATE, MISO, RIZ] }, ...message.slice(3)], { plats: [] });
+  const corrige = importer([message[0], { ...sansForme, ingredients: [POULET, PATATE, MISO, RIZ] }, message[2]], { plats: [] });
   assert.deepEqual(corrige.erreurs, []);
-  assert.deepEqual(corrige.ecritures.map((e) => e.id), ['idee-a', 'idee-b', 'poulet-sans-forme', 'idee-d', 'idee-e']);
+  assert.deepEqual(corrige.ecritures.map((e) => e.id), ['idee-a', 'poulet-sans-forme', 'idee-d']);
 });
 
 test('message d’idées refusé à l’ajout (deux idées pour le même plat) : tout le message redemandé', () => {

@@ -44,6 +44,11 @@ const FICHE_COMPLETE = {
     { produit: 'oignon jaune', qte: 1, unite: 'pc', rayon: 'fruits_legumes', marqueurs: ['legume'], role: 'incorpore' },
   ],
   etapes: ['Cuire les pâtes.', 'Mélanger et gratiner.'],
+  // T5-0b : étapes détaillées, `etapes` = leurs titres.
+  realisation: [
+    { titre: 'Cuire les pâtes.', texte: 'Cuire les pâtes à l’eau bouillante salée, à feu vif.', duree: 12, actif: 1, appareil: 'plaque', feu: 'vif', ingredients: ['pâtes courtes'] },
+    { titre: 'Mélanger et gratiner.', texte: 'Mélanger avec le jambon et l’oignon, puis gratiner.', duree: 20, actif: 2, appareil: 'four', tempC: 200, ingredients: ['jambon blanc', 'oignon jaune'], pret: 'Le dessus est doré.' },
+  ],
   cuisson: [{ appareil: 'plaque', dureeMin: 12 }, { appareil: 'four', tempC: 200, mode: 'chaleur tournante', dureeMin: 20 }],
   tempsActifMin: 15,
   conservation: { frigoJours: 3, congelable: true },

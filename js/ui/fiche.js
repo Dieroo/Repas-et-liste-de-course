@@ -24,6 +24,10 @@ import { estDansCorbeille, platsSansPreneur, texteCorbeille } from '../coeur/cor
 import { etatDemande, texteDemandee } from '../coeur/demandes.js';
 import { estDansLaSemaine, lireSemaine, peutAllerDansLaSemaine, semaineVisee, texteDates } from '../coeur/semaine.js';
 import { majPlatsDeLaSemaine, ouvrirPlatDeLaSemaine, phraseDemandee, restesPour } from './plat-semaine.js';
+// T5-0b « Étapes détaillées » : lecture des étapes, carte « Ces étapes sont courtes » (gestionnaire).
+import { texteDemandeEtapes } from '../coeur/claude.js';
+import { TEXTES_ETAPES, etapesLisibles, etatRealisation, ligneAppareil, ligneDuree } from '../coeur/realisation.js';
+import { ouvrirEnSerieEtapes } from './import.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -347,6 +351,59 @@ function creerCarteSansPreneur(mettreALaCorbeille) {
   return { noeud, bouton, maj };
 }
 
+/**
+ * Une étape détaillée (T5-0b) : titre en gras, texte, « ⏱ 10 min · dont 1 min de travail », appareil et feu,
+ * quantités de l'étape (pour les portions de la recette), « Et aussi », « ✓ Prêt quand : … ». Numérotée par son rang
+ * dans la recette (`value`), même dans « Le jour du repas ».
+ */
+function etapeDetaillee(etape) {
+  const duree = ligneDuree(etape).replace(/^⏱\s*/u, '');
+  const appareil = ligneAppareil(etape);
+  return el('li', { class: 'etape-detaillee', value: String(etape.n) },
+    el('p', { class: 'etape-titre' }, etape.titre),
+    etape.texte ? el('p', { class: 'etape-texte' }, etape.texte) : null,
+    duree || appareil
+      ? el('p', { class: 'etape-reperes' },
+        duree ? el('span', {}, el('span', { 'aria-hidden': 'true' }, '⏱\u00A0'), duree) : null,
+        appareil ? el('span', {}, appareil) : null)
+      : null,
+    etape.ingredients.length
+      ? el('ul', { class: 'etape-ingredients' }, etape.ingredients.map((ingredient) => el('li', {}, ingredient.texte)))
+      : null,
+    etape.aussi.length
+      ? el('p', { class: 'etape-aussi' },
+        el('span', { class: 'etape-libelle' }, `${TEXTES_ETAPES.etAussi}\u00A0: `),
+        etape.aussi.map((element) => element.texte).join(' · '))
+      : null,
+    etape.pret ? el('p', { class: 'etape-pret' }, TEXTES_ETAPES.pretQuand(etape.pret)) : null,
+  );
+}
+
+/**
+ * Partie « Étapes » de la fiche (T5-0b) : étapes détaillées à jour en liste numérotée, celles « Le jour du repas » à
+ * part ; sinon les étapes courtes, comme avant. `carte` : la carte « Ces étapes sont courtes » du gestionnaire.
+ */
+function sectionEtapes(plat, carte) {
+  const { etapes, detaillee } = etapesLisibles(plat);
+  if (!detaillee) {
+    const courtes = (plat.etapes ?? []).map((etape) => String(etape));
+    if (!courtes.length && !carte) return null;
+    return section('Étapes',
+      courtes.length ? el('ol', { class: 'liste-etapes' }, courtes.map((etape) => el('li', {}, etape))) : null,
+      carte);
+  }
+  const cuisine = etapes.filter((etape) => !etape.auService);
+  const service = etapes.filter((etape) => etape.auService);
+  return section('Étapes',
+    cuisine.length ? el('ol', { class: 'liste-etapes liste-etapes-detaillees' }, cuisine.map(etapeDetaillee)) : null,
+    service.length
+      ? el('div', { class: 'etapes-service' },
+        el('h3', {}, TEXTES_ETAPES.jourDuRepas),
+        el('ol', { class: 'liste-etapes liste-etapes-detaillees' }, service.map(etapeDetaillee)))
+      : null,
+    carte);
+}
+
 function ligneInfo(terme, definition) {
   return definition ? el('div', { class: 'ligne-info' }, el('dt', {}, terme), el('dd', {}, definition)) : null;
 }
@@ -378,6 +435,24 @@ export function creer(ctx) {
   // Vrai quand « Demander à Claude » est dans la section « Nouvelle version » (bas de fiche, geste rare) : il y est
   // secondaire, pour que « ＋ Ajouter à la semaine » reste le bouton principal de la fiche.
   let actionsEnBas = false;
+
+  // Étapes détaillées (T5-0b, gestionnaire hors aperçu) : carte « Ces étapes sont courtes. … » sous les étapes d'une
+  // recette pas détaillée, gardée d'un rendu à l'autre. Avant la copie, ses deux boutons sont secondaires (la fiche a
+  // déjà son bouton principal) ; ensuite, « Coller la réponse de Claude » devient l'action principale.
+  let etapesCopiees = false;
+  const texteEtapesCourtes = el('p', {});
+  const boutonEtapes = el('button', {
+    class: 'bouton bouton-secondaire bouton-plein', type: 'button', 'data-action': 'demander-etapes', onclick: demanderEtapes,
+  }, el('span', { 'aria-hidden': 'true' }, '📋\u00A0'), TEXTES_ETAPES.demanderSesEtapes.replace(/^📋\s*/u, ''));
+  const lienCollerEtapes = el('a', {
+    class: 'bouton bouton-secondaire bouton-plein',
+    href: '#/import',
+    'data-action': 'coller-etapes',
+    onclick: () => ouvrirEnSerieEtapes({ platId: id }),
+  }, TEXTES_ETAPES.collerLaReponse);
+  const messageEtapes = el('p', { class: 'aide', role: 'status', hidden: true });
+  const carteEtapes = el('div', { class: 'carte-etapes-courtes' },
+    texteEtapesCourtes, messageEtapes, boutonEtapes, lienCollerEtapes);
 
   // « ＋ Ajouter à la semaine » (T3a) : gardé d'un rendu à l'autre (le focus reste sur le bouton touché, qui devient
   // « ✓ Dans la semaine · Régler › »). Inactif tant que les semaines ne sont pas lues ; absent sur un plat de la
@@ -515,6 +590,21 @@ export function creer(ctx) {
     majActionsRecette();
   }
 
+  /** « 📋 Demander ses étapes détaillées » (T5-0b) : DEMANDE-ETAPES pour ce seul plat. */
+  async function demanderEtapes() {
+    const plat = platCourant();
+    if (!plat) return;
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    const reussi = await copier(texteDemandeEtapes([plat], { appareils: courant.reglages?.appareils ?? null }));
+    etapesCopiees = etapesCopiees || reussi;
+    messageEtapes.textContent = reussi
+      ? 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse de Claude\u00A0».'
+      : 'La copie n’a pas marché. Réessayez.';
+    messageEtapes.hidden = false;
+    lienCollerEtapes.className = `bouton bouton-plein ${etapesCopiees ? 'bouton-principal' : 'bouton-secondaire'}`;
+    majBlocSemaine();
+  }
+
   /**
    * Avant la copie, l'action principale est « Demander à Claude » ; ensuite, « Coller la réponse ». Dans la section
    * « Nouvelle version » (bas de fiche), « Demander à Claude » reste secondaire.
@@ -571,7 +661,7 @@ export function creer(ctx) {
     const libelle = dedans ? 'Dans la semaine · Régler ›' : 'Ajouter à la semaine';
     if (iconeSemaine.textContent !== icone) iconeSemaine.textContent = icone;
     if (libelleSemaine.textContent !== libelle) libelleSemaine.textContent = libelle;
-    const principal = !dedans && !autrePrincipal && !(actionsEnBas && demandeCopiee);
+    const principal = !dedans && !autrePrincipal && !(actionsEnBas && demandeCopiee) && !etapesCopiees;
     const classe = `bouton bouton-plein ${principal ? 'bouton-principal' : 'bouton-secondaire'}`;
     if (boutonSemaine.className !== classe) boutonSemaine.className = classe;
     boutonSemaine.disabled = !etat;
@@ -750,7 +840,6 @@ export function creer(ctx) {
         gestionnaire ? actionsRecette : bouton);
     };
     const ingredients = plat.ingredients ?? [];
-    const etapes = plat.etapes ?? [];
     const cuissons = plat.cuisson ?? [];
     const variantes = (plat.variantes ?? []).filter((v) => !versionsMontrees.has(v?.pour));
     const frigo = plat.conservation?.frigoJours;
@@ -764,7 +853,7 @@ export function creer(ctx) {
     if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
     const blocs = [...blocsDemande.values()];
-    const focusGarde = [actionsRecette, blocSemaine, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud,
+    const focusGarde = [actionsRecette, blocSemaine, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes,
       ...blocs.flatMap((bloc) => [bloc.bouton, bloc.phrase])]
       .some((n) => n.contains(document.activeElement))
       ? document.activeElement
@@ -790,6 +879,13 @@ export function creer(ctx) {
       el('span', { 'aria-hidden': 'true' }, '✏️'),
       statut === 'attente' ? 'Écrire la recette moi-même' : 'Modifier la recette',
     );
+    // Étapes détaillées (T5-0b) : la carte du gestionnaire, pour une recette pas (ou plus) détaillée.
+    const etatEtapes = etatRealisation(plat);
+    const avecCarteEtapes = gestionnaire && (etatEtapes === 'courte' || etatEtapes === 'perimee');
+    if (avecCarteEtapes) {
+      const phrase = etatEtapes === 'perimee' ? TEXTES_ETAPES.perimee : TEXTES_ETAPES.ficheCourte;
+      if (texteEtapesCourtes.textContent !== phrase) texteEtapesCourtes.textContent = phrase;
+    }
     // replaceChildren écrirait « null » : les blocs absents sont retirés.
     contenu.replaceChildren(...[
       el('header', { class: 'vue-entete' },
@@ -833,9 +929,7 @@ export function creer(ctx) {
         ))))
         : null,
 
-      etapes.length
-        ? section('Étapes', el('ol', { class: 'liste-etapes' }, etapes.map((etape) => el('li', {}, String(etape)))))
-        : null,
+      sectionEtapes(plat, avecCarteEtapes ? carteEtapes : null),
 
       cuissons.length
         ? section('Cuisson', el('ul', { class: 'liste-simple' }, cuissons.map((c) => el('li', {}, cuissonLisible(c)))))

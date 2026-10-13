@@ -2,6 +2,7 @@
 // la copie de Firestore, et l'annonce qui suit l'enregistrement des versions. Logique pure : ni DOM ni Firebase.
 import { fusionnerVariantes } from './paquet.js';
 import { VERSION_REPERES, appliquerReperes, empreinteRelecture } from './relecture.js';
+import { empreinteEtapes } from './realisation.js';
 
 const estObjet = (valeur) => valeur !== null && typeof valeur === 'object' && !Array.isArray(valeur);
 
@@ -17,13 +18,19 @@ const estObjet = (valeur) => valeur !== null && typeof valeur === 'object' && !A
  *   (`reperesRelus`, T2d) ;
  * - écriture de relecture `{ id, mode: 'precautions', ajouts, retraits, marquerRelue, empreinte }` (T2d) : repères
  *   appliqués (coeur/relecture.js › appliquerReperes) et marque posée, seulement si l'empreinte de relecture du plat
- *   du téléphone est encore celle de l'écriture ; plat absent : ignorée, **jamais** de plat créé.
+ *   du téléphone est encore celle de l'écriture ; plat absent : ignorée, **jamais** de plat créé ;
+ * - écriture d'étapes `{ id, mode: 'etapes', realisation, etapes, empreinte, effacerRelue }` (T5-0b) : réalisation et
+ *   titres posés, marque « relue » retirée si `effacerRelue`, seulement si l'empreinte des étapes du plat du téléphone
+ *   est encore celle de l'écriture ; plat absent : ignorée, **jamais** de plat créé ;
+ * - `supprimer` d'une écriture complète (T5-0b : `['realisation']`, recette remplacée par une réponse sans étapes
+ *   détaillées) : champs retirés du plat.
  */
 export function appliquerImport(plats, ecritures) {
   const liste = Array.isArray(plats) ? plats : [];
   const versions = new Map();
   const completes = new Map();
   const relectures = new Map();
+  const etapes = new Map();
   for (const ecriture of Array.isArray(ecritures) ? ecritures : []) {
     if (!estObjet(ecriture) || typeof ecriture.id !== 'string') continue;
     if (ecriture.mode === 'versions') {
@@ -36,6 +43,8 @@ export function appliquerImport(plats, ecritures) {
       });
     } else if (ecriture.mode === 'precautions') {
       relectures.set(ecriture.id, ecriture);
+    } else if (ecriture.mode === 'etapes') {
+      etapes.set(ecriture.id, ecriture);
     } else if (ecriture.mode === undefined && estObjet(ecriture.donnees)) {
       completes.set(ecriture.id, ecriture);
     }
@@ -52,6 +61,12 @@ export function appliquerImport(plats, ecritures) {
         delete maj.modifieePar;
       }
       if (complete.effacerRelue) delete maj.reperesRelus;
+      for (const champ of Array.isArray(complete.supprimer) ? complete.supprimer : []) delete maj[champ];
+    }
+    const detail = etapes.get(plat.id);
+    if (detail && empreinteEtapes(maj) === detail.empreinte) {
+      maj = { ...maj, realisation: detail.realisation, etapes: detail.etapes };
+      if (detail.effacerRelue) delete maj.reperesRelus;
     }
     const relecture = relectures.get(plat.id);
     if (relecture && empreinteRelecture(maj) === relecture.empreinte) {

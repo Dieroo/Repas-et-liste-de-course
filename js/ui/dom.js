@@ -154,11 +154,30 @@ let minuteurBouton = null;
 let numeroAnnonce = 0;
 
 /**
+ * Annonce avec un bouton : « Annuler » à droite du texte, ou dessous (classe `annonce-dessous`) si le bandeau en est
+ * moins haut. À côté du bouton, un texte long en police agrandie tient dans une colonne d'une vingtaine de lettres
+ * (10 lignes de 2 ou 3 mots) ; dessous, il prend toute la largeur. Mesuré une fois, à l'affichage ; à hauteur égale,
+ * le bouton reste à droite du texte.
+ */
+function placerLeBouton(zone, texte, bouton) {
+  const hauteur = () => {
+    // Le texte entier (même coupé par sa hauteur maximale), puis le bouton à côté de lui ou dessous.
+    const dessous = bouton.offsetTop >= texte.offsetTop + texte.offsetHeight - 1;
+    return dessous ? texte.scrollHeight + bouton.offsetHeight : Math.max(texte.scrollHeight, bouton.offsetHeight);
+  };
+  zone.classList.remove('annonce-dessous');
+  const aCote = hauteur();
+  zone.classList.add('annonce-dessous');
+  if (hauteur() >= aCote) zone.classList.remove('annonce-dessous');
+}
+
+/**
  * Message bref en bas de l'écran (« Photo enregistrée. »), lu par les lecteurs d'écran.
  * `action` : { libelle, faire } ajoute au message un bouton (« Annuler ») ; le message reste alors 8 s au lieu de
- * 3,5 s, et tant que le bouton a le focus (clavier, lecteur d'écran). Le bouton disparaît avec le message ; un toucher
- * cache le message puis appelle `faire()`, une seule fois. Sans action : le comportement d'avant, à l'identique.
- * `duree` (ms, facultative) : temps d'affichage voulu (T4-0 : « Annuler » d'une proposition, 30 s) ; une nouvelle
+ * 3,5 s, et tant que le bouton a le focus (clavier, lecteur d'écran) ou qu'un doigt est posé dessus. Le bouton
+ * disparaît avec le message ; un toucher cache le message puis appelle `faire()`, une seule fois. Sans action : le
+ * comportement d'avant, à l'identique.
+ * `duree` (ms, facultative) : temps d'affichage voulu (T4-0 : « Annuler » d'une proposition, 10 s) ; une nouvelle
  * annonce remplace celle-ci, donc un autre geste la ferme.
  */
 export function annoncer(texte, options = {}) {
@@ -171,6 +190,7 @@ export function annoncer(texte, options = {}) {
   clearTimeout(minuteurBouton);
   zone.textContent = texte;
   zone.classList.toggle('avec-action', avecAction);
+  zone.classList.remove('annonce-dessous');
 
   const cacher = () => {
     if (numero !== numeroAnnonce) return;
@@ -183,7 +203,7 @@ export function annoncer(texte, options = {}) {
     minuteurBouton = setTimeout(() => {
       if (numero !== numeroAnnonce) return;
       bouton.remove();
-      zone.classList.remove('avec-action');
+      zone.classList.remove('avec-action', 'annonce-dessous');
     }, DUREE_FONDU_MS);
   };
   const programmer = (duree) => {
@@ -193,6 +213,13 @@ export function annoncer(texte, options = {}) {
 
   if (avecAction) {
     let fait = false;
+    // Doigt levé sans toucher le bouton (glissé ailleurs, défilement) : le message repart pour 3,5 s, comme quand le
+    // focus le quitte ; un vrai toucher lui donne ensuite le focus, puis le clic le ferme.
+    const relancer = () => {
+      if (numero === numeroAnnonce && bouton.isConnected && !bouton.inert && document.activeElement !== bouton) {
+        programmer(DUREE_ANNONCE_MS);
+      }
+    };
     const bouton = el('button', {
       type: 'button',
       class: 'annonce-action',
@@ -203,7 +230,14 @@ export function annoncer(texte, options = {}) {
         cacher();
         action.faire();
       },
-      // Le message ne part pas sous le doigt ni sous le focus ; il repart pour 3,5 s quand le focus le quitte.
+      // Le message ne part pas sous le doigt ni sous le focus ; il repart pour 3,5 s quand le focus le quitte. Un
+      // toucher ne donne le focus qu'au lever du doigt : le minuteur s'arrête dès que le doigt se pose, sinon un
+      // toucher commencé juste avant la fin tomberait sur un bouton déjà caché.
+      onpointerdown: () => {
+        if (numero === numeroAnnonce && !bouton.inert) clearTimeout(minuteurAnnonce);
+      },
+      onpointerup: relancer,
+      onpointercancel: relancer,
       onfocus: () => {
         if (numero === numeroAnnonce) clearTimeout(minuteurAnnonce);
       },
@@ -214,11 +248,38 @@ export function annoncer(texte, options = {}) {
     // Le bandeau ne capte pas les touchers (.annonce : pointer-events: none) ; son bouton, si.
     bouton.style.pointerEvents = 'auto';
     // Le texte dans son propre bloc, qui seul se coupe : le bouton reste entier et touchable, même en police agrandie.
+    const bloc = el('span', { class: 'annonce-texte' }, texte);
     zone.textContent = '';
-    zone.append(el('span', { class: 'annonce-texte' }, texte), ' ', bouton);
+    zone.append(bloc, ' ', bouton);
+    placerLeBouton(zone, bloc, bouton);
   }
 
   zone.classList.add('visible');
   const voulue = Number.isFinite(options?.duree) && options.duree > 0 ? options.duree : null;
   programmer(voulue ?? (avecAction ? DUREE_ANNONCE_ACTION_MS : DUREE_ANNONCE_MS));
+}
+
+/**
+ * Fait défiler la page juste assez pour que `noeud` (la carte que l'annonce désigne : premier plat proposé, plat
+ * remplacé) soit entièrement visible au-dessus du bandeau d'annonce et des onglets, sans passer sous l'en-tête (ni
+ * sous le bandeau d'aperçu) ; trop haut pour tenir entre les deux, il s'arrête sous l'en-tête. Le focus ne bouge pas ;
+ * rien si la carte est déjà en vue ou si la page ne défile pas plus loin.
+ */
+export function montrerAuDessusDeLAnnonce(noeud) {
+  if (!noeud?.isConnected) return;
+  const MARGE = 8;
+  let limite = window.innerHeight;
+  const onglets = document.getElementById('onglets');
+  if (onglets && !onglets.hidden) limite = Math.min(limite, onglets.getBoundingClientRect().top);
+  const zone = document.getElementById('annonce');
+  if (zone?.classList.contains('visible')) {
+    // Place d'arrivée du bandeau (son entrée le glisse encore de quelques pixels) : `bottom` calculé, sans la transition.
+    const bas = parseFloat(getComputedStyle(zone).bottom);
+    limite = Math.min(limite, Number.isFinite(bas) ? window.innerHeight - bas - zone.offsetHeight : zone.getBoundingClientRect().top);
+  }
+  const plafond = Math.max(0, ...[...document.querySelectorAll('.entete, .bandeau-apercu:not([hidden])')]
+    .map((n) => n.getBoundingClientRect().bottom)) + MARGE;
+  const boite = noeud.getBoundingClientRect();
+  const descente = Math.min(boite.bottom + MARGE - limite, boite.top - plafond);
+  if (descente > 0) window.scrollBy(0, descente);
 }

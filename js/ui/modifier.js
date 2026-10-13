@@ -41,6 +41,11 @@ import {
   changerCuissonPrincipale,
   preparerModification,
 } from '../coeur/edition.js';
+// T5-0b « Étapes détaillées » : « Modifier » réduit d'une réalisation à jour (titre, texte, durée, retirer, ajouter).
+import {
+  TEXTES_ETAPES, TITRE_MAX, TEXTE_MAX, TEXTE_CONSEILLE, DUREE_MAX_MIN, DUREE_PAR_DEFAUT,
+  changerEtape, retirerEtapeRealisation, ajouterEtapeALaFin, suivreCuissonPrincipale,
+} from '../coeur/realisation.js';
 
 const PRODUIT_MAX = 80;
 const DELAI_CONFIRMATION_MS = 8000;
@@ -53,6 +58,7 @@ const NOMS_CHAMPS = {
   portionsBase: ['le nombre de portions', 'm', 1],
   ingredients: ['les ingrédients', 'm', 2],
   etapes: ['les étapes', 'f', 2],
+  realisation: ['les étapes', 'f', 2],
   cuisson: ['la cuisson', 'f', 1],
   frigoJours: ['les jours au frigo', 'm', 2],
   congelable: ['la congélation', 'f', 1],
@@ -61,7 +67,7 @@ const NOMS_CHAMPS = {
 };
 
 // Ordre des erreurs à l'écran (de haut en bas) : « N points à corriger » mène à la première.
-const ORDRE_ERREURS = ['nom', 'portionsBase', 'ingredients', 'cuisson', 'frigoJours', 'verifiee', 'recette'];
+const ORDRE_ERREURS = ['nom', 'portionsBase', 'ingredients', 'realisation', 'cuisson', 'frigoJours', 'verifiee', 'recette'];
 
 // Cases « Repères » (coeur/edition.js › CASES_REPERES) par identifiant, et marqueurs qu'elles posent.
 const CASES = new Map(CASES_REPERES.map((definition) => [definition.id, definition]));
@@ -119,7 +125,8 @@ const copie = (valeur) => structuredClone(valeur);
 
 /** « Le nom vient d'être changé sur l'autre téléphone : le vôtre le remplacera. » (accordé) ; '' sans conflit. */
 function texteConflit(conflits) {
-  const champs = (conflits ?? []).map((champ) => NOMS_CHAMPS[champ]).filter(Boolean);
+  // Étapes courtes et détaillées changées ensemble : « les étapes » une seule fois.
+  const champs = [...new Set((conflits ?? []).map((champ) => NOMS_CHAMPS[champ]).filter(Boolean))];
   if (!champs.length) return '';
   const pluriel = champs.length > 1 || champs[0][2] > 1;
   const feminin = champs.every(([, genre]) => genre === 'f');
@@ -254,6 +261,7 @@ export function creer(ctx) {
   let boutonAjouterIngredient;
   let listeEtapes;
   let boutonAjouterEtape;
+  let avertissementsEtapes; // étapes détaillées : avertissements de l'enregistrement (T5-0b)
   let boutonAnnuler;
   // Demande de confirmation lue par le lecteur d'écran, sans annonce visible qui cacherait le bouton.
   const statutAnnulation = el('p', { class: 'visuellement-masque', role: 'status' });
@@ -263,11 +271,22 @@ export function creer(ctx) {
   // même si une autre étape devient plus longue en cours de route. Revenir au choix de départ rend la liste de départ.
   let cuissonSource = [];
   let choixCuisson = { appareil: undefined, dureeMin: null }; // undefined : rien de coché ; null : « Aucun »
+  // Étapes détaillées (T5-0b) : l'étape qui suit « Cuit surtout au » (numéro, à partir de 1 : la plus longue de
+  // l'appareil de départ, choisie une fois) et son état de départ (revenir au choix de départ la rend telle quelle).
+  let etapeCuisson = null;
+  let etapeCuissonDepart = null;
+  const detaillee = () => Array.isArray(saisie?.realisation);
 
   function initialiserCuisson() {
     // Liste de départ : celle de la fiche, même après la reprise d'un brouillon. Le choix se lit dans la saisie, sur
     // l'étape qui occupe la place de l'étape principale de départ (sa durée a pu être raccourcie ou effacée).
     cuissonSource = copie(base.cuisson.length ? base.cuisson : saisie.cuisson);
+    if (detaillee() && Array.isArray(base.realisation)) {
+      const ancien = cuissonSource[indexCuissonPrincipale(cuissonSource)]?.appareil ?? null;
+      const { suivie } = suivreCuissonPrincipale(base.realisation, { ancien, nouveau: ancien });
+      etapeCuisson = suivie && saisie.realisation[suivie - 1] ? suivie : null;
+      etapeCuissonDepart = etapeCuisson ? copie(base.realisation[suivie - 1]) : null;
+    }
     if (!saisie.cuisson.length) {
       choixCuisson = { appareil: null, dureeMin: null };
       return;
@@ -304,6 +323,38 @@ export function creer(ctx) {
     const inchangee = origine.appareil === appareil && (Number.isFinite(origine.dureeMin) ? origine.dureeMin : null) === dureeMin;
     if (!inchangee) [liste[principale]] = changerCuissonPrincipale([origine], { appareil, dureeMin });
     saisie.cuisson = liste;
+    suivreEtapeDeCuisson(inchangee);
+  }
+
+  /**
+   * Étapes détaillées (T5-0b) : l'étape de cuisson principale suit le choix (appareil, température, durée ;
+   * coeur/realisation.js › suivreCuissonPrincipale), toujours la même étape pendant la saisie ; revenir au choix de
+   * départ lui rend ses réglages de départ. Son texte n'est jamais changé : un bandeau invite à le relire.
+   */
+  function suivreEtapeDeCuisson(inchangee) {
+    if (!detaillee() || !etapeCuisson || typeof choixCuisson.appareil !== 'string') return;
+    const liste = copie(saisie.realisation);
+    const actuelle = liste[etapeCuisson - 1];
+    if (!actuelle || typeof actuelle !== 'object') return;
+    let nouvelle;
+    if (inchangee && etapeCuissonDepart) {
+      nouvelle = { ...actuelle };
+      for (const champ of ['appareil', 'tempC', 'feu', 'mode', 'duree', 'actif']) {
+        if (etapeCuissonDepart[champ] === undefined) delete nouvelle[champ];
+        else nouvelle[champ] = etapeCuissonDepart[champ];
+      }
+    } else {
+      const principale = saisie.cuisson[indexCuissonChoisie()] ?? null;
+      [nouvelle] = suivreCuissonPrincipale([actuelle], {
+        ancien: actuelle.appareil,
+        nouveau: choixCuisson.appareil,
+        tempC: principale?.tempC ?? null,
+        dureeMin: Number.isInteger(choixCuisson.dureeMin) ? choixCuisson.dureeMin : null,
+      }).realisation;
+    }
+    liste[etapeCuisson - 1] = nouvelle;
+    saisie.realisation = liste;
+    dessinerEtapes();
   }
 
   // ——— Changements de saisie ———
@@ -342,6 +393,17 @@ export function creer(ctx) {
     boutonEnregistrer.disabled = resultat.rien || !pret();
     if (tentative) afficherErreurs(resultat.erreurs);
     majConflit(resultat.conflits);
+    majAvertissementsEtapes(resultat.avertissements ?? []);
+  }
+
+  /** Étapes détaillées (T5-0b) : ce que l'enregistrement laissera de côté, dit avant (jamais bloquant). */
+  function majAvertissementsEtapes(avertissements) {
+    if (!avertissementsEtapes) return;
+    const texte = avertissements.join('\n');
+    if (avertissementsEtapes.dataset.texte === texte) return;
+    avertissementsEtapes.dataset.texte = texte;
+    avertissementsEtapes.replaceChildren(...avertissements.map((m) => el('li', {}, `⚠️ ${m}`)));
+    avertissementsEtapes.hidden = !avertissements.length;
   }
 
   function majConflit(conflits) {
@@ -413,7 +475,7 @@ export function creer(ctx) {
       demandesAClore: resultat.demandesAClore,
     });
     effacerBrouillon(uid, id);
-    annoncer('Recette enregistrée.');
+    annoncer(['Recette enregistrée.', ...(resultat.avertissements ?? [])].join(' '));
     revenirALaFiche();
   }
 
@@ -465,6 +527,20 @@ export function creer(ctx) {
   }
 
   function dessinerEtapes() {
+    if (!listeEtapes) return;
+    // Étapes détaillées (T5-0b) : le titre en gras, le texte dessous.
+    if (detaillee()) {
+      listeEtapes.replaceChildren(...saisie.realisation.map((etape, index) => el('li', {},
+        el('button', { class: 'ligne-edition ligne-etape ligne-etape-detaillee', type: 'button', onclick: () => ouvrirEtape(index) },
+          el('span', { class: 'numero-etape' }, String(index + 1)),
+          el('span', { class: 'visuellement-masque' }, '. '),
+          el('span', { class: 'ligne-texte' },
+            el('strong', { class: 'ligne-etape-titre' }, String(etape?.titre ?? '')),
+            el('span', { class: 'visuellement-masque' }, '. '),
+            el('span', { class: 'ligne-etape-texte' }, String(etape?.texte ?? ''))),
+          el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›')))));
+      return;
+    }
     listeEtapes.replaceChildren(...saisie.etapes.map((etape, index) => el('li', {},
       el('button', { class: 'ligne-edition ligne-etape', type: 'button', onclick: () => ouvrirEtape(index) },
         el('span', { class: 'numero-etape' }, String(index + 1)),
@@ -960,6 +1036,10 @@ export function creer(ctx) {
 
   function ouvrirEtape(index) {
     if (feuilleOuverte || termine) return;
+    if (detaillee()) {
+      ouvrirEtapeDetaillee(index);
+      return;
+    }
     const nouveau = index === null;
     let position = index;
     let focusApres = () => (nouveau ? boutonAjouterEtape : ligneEtape(position));
@@ -1078,10 +1158,187 @@ export function creer(ctx) {
     feuilleOuverte = feuille;
   }
 
+  // ——— Feuille d'une étape détaillée (T5-0b) ———
+
+  /**
+   * « Ce qu’on fait » (titre, 60 caractères au plus), « Comment » (350 conseillés, 1 000 au plus), « Plus de
+   * précisions » replié (« Durée de l’étape (min) », « Dont travail (min) ») ; « Retirer » ; une nouvelle étape va à la
+   * fin, 5 min par défaut. L'ordre ne se change pas ici : la feuille le dit. Rien n'est écrit avant « Enregistrer ».
+   */
+  function ouvrirEtapeDetaillee(index) {
+    const nouveau = index === null;
+    const n = nouveau ? saisie.realisation.length + 1 : index + 1;
+    const etape = nouveau ? { titre: '', texte: '', duree: DUREE_PAR_DEFAUT } : saisie.realisation[index] ?? {};
+    let focusApres = () => (nouveau ? boutonAjouterEtape : ligneEtape(index));
+    const titreFeuille = nouveau ? 'Nouvelle étape' : `Étape ${n} sur ${saisie.realisation.length}`;
+
+    const feuille = ouvrirFeuille(titreFeuille, (fermer) => {
+      const erreurTitre = el('p', { class: 'erreur-champ', id: 'etape-erreur-titre', hidden: true });
+      const erreurTexte = el('p', { class: 'erreur-champ', id: 'etape-erreur-texte', hidden: true });
+      const erreurDuree = el('p', { class: 'erreur-champ', id: 'etape-erreur-duree', hidden: true });
+      const champTitre = el('input', {
+        class: 'champ',
+        id: 'etape-titre',
+        value: String(etape.titre ?? ''),
+        maxlength: TITRE_MAX,
+        autocomplete: 'off',
+        enterkeyhint: 'next',
+        autofocus: nouveau,
+      });
+      const champTexte = el('textarea', {
+        class: 'champ zone-etape',
+        id: 'etape-texte',
+        rows: '5',
+        maxlength: TEXTE_MAX,
+        'aria-describedby': 'etape-aide-texte',
+      }, String(etape.texte ?? ''));
+      const nombreDe = (valeur) => (Number.isInteger(valeur) ? String(valeur) : '');
+      const champDuree = el('input', {
+        class: 'champ champ-duree',
+        id: 'etape-duree',
+        value: nombreDe(etape.duree),
+        inputmode: 'numeric',
+        pattern: '[0-9]*',
+        maxlength: 4,
+        autocomplete: 'off',
+        enterkeyhint: 'done',
+        oninput: () => {
+          // Sans travail écrit, toute l'étape est du travail : le champ suit la durée tant qu'il n'est pas touché.
+          if (!actifTouche && !Number.isInteger(etape.actif)) champActif.value = champDuree.value;
+        },
+      });
+      let actifTouche = false;
+      const champActif = el('input', {
+        class: 'champ champ-duree',
+        id: 'etape-actif',
+        value: nombreDe(Number.isInteger(etape.actif) ? etape.actif : etape.duree),
+        inputmode: 'numeric',
+        pattern: '[0-9]*',
+        maxlength: 4,
+        autocomplete: 'off',
+        enterkeyhint: 'done',
+        'aria-describedby': 'etape-aide-travail',
+        oninput: () => {
+          actifTouche = true;
+        },
+      });
+      const precisions = el('details', { class: 'depliable' },
+        el('summary', {}, TEXTES_ETAPES.plusDePrecisions),
+        el('div', { class: 'depliable-contenu' },
+          el('label', { class: 'etiquette-champ', for: 'etape-duree' }, TEXTES_ETAPES.dureeEtape),
+          el('div', { class: 'champ-avec-unite' }, champDuree, el('span', { 'aria-hidden': 'true' }, 'min')),
+          erreurDuree,
+          el('label', { class: 'etiquette-champ', for: 'etape-actif' }, TEXTES_ETAPES.dontTravail),
+          el('div', { class: 'champ-avec-unite' }, champActif, el('span', { 'aria-hidden': 'true' }, 'min')),
+          el('p', { class: 'aide', id: 'etape-aide-travail' }, TEXTES_ETAPES.aideTravail)));
+
+      /** Erreur sous un champ (ou rien) ; le champ en faute est décrit par elle. */
+      function marquer(champ, zone, message, aide = null) {
+        zone.textContent = message ?? '';
+        zone.hidden = !message;
+        const decrit = [aide, message ? zone.id : null].filter(Boolean).join(' ');
+        if (decrit) champ.setAttribute('aria-describedby', decrit);
+        else champ.removeAttribute('aria-describedby');
+        if (message) champ.setAttribute('aria-invalid', 'true');
+        else champ.removeAttribute('aria-invalid');
+      }
+
+      const entier = (texte) => (/^\d{1,4}$/.test(texte.trim()) ? Number(texte.trim()) : null);
+
+      function retirer() {
+        saisie.realisation = retirerEtapeRealisation(saisie.realisation, n);
+        if (etapeCuisson === n) {
+          etapeCuisson = null;
+          etapeCuissonDepart = null;
+        } else if (etapeCuisson && etapeCuisson > n) etapeCuisson -= 1;
+        dessinerEtapes();
+        changement();
+        focusApres = () => ligneEtape(index) ?? ligneEtape(index - 1) ?? boutonAjouterEtape;
+        fermer();
+        annoncer('Étape retirée.');
+      }
+
+      function valider(evenement) {
+        evenement.preventDefault();
+        const titre = reduire(champTitre.value);
+        const texte = reduire(champTexte.value);
+        const duree = entier(champDuree.value);
+        const actifLu = champActif.value.trim() ? entier(champActif.value) : null;
+        let messageTitre = null;
+        if (!titre) messageTitre = TEXTES_ETAPES.titreManquant;
+        else if ([...titre].length > TITRE_MAX) messageTitre = TEXTES_ETAPES.titreTropLong;
+        let messageTexte = null;
+        if (!texte) messageTexte = TEXTES_ETAPES.texteManquant;
+        else if ([...texte].length > TEXTE_MAX) messageTexte = TEXTES_ETAPES.texteTropLong;
+        const dureeFausse = !(Number.isInteger(duree) && duree >= 1 && duree <= DUREE_MAX_MIN)
+          || (actifTouche && champActif.value.trim() !== '' && actifLu === null);
+        marquer(champTitre, erreurTitre, messageTitre);
+        marquer(champTexte, erreurTexte, messageTexte, 'etape-aide-texte');
+        marquer(champDuree, erreurDuree, dureeFausse ? TEXTES_ETAPES.dureeInvalide : null);
+        if (messageTitre || messageTexte || dureeFausse) {
+          if (dureeFausse) precisions.open = true;
+          (messageTitre ? champTitre : messageTexte ? champTexte : champDuree).focus();
+          return;
+        }
+        // Travail : seulement s'il a été touché ; vide, ou égal à la durée, toute l'étape est du travail.
+        let actif;
+        if (actifTouche) actif = actifLu === null || actifLu >= duree ? null : actifLu;
+        if (nouveau) {
+          let liste = ajouterEtapeALaFin(saisie.realisation, { titre, texte, duree });
+          if (Number.isInteger(actif)) liste = changerEtape(liste, liste.length, { actif });
+          saisie.realisation = liste;
+          dessinerEtapes();
+          changement();
+          const derniere = saisie.realisation.length - 1;
+          focusApres = () => ligneEtape(derniere);
+          fermer();
+          annoncer('Étape ajoutée.');
+          return;
+        }
+        const changements = { titre, texte, duree, ...(actif === undefined ? {} : { actif }) };
+        const liste = changerEtape(saisie.realisation, n, changements);
+        const modifiee = !egalProfonde(liste, saisie.realisation);
+        if (modifiee) {
+          saisie.realisation = liste;
+          dessinerEtapes();
+          changement();
+        }
+        fermer();
+        if (modifiee) annoncer('Étape modifiée.');
+      }
+
+      return el('form', { class: 'formulaire', novalidate: true, onsubmit: valider },
+        el('label', { class: 'etiquette-champ', for: 'etape-titre' }, TEXTES_ETAPES.ceQuOnFait),
+        champTitre,
+        erreurTitre,
+        el('label', { class: 'etiquette-champ', for: 'etape-texte' }, TEXTES_ETAPES.comment),
+        champTexte,
+        el('p', { class: 'aide', id: 'etape-aide-texte' }, `${TEXTE_CONSEILLE}\u00A0caractères conseillés, 1\u00A0000 au plus.`),
+        erreurTexte,
+        precisions,
+        nouveau ? null : el('p', { class: 'aide' }, TEXTES_ETAPES.ordre),
+        el('div', { class: 'feuille-pied' },
+          el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' }, nouveau ? 'Ajouter' : 'Valider')),
+        el('div', { class: 'actions-feuille' },
+          nouveau ? null : el('button', { class: 'bouton bouton-texte bouton-danger', type: 'button', onclick: retirer }, TEXTES_ETAPES.retirer),
+          el('button', { class: 'bouton bouton-texte', type: 'button', onclick: fermer }, 'Annuler')));
+    }, {
+      onFermer: () => {
+        feuilleOuverte = null;
+        if (detruit) return;
+        const cible = focusApres?.();
+        if (cible?.isConnected) cible.focus();
+      },
+    });
+    feuilleOuverte = feuille;
+  }
+
   // ——— Aide de la cuisson ———
 
   let aideCuisson;
   let ligneDuree;
+  let bandeauRelire; // étapes détaillées : « Relisez l’étape « … » : … » (T5-0b)
+  let zoneRelire; // sa région vivante, sous la cuisson
 
   function majAideCuisson() {
     if (!aideCuisson) return;
@@ -1094,6 +1351,14 @@ export function creer(ctx) {
     if (aideCuisson.textContent !== texte) aideCuisson.textContent = texte;
     aideCuisson.hidden = !texte;
     ligneDuree.hidden = typeof choixCuisson.appareil !== 'string';
+    // Étape de cuisson passée à un autre appareil : son texte en parle peut-être encore.
+    const suivie = detaillee() && etapeCuisson ? saisie.realisation[etapeCuisson - 1] : null;
+    const relire = suivie && etapeCuissonDepart && suivie.appareil !== etapeCuissonDepart.appareil
+      ? TEXTES_ETAPES.relireEtape(String(suivie.titre ?? ''))
+      : '';
+    if (bandeauRelire.lastChild.textContent !== relire) bandeauRelire.lastChild.textContent = relire;
+    if (!relire) bandeauRelire.remove();
+    else if (!bandeauRelire.isConnected) zoneRelire?.append(bandeauRelire);
   }
 
   // ——— Construction du formulaire (une seule fois) ———
@@ -1169,6 +1434,9 @@ export function creer(ctx) {
       type: 'button',
       onclick: () => ouvrirEtape(null),
     }, el('span', { 'aria-hidden': 'true' }, '＋'), 'Ajouter une étape');
+    // Étapes détaillées (T5-0b) : erreurs et avertissements de l'enregistrement, sous la liste.
+    if (detaillee()) champs.realisation = boutonAjouterEtape;
+    avertissementsEtapes = el('ul', { class: 'liste-avertissements', hidden: true });
 
     // Cuisson principale
     initialiserCuisson();
@@ -1213,6 +1481,9 @@ export function creer(ctx) {
         'Durée', el('span', { class: 'visuellement-masque' }, ', en minutes')),
       el('div', { class: 'champ-avec-unite' }, champs.cuisson, el('span', { 'aria-hidden': 'true' }, 'min')));
     aideCuisson = el('p', { class: 'aide', id: descriptions.cuisson, hidden: true });
+    // Hors du document tant qu'il est vide : un bandeau caché de plus ne doit jamais côtoyer ceux de l'écran (le
+    // bandeau « repris » et celui du conflit, sous le titre).
+    bandeauRelire = el('p', { class: 'bandeau bandeau-alerte' }, el('span', { 'aria-hidden': 'true' }, '⚠️'), el('span', {}));
 
     // Bon à savoir
     const frigo = compteur({
@@ -1280,7 +1551,7 @@ export function creer(ctx) {
         boutonAjouterIngredient,
         zoneErreur('ingredients')),
 
-      carte('Étapes', listeEtapes, boutonAjouterEtape),
+      carte('Étapes', listeEtapes, boutonAjouterEtape, zoneErreur('realisation'), avertissementsEtapes),
 
       carte('Cuisson',
         el('fieldset', { class: 'groupe-choix' },
@@ -1288,7 +1559,7 @@ export function creer(ctx) {
           el('div', { class: 'choix-appareils' }, tuiles)),
         ligneDuree,
         zoneErreur('cuisson'),
-        el('div', { role: 'status' }, aideCuisson)),
+        zoneRelire = el('div', { role: 'status' }, aideCuisson)),
 
       carte('Bon à savoir',
         frigo.noeud,
