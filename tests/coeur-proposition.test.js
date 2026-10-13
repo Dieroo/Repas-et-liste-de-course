@@ -16,7 +16,8 @@ import {
   ecrituresRetraitGroupe, jourDeDerniereFois,
 } from '../js/coeur/semaine.js';
 import {
-  BRUIT_MAX, DESSERTS_MAX, ECARTES_MAX, JOURS_RECENTS, PROPOSITION_MIN, TEXTES_PROPOSER, annonceProposition,
+  BASES_DE_SAUCE, BRUIT_MAX, DESSERTS_MAX, ECARTES_MAX, GRAMMES_PAR_BOITE, JOURS_RECENTS, LEGUMES_AROMATIQUES,
+  LEGUMES_MIN, LEGUME_VISIBLE_G, POIDS_PIECE_LEGUMES, PORTION_LEGUMES_G, PROPOSITION_MIN, TEXTES_PROPOSER, aDesLegumes, annonceProposition,
   apercuProposition, autreIdee, candidats, ecartAuMenu, emplacements, graineProposition, historiqueDesPlats,
   libelleProposer, libelleProposerDesserts, nombreAProposer, nombreDeDessertsParDefaut, nombreProposable,
   nomAutreIdee, peutChangerDIdee, proposerDesserts, proposerPlats, sousTitreDesserts, texteAutreIdee, texteRaison,
@@ -818,6 +819,308 @@ test('carteProchaineAction : semaine aux entrées toutes dans la corbeille → c
   assert.equal(c.boutons[0].action, 'proposer');
   // La cible garde l'entrée active de la corbeille : jamais reproposée, et elle compte 0 présent.
   assert.equal(nombreAProposer([s], CIBLE, { tousLesPlats: [...RICHE, jete], profils: PROFILS, evaluer }).presents, 0);
+});
+
+// ——— Légumes (2026-10-13 : « au moins un, même si c'est une purée ») ———
+
+const leg = (produit, qte, unite, role = 'incorpore') => ({ produit, qte, unite, rayon: 'fruits_legumes', marqueurs: ['legume'], role });
+const SAUCISSE = ing('saucisse de Toulouse', ['viande', 'porc'], { forme: 'morceaux' });
+const PATES = ing('pâtes', ['feculent']);
+
+test('aDesLegumes (a) : un légume principal ; jamais un aromatique, la pomme de terre ni un féculent', () => {
+  assert.deepEqual([LEGUMES_MIN, PORTION_LEGUMES_G, LEGUME_VISIBLE_G, GRAMMES_PAR_BOITE], [1, 80, 40, 400]);
+  assert.deepEqual([...LEGUMES_AROMATIQUES], ['oignon', 'echalote', 'ail', 'cive', 'ciboule']);
+  // Ratatouille : une courgette principale (50 g par portion) suffit.
+  assert.equal(aDesLegumes(plat('ratatouille', 'Ratatouille', [leg('courgette', 1, 'pc', 'principal')])), true);
+  assert.equal(aDesLegumes(plat('poelee', 'Poêlée', [leg('petits pois', 160, 'g', 'Principal')])), true, 'rôle toléré, petits pois, 40 g par portion');
+  for (const produit of ['oignon rouge', 'ail des ours', 'échalotes', 'cives', 'ciboule', 'gousses d’ail', 'petits oignons']) {
+    assert.equal(aDesLegumes(plat('x', 'Plat', [leg(produit, 2, 'kg', 'principal')])), false, produit);
+  }
+  // « aile de poulet » n'est pas de l'ail (premier mot « aile ») : repère `legume` posé exprès pour le vérifier.
+  assert.equal(aDesLegumes(plat('x', 'Plat', [leg('aile de poulet', 1, 'pc', 'principal')])), true);
+  // La pomme de terre est un féculent, même marquée `legume`, même en purée.
+  assert.equal(aDesLegumes(plat('puree', 'Purée de pommes de terre', [leg('pommes de terre', 1, 'kg', 'principal')])), false);
+  assert.equal(aDesLegumes(plat('puree', 'Purée de pommes de terre', [ing('pomme de terre', ['feculent'], { qte: 1, unite: 'kg' })])), false);
+  // Patate douce (relecture) : un féculent, qu'elle vienne des produits courants (`feculent`) ou d'une recette de Claude
+  // qui la marque `legume` principal (exemple des instructions) ; « patate » seule aussi.
+  assert.equal(aDesLegumes(plat('pd', 'Gratin de patates douces', [ing('patate douce', ['feculent'], { qte: 600 })])), false);
+  assert.equal(aDesLegumes(plat('pd', 'Poulet au miso', [leg('patate douce', 600, 'g', 'principal')])), false);
+  assert.equal(aDesLegumes(plat('pd', 'Purée de patates douces', [leg('patates douces', 2, 'pc', 'principal')], { portionsBase: 2 })), false);
+  assert.equal(aDesLegumes(plat('pd', 'Curry de patate douce', [leg('patate douce', 1, 'kg', 'principal')])), false);
+  assert.equal(aDesLegumes(plat('pt', 'Patates sautées', [leg('patates', 1, 'kg', 'principal')])), false);
+  assert.equal(Object.hasOwn(POIDS_PIECE_LEGUMES, 'patate-douce'), false);
+  assert.equal(aDesLegumes(plat('x', 'Plat', [{ ...leg('courgette', 1, 'pc', 'principal'), marqueurs: ['legume', 'feculent'] }])), false);
+});
+
+test('aDesLegumes (a) et (b) : une garniture ne suffit pas, 40 g par portion quand la quantité se lit', () => {
+  const steak = ing('steak haché', ['viande', 'boeuf'], { forme: 'hachee', qte: 500 });
+  // Burger, tacos : rondelle de tomate (120 g ÷ 4 = 30 g) et quart de laitue (19 g), principaux : non.
+  const garniture = [leg('tomate', 1, 'pc', 'principal'), leg('laitue', 0.25, 'pc', 'principal')];
+  assert.equal(aDesLegumes(plat('bu', 'Burger maison', [steak, ...garniture])), false);
+  assert.equal(aDesLegumes(plat('ta', 'Tacos au bœuf', [steak, ...garniture])), false);
+  // Pizza reine : 100 g de champignons pour 4 (25 g), principaux : non ; 160 g (40 g) : oui.
+  const pate = ing('pâte à pizza', ['feculent'], { qte: 1, unite: 'pc' });
+  assert.equal(aDesLegumes(plat('pz', 'Pizza reine', [pate, leg('champignon de Paris', 100, 'g', 'principal')])), false);
+  assert.equal(aDesLegumes(plat('pz', 'Pizza reine', [pate, leg('champignon de Paris', 160, 'g', 'principal')])), true);
+  // Poulet aux champignons : 100 g pour 4 (25 g), nommé : non ; risotto aux champignons, 300 g (75 g) : oui.
+  assert.equal(aDesLegumes(plat('pc', 'Poulet aux champignons', [POULET, leg('champignon de Paris', 100, 'g')])), false);
+  assert.equal(aDesLegumes(plat('rc', 'Risotto aux champignons', [ing('riz', ['feculent']), leg('champignon de Paris', 300, 'g')])), true);
+  // Pièces de poids connu : 10 champignons (200 g, 50 g par portion), nommés : oui.
+  assert.equal(aDesLegumes(plat('pc', 'Poulet aux champignons', [POULET, leg('champignons', 10, 'pc')])), true);
+  // Quantité qui ne se lit pas (botte, pièce de poids inconnu, cuillères) ou portions illisibles : sans quantité.
+  assert.equal(aDesLegumes(plat('gb', 'Gratin de blettes', [leg('blette', 1, 'botte')])), true);
+  assert.equal(aDesLegumes(plat('pk', 'Sauté de porc', [leg('pak choï', 1, 'pc', 'principal')])), true);
+  assert.equal(aDesLegumes({ id: 'bu', nom: 'Burger maison', type: 'plat', ingredients: [steak, ...garniture] }), true, 'sans portionsBase');
+  // Le seuil est par légume : deux garnitures (30 g + 19 g) ne s'additionnent pas pour (a).
+  assert.equal(aDesLegumes(plat('x', 'Plat du jour', [leg('tomate', 1, 'pc', 'principal'), leg('poivron', 1, 'pc', 'principal')])), false);
+  // Une garniture trop légère compte quand même pour (c) : 1 tomate (30 g) et 220 g de courgettes (55 g) → 85 g.
+  assert.equal(aDesLegumes(plat('x', 'Plat du jour', [leg('tomate', 1, 'pc', 'principal'), leg('courgette', 220, 'g')])), true);
+});
+
+test('aDesLegumes (b) : un mot du légume dans le nom du plat (pluriel, accents) ; ni couleur ni état', () => {
+  // Purée de carottes (en pièces et en grammes) : 50 g par portion, le nom suffit.
+  assert.equal(aDesLegumes(plat('p', 'Purée de carottes et saucisses', [SAUCISSE, leg('carotte', 2, 'pc')])), true);
+  assert.equal(aDesLegumes(plat('p', 'Purée de carottes et saucisses', [SAUCISSE, leg('carottes', 200, 'g')])), true);
+  assert.equal(aDesLegumes(plat('v', 'Velouté de potiron', [leg('potiron', 200, 'g')])), true);
+  assert.equal(aDesLegumes(plat('v', 'Velouté de butternut', [leg('courge butternut', 1, 'pc')])), true);
+  assert.equal(aDesLegumes(plat('c', 'Curry de courgettes', [LENTILLES, leg('courgette', 1, 'pc')])), true);
+  assert.equal(aDesLegumes(plat('c', 'Curry de haricots verts', [LENTILLES, leg('haricot vert', 200, 'g')])), true);
+  assert.equal(aDesLegumes(plat('d', 'Dal aux épinards', [LENTILLES, leg('épinards', 200, 'g'), { ...leg('tomates concassées', 1, 'boite'), rayon: 'epicerie_salee' }])), true);
+  assert.equal(aDesLegumes(plat('t', 'Tomates farcies', [SAUCISSE, leg('tomates', 4, 'pc')])), true, 'tomates fraîches');
+  // Même légume, autre nom : rien (50 g par portion).
+  assert.equal(aDesLegumes(plat('c', 'Curry vert', [LENTILLES, leg('haricot vert', 200, 'g')])), false, '« vert » ne dit pas le légume');
+  assert.equal(aDesLegumes(plat('c', 'Saucisses lentilles', [SAUCISSE, LENTILLES, leg('carotte', 1, 'pc')])), false);
+  // Un aromatique dans le nom ne compte pas : « Soupe à l'oignon ».
+  assert.equal(aDesLegumes(plat('s', 'Soupe à l’oignon', [leg('oignon jaune', 6, 'pc')])), false);
+});
+
+test('aDesLegumes (c) : 80 g de légumes par portion (g, kg, boîte, pièces) ; sans portions lisibles, non', () => {
+  const quatre = (...ingredients) => plat('x', 'Plat du jour', ingredients);
+  assert.equal(aDesLegumes(quatre(leg('haricot vert', 320, 'g'))), true, '80 g par portion');
+  assert.equal(aDesLegumes(quatre(leg('haricot vert', 316, 'g'))), false, '79 g par portion');
+  assert.equal(aDesLegumes(quatre(leg('épinard', '0,5', 'kg'))), true, 'kg et nombre en texte');
+  assert.equal(aDesLegumes(quatre(leg('haricots verts', 1, 'boite'))), true, 'une boîte ≈ 400 g');
+  assert.equal(aDesLegumes(quatre(leg('carotte', 2, 'pc'), leg('poireau', 1, 'pc'))), true, '200 + 150 g');
+  assert.equal(aDesLegumes(quatre(leg('carotte', 3, 'pc'))), false, '75 g par portion');
+  assert.equal(aDesLegumes(plat('x', 'Plat du jour', [leg('chou-fleur', 1, 'pc')], { portionsBase: 10 })), true, 'chou-fleur 800 g');
+  assert.equal(aDesLegumes(plat('x', 'Plat du jour', [leg('chou rouge', 1, 'pc')], { portionsBase: 12 })), true, 'chou rouge → chou 1 kg');
+  assert.equal(aDesLegumes(quatre(leg('choux de Bruxelles', 10, 'pc'))), false, '15 g la pièce, pas 1 kg');
+  assert.equal(aDesLegumes(quatre(leg('tomates cerises', 12, 'pc'))), false, '15 g la pièce');
+  assert.equal(aDesLegumes(quatre(leg('pak choi', 10, 'pc'))), false, 'pièce sans poids connu : ignorée');
+  assert.equal(aDesLegumes(quatre(leg('haricot vert', 30, 'cs'))), false, 'autre unité ignorée');
+  // Les aromatiques ne s'additionnent pas : 4 oignons et une carotte.
+  assert.equal(aDesLegumes(quatre(leg('oignon jaune', 4, 'pc'), leg('carotte', 1, 'pc'))), false);
+  // Bases de sauce tomate (relecture) : jamais comptées. Bolognaise au coulis, ou à la tomate concassée et une carotte
+  // (25 g de carotte par portion), lasagnes, chili, dal à la boîte de tomates, gnocchis sauce tomate : non.
+  const boeufHache = ing('bœuf haché', ['viande', 'boeuf'], { forme: 'hachee', qte: 500 });
+  const coulis = { produit: 'coulis de tomate', qte: 50, unite: 'cl', rayon: 'epicerie_salee', marqueurs: [] };
+  const conserve = (produit, qte, unite) => ({ ...leg(produit, qte, unite), rayon: 'epicerie_salee' });
+  assert.equal(aDesLegumes(plat('b', 'Spaghetti bolognaise', [PATES, boeufHache, leg('oignon jaune', 1, 'pc'), coulis])), false);
+  assert.equal(aDesLegumes(plat('b', 'Spaghetti bolognaise', [PATES, boeufHache, leg('oignon jaune', 1, 'pc'), leg('carotte', 1, 'pc'), conserve('tomate concassée', 2, 'boite')])), false);
+  assert.equal(aDesLegumes(plat('l', 'Lasagnes à la bolognaise', [PATES, boeufHache, conserve('tomates concassées', 800, 'g')], { portionsBase: 6 })), false);
+  assert.equal(aDesLegumes(plat('c', 'Chili con carne', [boeufHache, conserve('tomates pelées', 2, 'boite'), leg('poivron', 1, 'pc')], { portionsBase: 6 })), false);
+  assert.equal(aDesLegumes(plat('d', 'Dal de lentilles', [LENTILLES, conserve('pulpe de tomate', 1, 'boite')])), false);
+  assert.equal(aDesLegumes(plat('g', 'Gnocchis sauce tomate', [ing('gnocchi', ['feculent']), conserve('tomate concassée', 1, 'boite')])), false);
+  for (const produit of ['sauce tomate', 'coulis de tomate', 'purée de tomate', 'passata', 'concentré de tomate', 'double concentré de tomate', 'tomates séchées', 'concassée de tomates', 'tomates en conserve', 'ketchup']) {
+    assert.equal(aDesLegumes(plat('x', 'Tomate', [{ ...conserve(produit, 1, 'kg'), role: 'principal' }])), false, produit);
+  }
+  assert.ok(BASES_DE_SAUCE.includes('tomate-concassee'));
+  // Les tomates fraîches, « tomate cerise » comprise, ne sont pas des bases de sauce.
+  assert.equal(aDesLegumes(quatre(leg('tomates cerises', 400, 'g'))), true);
+  assert.equal(aDesLegumes(quatre(leg('tomate', 3, 'pc'))), true, '360 g : 90 g par portion');
+  // Carbonade aux oignons seulement : non, même un kilo d'oignons.
+  assert.equal(aDesLegumes(plat('c', 'Carbonade flamande', [BOEUF, leg('oignon jaune', 1, 'kg', 'incorpore')])), false);
+  // Sans portionsBase lisible : (c) ne compte pas ; (a) et (b) restent.
+  const sansPortions = { id: 'x', nom: 'Plat du jour', type: 'plat', ingredients: [leg('haricot vert', 1, 'kg')] };
+  assert.equal(aDesLegumes(sansPortions), false);
+  assert.equal(aDesLegumes({ ...sansPortions, portionsBase: 'beaucoup' }), false);
+  assert.equal(aDesLegumes({ ...sansPortions, portionsBase: 0 }), false);
+  assert.equal(aDesLegumes({ ...sansPortions, nom: 'Haricots verts sautés' }), true);
+  assert.equal(POIDS_PIECE_LEGUMES.carotte, 100);
+});
+
+test('aDesLegumes : la recette seule, jamais ses versions ; entrées illisibles', () => {
+  const version = { pour: 'profil-b', style: 'vegetal', retirer: ['bœuf'], ajouter: [{ ...leg('carotte', 0, 'g', 'principal'), qte: undefined, qtePortion: 200 }], consigne: 'Carottes.' };
+  assert.equal(aDesLegumes(plat('x', 'Bœuf mijoté', [BOEUF], { variantes: [version] })), false);
+  assert.equal(aDesLegumes(null), false);
+  assert.equal(aDesLegumes({ id: 'attente', nom: 'Purée de carottes' }), false, 'sans recette');
+  assert.equal(aDesLegumes(plat('x', 'Plat', [null, 'carotte', { produit: '', marqueurs: ['legume'], role: 'principal' }])), false);
+  const gele = geler(plat('g', 'Gratin de courgettes', [leg('courgette', 3, 'pc', 'principal')]));
+  assert.equal(aDesLegumes(gele), true);
+});
+
+// Catalogue où le meilleur choix n'a aucun légume : RICHE (lentilles), plus un plat avec des légumes moins bien placé.
+// Soupe : pas notée, servie il y a 15 jours (+ 0,2) : 3,2 + départage < 3,4 des plats neufs. Témoin : même identifiant,
+// même nom, sans légume (même départage).
+const SOUPE = plat('soupe-carottes', 'Soupe de carottes', [leg('carotte', 2, 'pc')], { derniereFois: '2026-09-21' });
+const TEMOIN = plat('soupe-carottes', 'Soupe de carottes', [LENTILLES], { derniereFois: '2026-09-21' });
+
+test('légumes : aucun plat avec des légumes → échange dans le même groupe, au dernier emplacement possible', () => {
+  const temoin = proposerPlats(geler([...RICHE, TEMOIN]), opts({ nombre: 4 }));
+  assert.equal(temoin.ids.includes('soupe-carottes'), false, 'sans la règle, la soupe ne viendrait pas');
+  const r = proposerPlats(geler([...RICHE, SOUPE]), opts({ nombre: 4 }));
+  assert.deepEqual(r.ids.slice(0, 3), temoin.ids.slice(0, 3));
+  assert.equal(r.ids[3], 'soupe-carottes');
+  assert.deepEqual(r.choisis.map((c) => c.groupe), ['aime', 'aime', 'decouvrir', 'decouvrir']);
+  assert.deepEqual(r.choisis[3].raison, { code: 'decouvrir', legumes: true });
+  assert.deepEqual([r.code, r.manque, r.ids.length], ['ok', 0, 4]);
+  // Même groupe « aimé » : seul un aimé a des légumes ; il remplace le dernier aimé, les plats à découvrir restent.
+  const aimeLegumes = plat('aime-legumes', 'Gratin de courgettes', [leg('courgette', 3, 'pc', 'principal')], notes(4));
+  const temoinAime = proposerPlats([...RICHE, { ...aimeLegumes, ingredients: [LENTILLES] }], opts({ nombre: 4 }));
+  const r2 = proposerPlats([...RICHE, aimeLegumes], opts({ nombre: 4 }));
+  assert.equal(temoinAime.ids.includes('aime-legumes'), false);
+  assert.deepEqual([r2.ids[0], r2.ids[2], r2.ids[3]], [temoinAime.ids[0], temoinAime.ids[2], temoinAime.ids[3]]);
+  assert.equal(r2.ids[1], 'aime-legumes');
+  assert.deepEqual(r2.choisis[1].raison, { code: 'aime', profils: ['profil-a'], legumes: true });
+});
+
+test('légumes : aucun groupe ne convient → le meilleur, tous groupes, remplace le dernier ; nombre 1', () => {
+  // Noté 2 par Adulte B : groupe « autre » (jamais un emplacement de groupe sans la règle).
+  const bof = plat('bof-legumes', 'Poêlée de légumes', [leg('poivron', 2, 'pc', 'principal')], notes(undefined, 2));
+  const r = proposerPlats([...RICHE, bof], opts({ nombre: 4 }));
+  assert.equal(r.ids[3], 'bof-legumes');
+  assert.equal(r.choisis[3].groupe, 'autre');
+  assert.deepEqual(r.choisis[3].raison, { code: 'autre', legumes: true });
+  // Un seul plat demandé : l'emplacement « aimé » n'a pas d'aimé avec des légumes ; la soupe le prend.
+  const un = proposerPlats([...RICHE, SOUPE], opts({ nombre: 1 }));
+  assert.deepEqual(un.ids, ['soupe-carottes']);
+  assert.equal(un.code, 'ok');
+});
+
+test('légumes : rien ne change quand la cible ou la proposition en a déjà, ou sans candidat avec des légumes', () => {
+  // Un plat avec des légumes déjà dans la cible (case cochée) : la soupe ne vient pas ; sans légume, elle vient.
+  const cuisine = plat('dans-la-cible', 'Gratin de courgettes', [leg('courgette', 3, 'pc', 'principal')]);
+  const cible = { ...CIBLE, plats: { 'dans-la-cible': dans(1) } };
+  assert.equal(proposerPlats([...RICHE, SOUPE, cuisine], opts({ nombre: 3, cible })).ids.includes('soupe-carottes'), false);
+  const sansLegume = { ...cuisine, nom: 'Gratin', ingredients: [LENTILLES] };
+  assert.equal(proposerPlats([...RICHE, SOUPE, sansLegume], opts({ nombre: 3, cible })).ids.includes('soupe-carottes'), true);
+  // … mais un plat de la cible dont personne ne mange, ou à la corbeille, ne compte pas.
+  const personne = { ...CIBLE, plats: { 'dans-la-cible': dans(1, { mange: { 'profil-a': false, 'profil-b': false, enfant: false } }) } };
+  assert.equal(proposerPlats([...RICHE, SOUPE, cuisine], opts({ nombre: 3, cible: personne })).ids.includes('soupe-carottes'), true);
+  const jete = { ...cuisine, corbeille: { le: 1, par: 'x' } };
+  assert.equal(proposerPlats([...RICHE, SOUPE, jete], opts({ nombre: 3, cible })).ids.includes('soupe-carottes'), true);
+  // Un aimé a des légumes : la proposition en a déjà, la soupe ne vient pas.
+  const aimeLegumes = plat('aime-1', 'Aimé 1', [leg('courgette', 3, 'pc', 'principal')], notes(5, 4, 4));
+  const r = proposerPlats([aimeLegumes, ...RICHE.slice(1), SOUPE], opts({ nombre: 4 }));
+  assert.equal(r.ids.includes('aime-1'), true);
+  assert.equal(r.ids.includes('soupe-carottes'), false);
+  // Aucun candidat avec des légumes (« Jamais » d'un adulte, corbeille, dessert) : proposition inchangée.
+  const exclus = [
+    { ...SOUPE, notes: { 'profil-a': 0 } },
+    { ...SOUPE, id: 'soupe-jetee', corbeille: { le: 1, par: 'x' } },
+    dessert('gateau-carottes', 'Gâteau aux carottes', { ingredients: [leg('carotte', 4, 'pc', 'principal')] }),
+  ];
+  assert.deepEqual(proposerPlats([...RICHE, ...exclus], opts({ nombre: 4 })), proposerPlats(RICHE, opts({ nombre: 4 })));
+});
+
+test('légumes : palier 3 seulement si ECARTES_MAX le permet encore après l’échange', () => {
+  // Bœuf aux carottes : pas de version pour Adulte B (palier 3), à découvrir.
+  const boeufCarottes = plat('boeuf-carottes', 'Bœuf aux carottes', [BOEUF, leg('carotte', 4, 'pc', 'principal')]);
+  const r = proposerPlats([...RICHE, boeufCarottes], opts({ nombre: 4 }));
+  assert.equal(r.ids[3], 'boeuf-carottes');
+  assert.equal(r.choisis[3].palier, 3);
+  // La cible a déjà un plat que quelqu'un ne mange pas : la limite est atteinte, rien ne change.
+  const cible = { ...CIBLE, plats: { 'b-cible': dans(1) } };
+  const tous = [...RICHE, boeufCarottes, plat('b-cible', 'Dans la cible', [BOEUF])];
+  assert.equal(proposerPlats(tous, opts({ nombre: 4, cible })).ids.includes('boeuf-carottes'), false);
+  // Un plat du palier 3 retenu remplacé par un plat du palier 3 avec des légumes (même groupe) : permis.
+  const p1 = plat('p1', 'P1');
+  const x1 = plat('x1', 'X1', [BOEUF], notes(5));
+  const xLegumes = plat('x-legumes', 'Poulet aux poivrons', [POULET, leg('poivron', 3, 'pc', 'principal')], notes(4));
+  assert.deepEqual(proposerPlats([p1, x1], opts({ nombre: 2 })).ids, ['x1', 'p1']);
+  assert.deepEqual(proposerPlats([p1, x1, xLegumes], opts({ nombre: 2 })).ids, ['x-legumes', 'p1']);
+  // Sans groupe commun (relecture) : le palier 3 ne remplace pas le plat du palier 1 (la limite serait dépassée), mais
+  // il remplace le plat du palier 3 retenu plus haut : un seul plat écarté, et des légumes.
+  const xLegumesNeuf = { ...xLegumes, notes: {} };
+  assert.deepEqual(proposerPlats([p1, x1, xLegumesNeuf], opts({ nombre: 2 })).ids, ['x-legumes', 'p1']);
+  const p2 = plat('p2', 'P2');
+  assert.deepEqual(proposerPlats([p1, p2, x1], opts({ nombre: 3 })).ids, ['p2', 'x1', 'p1']);
+  assert.deepEqual(proposerPlats([p1, p2, x1, xLegumesNeuf], opts({ nombre: 3 })).ids, ['p2', 'x-legumes', 'p1']);
+});
+
+test('légumes : palier par palier, un plat que tout le monde mange passe avant un plat que quelqu’un ne mange pas', () => {
+  // Gratin de courgettes : aimé par Adulte A, palier 1, pas retenu par le remplissage. Bœuf aux carottes : à découvrir,
+  // palier 3 (pas de version pour Adulte B), du groupe du dernier retenu. Le gratin entre, à la place du dernier aimé.
+  const gratin = plat('gratin-courgettes', 'Gratin de courgettes', [leg('courgette', 3, 'pc', 'principal')], notes(4));
+  const boeufCarottes = plat('boeuf-carottes', 'Bœuf aux carottes', [BOEUF, leg('carotte', 4, 'pc', 'principal')]);
+  const sansBoeuf = proposerPlats([...RICHE, gratin], opts({ nombre: 4 }));
+  const r = proposerPlats([...RICHE, gratin, boeufCarottes], opts({ nombre: 4 }));
+  assert.deepEqual(r, sansBoeuf, 'ajouter un plat du palier 3 ne fait pas sortir le gratin');
+  assert.equal(r.ids.includes('gratin-courgettes'), true);
+  assert.deepEqual(r.choisis.map((c) => c.palier), [1, 1, 1, 1]);
+  assert.equal(r.choisis.find((c) => c.platId === 'gratin-courgettes').groupe, 'aime');
+  // Soupe de carottes servie la semaine d'avant : palier 2, à découvrir ; le gratin (palier 1, aimé) passe devant.
+  const recente = plat('soupe-carottes', 'Soupe de carottes', [leg('carotte', 2, 'pc')], { derniereFois: '2026-10-05' });
+  const r2 = proposerPlats([...RICHE, gratin, recente], opts({ nombre: 4 }));
+  assert.equal(r2.ids.includes('gratin-courgettes'), true);
+  assert.equal(r2.ids.includes('soupe-carottes'), false);
+  assert.deepEqual(r2.choisis.map((c) => c.palier), [1, 1, 1, 1]);
+  // Sans le gratin, la soupe récente (palier 2) passe avant le bœuf (palier 3).
+  const r3 = proposerPlats([...RICHE, recente, boeufCarottes], opts({ nombre: 4 }));
+  assert.equal(r3.ids.includes('soupe-carottes'), true);
+  assert.equal(r3.ids.includes('boeuf-carottes'), false);
+  assert.deepEqual(r3.choisis.find((c) => c.platId === 'soupe-carottes').palier, 2);
+  // Un plat du palier 1 d'un autre groupe passe avant un plat du palier 2 du même groupe : palier d'abord.
+  const gratinNeuf = plat('gratin-courgettes', 'Gratin de courgettes', [leg('courgette', 3, 'pc', 'principal')], notes(5, 4, 4));
+  const r4 = proposerPlats([...RICHE, recente, gratinNeuf], opts({ nombre: 4 }));
+  assert.equal(r4.ids.includes('gratin-courgettes'), true);
+  assert.equal(r4.ids.includes('soupe-carottes'), false);
+});
+
+test('légumes : déterministe, indépendant de l’ordre des plats ; desserts jamais touchés', () => {
+  const tous = geler([...RICHE, SOUPE, plat('velo', 'Velouté de potiron', [leg('potiron', 200, 'g')], { derniereFois: '2026-09-21' })]);
+  const r1 = proposerPlats(tous, opts({ nombre: 4 }));
+  assert.deepEqual(proposerPlats([...tous].reverse(), opts({ nombre: 4 })), r1);
+  assert.deepEqual(proposerPlats(tous, opts({ nombre: 4 })), r1);
+  assert.equal(r1.ids.filter((id) => id === 'soupe-carottes' || id === 'velo').length, 1, 'un seul échange');
+  // Desserts : aucun échange, aucune raison « légumes ».
+  const gateau = dessert('gateau-carottes', 'Gâteau aux carottes', { ingredients: [leg('carotte', 4, 'pc', 'principal')], derniereFois: '2026-09-21' });
+  const d = proposerDesserts([...DESSERTS, gateau], opts({ nombre: 2 }));
+  assert.equal(d.ids.includes('gateau-carottes'), false);
+  const seul = proposerDesserts([gateau], opts({ nombre: 1 }));
+  assert.deepEqual(seul.ids, ['gateau-carottes']);
+  assert.equal(Object.hasOwn(seul.choisis[0].raison, 'legumes'), false);
+  assert.equal(candidats([gateau], opts({ type: 'dessert' }))[0].legumes, true, 'le fait reste connu');
+});
+
+test('autreIdee : un plat avec des légumes, seul de la cible, est remplacé par un plat avec des légumes d’abord', () => {
+  const velo = plat('velo', 'Velouté de potiron', [leg('potiron', 200, 'g')], { derniereFois: '2026-09-21' });
+  const tous = [...RICHE, SOUPE, velo];
+  const cible = { ...CIBLE, plats: { 'soupe-carottes': dans(1), 'aime-1': dans(2) } };
+  const r = autreIdee(tous, 'soupe-carottes', opts({ cible }));
+  assert.equal(r.platId, 'velo');
+  assert.deepEqual(r.raison, { code: 'decouvrir', legumes: true });
+  // Un autre plat de la cible a des légumes : recherche ordinaire (un plat neuf, mieux placé).
+  const gratin = plat('gratin-courgettes', 'Gratin de courgettes', [leg('courgette', 3, 'pc', 'principal')], notes(3, 3, 3));
+  const avecGratin = { ...CIBLE, plats: { ...cible.plats, 'gratin-courgettes': dans(3) } };
+  assert.match(autreIdee([...tous, gratin], 'soupe-carottes', opts({ cible: avecGratin })).platId, /^neuf-/);
+  // L'ancien plat n'avait pas de légumes : recherche ordinaire, même si la cible n'en a aucun.
+  const sansLegume = { ...CIBLE, plats: { 'neuf-1': dans(1), 'aime-1': dans(2) } };
+  assert.match(autreIdee(tous, 'neuf-1', opts({ cible: sansLegume })).platId, /^neuf-/);
+  // Aucun autre plat avec des légumes : n'importe lequel.
+  assert.match(autreIdee([...RICHE, SOUPE], 'soupe-carottes', opts({ cible })).platId, /^neuf-/);
+  // Un dessert n'est jamais concerné.
+  const gateau = dessert('gateau-carottes', 'Gâteau aux carottes', { ingredients: [leg('carotte', 4, 'pc', 'principal')] });
+  const gateau2 = dessert('gateau-courgettes', 'Gâteau aux courgettes', { ingredients: [leg('courgette', 2, 'pc', 'principal')], derniereFois: '2026-09-21' });
+  const cibleDessert = { ...CIBLE, plats: { 'gateau-carottes': dans(1) } };
+  const d = autreIdee([...DESSERTS, gateau, gateau2], 'gateau-carottes', opts({ cible: cibleDessert }));
+  assert.notEqual(d.platId, 'gateau-courgettes');
+  assert.equal(Object.hasOwn(d.raison, 'legumes'), false);
+});
+
+test('texteRaison : « · avec des légumes » à la fin de la raison ; seul quand rien d’autre n’est dit', () => {
+  const P = '✨ Proposé\u00A0: ';
+  assert.equal(TEXTES_PROPOSER.legumes, 'avec des légumes');
+  assert.equal(texteRaison({ code: 'aime', profils: ['profil-a'], legumes: true }, TXT), `${P}vous l’aimez · avec des légumes.`);
+  assert.equal(texteRaison({ code: 'aime', profils: ['profil-a', 'enfant'], legumes: true }, { moi: B, profils: PROFILS }), `${P}Adulte A et Enfant l’aiment · avec des légumes.`);
+  assert.equal(texteRaison({ code: 'decouvrir', legumes: true }, TXT), `${P}à découvrir · avec des légumes.`);
+  assert.equal(texteRaison({ code: 'ancien', legumes: true }, TXT), `${P}pas au menu depuis longtemps · avec des légumes.`);
+  assert.equal(texteRaison({ code: 'recent', legumes: true }, TXT), `${P}avec des légumes.`);
+  assert.equal(texteRaison({ code: 'autre', legumes: true }, TXT), `${P}avec des légumes.`);
+  assert.equal(texteRaison({ code: 'aime', profils: ['profil-z'], legumes: true }, TXT), `${P}avec des légumes.`);
+  assert.equal(texteRaison({ code: 'autre' }, TXT), null);
+  assert.equal(texteRaison({ code: 'decouvrir', legumes: false }, TXT), `${P}à découvrir.`);
+  assert.equal(texteRaison(null, TXT), null);
 });
 
 // ——— Pureté ———
