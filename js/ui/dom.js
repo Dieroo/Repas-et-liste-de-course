@@ -158,6 +158,8 @@ let numeroAnnonce = 0;
  * `action` : { libelle, faire } ajoute au message un bouton (« Annuler ») ; le message reste alors 8 s au lieu de
  * 3,5 s, et tant que le bouton a le focus (clavier, lecteur d'écran). Le bouton disparaît avec le message ; un toucher
  * cache le message puis appelle `faire()`, une seule fois. Sans action : le comportement d'avant, à l'identique.
+ * `duree` (ms, facultative) : temps d'affichage voulu (T4-0 : « Annuler » d'une proposition, 30 s) ; une nouvelle
+ * annonce remplace celle-ci, donc un autre geste la ferme.
  */
 export function annoncer(texte, options = {}) {
   const zone = document.getElementById('annonce');
@@ -211,9 +213,12 @@ export function annoncer(texte, options = {}) {
     }, String(action.libelle));
     // Le bandeau ne capte pas les touchers (.annonce : pointer-events: none) ; son bouton, si.
     bouton.style.pointerEvents = 'auto';
-    zone.append(' ', bouton);
+    // Le texte dans son propre bloc, qui seul se coupe : le bouton reste entier et touchable, même en police agrandie.
+    zone.textContent = '';
+    zone.append(el('span', { class: 'annonce-texte' }, texte), ' ', bouton);
   }
 
   zone.classList.add('visible');
-  programmer(avecAction ? DUREE_ANNONCE_ACTION_MS : DUREE_ANNONCE_MS);
+  const voulue = Number.isFinite(options?.duree) && options.duree > 0 ? options.duree : null;
+  programmer(voulue ?? (avecAction ? DUREE_ANNONCE_ACTION_MS : DUREE_ANNONCE_MS));
 }

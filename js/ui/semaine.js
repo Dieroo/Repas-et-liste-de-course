@@ -10,15 +10,17 @@
 // « Du » et « Au » natifs, deux semaines au plus, jamais à cheval sur une autre semaine.
 // Sous les plats (T3d) : « Chaque semaine aussi : Yaourts maison » (préparations de chaque semaine, qui vont d'elles-mêmes
 // dans la liste), avec un interrupteur « Pas cette semaine » par préparation (actions.sauterPreparation).
+// T4-0 : semaine sans plat, « ✨ Proposer 4 plats » est le bouton principal de la carte (« ＋ Choisir les plats » passe
+// secondaire) ; « 🍰 Proposer des desserts » sous « ＋ Choisir d'autres plats » (D6, feuille « Combien de desserts ? »).
 // Rien n'est écrit à l'ouverture : chaque section se met à jour en place (`maj`), la liste de courses suit.
-import { el, enteteVue, pastille, ecrireTexte, reconcilier } from './dom.js';
+import { el, enteteVue, pastille, ecrireTexte, reconcilier, vibrer } from './dom.js';
 import { prenomDe } from './profil.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
 import { aujourdhuiDe } from './regime.js';
 import { modeDeCuisson } from './pictos.js';
 import { vignetteDuPlat } from './plats.js';
-import { ouvrirChoixDesPlats, majChoixDesPlats, prendreChoixDemande } from './choisir-plats.js';
+import { ouvrirChoixDesPlats, ouvrirDesserts, majChoixDesPlats, prendreChoixDemande } from './choisir-plats.js';
 import {
   creerConservation, creerVersions, listeCourante, majPlatsDeLaSemaine, nomDuPlat, ouvrirPlatDeLaSemaine,
   platsDeLaSemaineDe,
@@ -29,8 +31,9 @@ import {
 import { carteAnniversaire } from '../coeur/age.js';
 import {
   TEXTES_DATES, exceptionPlat, feuillePlat, lireSemaine, peutPreparerLaSuivante, resumePlat, semaineEnCours,
-  texteDates, texteErreurDates, texteJour, validerDates,
+  semaineVisee, texteDates, texteErreurDates, texteJour, validerDates,
 } from '../coeur/semaine.js';
+import { TEXTES_PROPOSER, texteSansProposition } from '../coeur/proposition.js';
 import {
   TEXTES_T3D, carteProchaineAction, grouperParRayon, ordreRayons, texteChaqueSemaineAussi,
 } from '../coeur/liste.js';
@@ -443,24 +446,29 @@ function ouvrirDatesDeLaSemaine(semaineId, { onFermer } = {}) {
 
 /**
  * Carte « prochaine action » (coeur/liste.js › carteProchaineAction) : « Que mange-t-on cette semaine ? » et
- * « ＋ Choisir les plats », « Courses : 32 articles » et « Faire les courses › », « Tout est dans le panier 🎉 » et
- * « Dites-le dans Courses quand c'est fini. », puis « Courses faites ✓ » et « Le samedi 10 octobre. Bon appétit ! »
- * (T3b : « Voir la liste › » secondaire, la semaine qu'on cuisine reste à l'écran)… ;
- * les deux derniers jours d'une semaine, « Cette semaine se termine vendredi 16 octobre. » et « Préparer la semaine du
- * 17 au 23 octobre », qui n'écrit rien et ouvre la feuille de choix sur la semaine suivante. Nœuds gardés d'un rendu à
- * l'autre (le focus reste sur le bouton touché). `choisir(bouton)` : ouvre la feuille « Ajouter à la semaine ».
+ * « ＋ Choisir les plats » (T4-0 : « ✨ Proposer 4 plats » principal et « ＋ Choisir les plats » secondaire quand des plats
+ * sont proposables ; sinon, la ligne qui dit pourquoi sous le texte), « Courses : 32 articles » et « Faire les
+ * courses › », « Tout est dans le panier 🎉 » et « Dites-le dans Courses quand c'est fini. », puis « Courses faites ✓ »
+ * et « Le samedi 10 octobre. Bon appétit ! » (T3b : « Voir la liste › » secondaire, la semaine qu'on cuisine reste à
+ * l'écran)… ; les deux derniers jours d'une semaine, « Cette semaine se termine vendredi 16 octobre. » et « Préparer la
+ * semaine du 17 au 23 octobre », qui n'écrit rien et ouvre la feuille de choix sur la semaine suivante. Nœuds gardés
+ * d'un rendu à l'autre (le focus reste sur le bouton touché ; la classe suit le passage de principal à secondaire).
+ * L'emoji d'un bouton est à part (`span aria-hidden`). `choisir(bouton)` : ouvre la feuille « Ajouter à la semaine » ;
+ * `proposer(bouton, nombre)` : « ✨ Proposer N plats ».
  * → { noeud, maj(carte) }
  */
-function creerCarteAction(choisir) {
+function creerCarteAction(choisir, proposer) {
   const visuel = el('div', { class: 'carte-action-visuel' });
   const titre = el('h2', { id: 'titre-prochaine-action' });
   const texte = el('p', {});
+  const ligne = el('p', { class: 'ligne-sans-proposition' });
   const fin = el('p', { class: 'fin-semaine' });
   const boutons = el('div', { class: 'actions-carte' });
   const noeud = el('section', { class: 'carte carte-action', 'aria-labelledby': 'titre-prochaine-action' },
-    el('div', { class: 'carte-ligne' }, visuel, el('div', { class: 'carte-texte' }, titre, texte, fin)),
+    el('div', { class: 'carte-ligne' }, visuel, el('div', { class: 'carte-texte' }, titre, texte, ligne, fin)),
     boutons);
   let emoji = '';
+  const parties = new WeakMap(); // bouton → { emoji, libelle, nombre }
 
   function maj(carte) {
     const voulu = carte.cas === 'choisir' ? '🍲' : carte.cas === 'faites' ? '✅' : '🧺';
@@ -471,24 +479,38 @@ function creerCarteAction(choisir) {
     ecrireTexte(titre, carte.titre);
     ecrireTexte(texte, carte.texte ?? '');
     texte.hidden = !carte.texte;
+    ecrireTexte(ligne, carte.ligne ?? '');
+    ligne.hidden = !carte.ligne;
     ecrireTexte(fin, carte.fin ?? '');
     fin.hidden = !carte.fin;
     const classe = (b) => `bouton bouton-plein ${b.principal ? 'bouton-principal' : 'bouton-secondaire'}`;
     reconcilier(boutons, carte.boutons ?? [], {
       cle: (b) => b.action,
       creer: (b) => {
+        const morceaux = { emoji: el('span', { 'aria-hidden': 'true' }), libelle: el('span', {}), nombre: null };
         const noeudBouton = b.action === 'courses'
-          ? el('a', { class: classe(b), href: '#/courses' }, b.libelle)
-          : el('button', { class: classe(b), type: 'button' }, b.libelle);
-        if (b.action !== 'courses') noeudBouton.addEventListener('click', () => choisir(noeudBouton));
+          ? el('a', { class: classe(b), href: '#/courses', 'data-action': b.action }, morceaux.emoji, morceaux.libelle)
+          : el('button', { class: classe(b), type: 'button', 'data-action': b.action }, morceaux.emoji, morceaux.libelle);
+        parties.set(noeudBouton, morceaux);
+        if (b.action === 'proposer') noeudBouton.addEventListener('click', () => proposer(noeudBouton, parties.get(noeudBouton).nombre));
+        else if (b.action !== 'courses') noeudBouton.addEventListener('click', () => choisir(noeudBouton));
+        majBouton(noeudBouton, b);
         return noeudBouton;
       },
       maj: (n, b) => {
         if (n.className !== classe(b)) n.className = classe(b);
-        ecrireTexte(n, b.libelle);
+        majBouton(n, b);
       },
     });
     boutons.hidden = !boutons.children.length;
+  }
+
+  function majBouton(noeudBouton, b) {
+    const morceaux = parties.get(noeudBouton);
+    ecrireTexte(morceaux.emoji, b.emoji ?? '');
+    morceaux.emoji.hidden = !b.emoji;
+    ecrireTexte(morceaux.libelle, b.libelle);
+    morceaux.nombre = Number.isInteger(b.nombre) ? b.nombre : null;
   }
 
   return { noeud, maj };
@@ -700,7 +722,7 @@ function creerChaqueSemaine() {
  * alors « Préparer la semaine du … »).
  * → { noeud, maj(ctx) }
  */
-function creerSectionPlats(choisir, ouvrir) {
+function creerSectionPlats(choisir, ouvrir, desserts) {
   const dates = el('p', { id: 'texte-dates-semaine' });
   const boutonDates = el('button', {
     class: 'bouton bouton-texte bouton-changer-dates',
@@ -722,16 +744,22 @@ function creerSectionPlats(choisir, ouvrir) {
   const listeCartes = el('div', { class: 'cartes-plats-semaine' });
   const horsSemaine = el('div', { class: 'plats-hors-semaine' });
   const chaqueSemaine = creerChaqueSemaine();
-  const boutonAutres = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button' },
+  const boutonAutres = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', 'data-action': 'autres' },
     el('span', { 'aria-hidden': 'true' }, '＋'), 'Choisir d’autres plats');
   boutonAutres.addEventListener('click', () => choisir(boutonAutres));
+  // « 🍰 Proposer des desserts » (T4-0, D6) : sous « ＋ Choisir d'autres plats », même présence et même semaine visée,
+  // seulement si un dessert est proposable ; jamais sur la carte « prochaine action ».
+  const boutonDesserts = el('button', { class: 'bouton bouton-secondaire bouton-plein bouton-desserts', type: 'button', hidden: true, 'data-action': 'desserts' },
+    el('span', { 'aria-hidden': 'true' }, TEXTES_PROPOSER.desserts.emoji), TEXTES_PROPOSER.desserts.libelle);
+  boutonDesserts.addEventListener('click', () => desserts(boutonDesserts));
   const noeud = el('section', { class: 'section section-plats-semaine', 'aria-labelledby': 'titre-plats-semaine', hidden: true },
     el('div', { class: 'section-titre' }, el('h2', { id: 'titre-plats-semaine' }, 'Les plats de la semaine'), blocDates),
     enCeMoment.noeud,
     listeCartes,
     horsSemaine,
     chaqueSemaine.noeud,
-    boutonAutres);
+    boutonAutres,
+    boutonDesserts);
 
   function maj(ctx) {
     const pret = ctx.semainesChargees && ctx.platsCharges !== false && ctx.profilsCharges !== false;
@@ -754,6 +782,7 @@ function creerSectionPlats(choisir, ouvrir) {
     // Préparations de chaque semaine (T3d) : sous les plats, tant que la semaine montrée a des plats.
     chaqueSemaine.maj(ctx, Boolean(lue) && montres.length > 0);
     boutonAutres.hidden = !montres.length || peutPreparerLaSuivante(lue, aujourdhuiDe(ctx));
+    boutonDesserts.hidden = boutonAutres.hidden || !(apercuVise(ctx)?.desserts > 0);
     noeud.hidden = !montres.length && !jetes.length && enCeMoment.noeud.hidden;
     if (carteActive && !carteActive.isConnected) focusApresRetrait(ordreAvant.indexOf(carteActive), ordreAvant);
   }
@@ -787,17 +816,47 @@ function creerSectionPlats(choisir, ouvrir) {
   return { noeud, maj, rendreFocus };
 }
 
-/** Carte « prochaine action » du moment : rien tant que semaines, plats et profils ne sont pas lus. */
+/** Semaine où iraient les plats choisis maintenant (coeur/semaine.js › semaineVisee), ou null avant la lecture. */
+function semaineViseeDe(ctx) {
+  if (!ctx?.semainesChargees) return null;
+  return semaineVisee(ctx.semaines ?? [], aujourdhuiDe(ctx));
+}
+
+/** Aperçu de la proposition (T4-0) pour la semaine visée du moment : { plats, desserts, cause… } ou null. */
+function apercuVise(ctx) {
+  const visee = semaineViseeDe(ctx);
+  return visee ? ctx.proposition?.apercu?.(visee) ?? null : null;
+}
+
+/**
+ * Carte « prochaine action » du moment : rien tant que semaines, plats et profils ne sont pas lus. Semaine sans plat
+ * (T4-0) : « ✨ Proposer N plats » si au moins 2 plats sont proposables, sinon la ligne qui dit pourquoi.
+ */
 function carteDuMoment(ctx) {
   const pret = Boolean(ctx.semainesChargees) && ctx.platsCharges !== false && ctx.profilsCharges !== false;
   const liste = pret ? listeCourante(ctx) : null;
+  const plats = pret ? platsDeLaSemaineDe(ctx) : [];
+  let proposition = null;
+  let sansProposition = null;
+  const vide = !lireSemaine(ctx.semaine) || !plats.some((e) => e.etat === 'ok' || e.etat === 'sansRecette');
+  if (pret && vide) {
+    const apercu = apercuVise(ctx);
+    if (apercu?.plats) proposition = { plats: apercu.plats };
+    else if (apercu) {
+      sansProposition = texteSansProposition(apercu.cause, {
+        moi: ctx.moi ?? null, profils: ctx.profils ?? [], profilCause: apercu.profilCause,
+      });
+    }
+  }
   return carteProchaineAction(ctx.semaine ?? null, {
     semainesChargees: pret,
     semaines: ctx.semaines ?? [],
     aujourdhui: aujourdhuiDe(ctx),
-    plats: pret ? platsDeLaSemaineDe(ctx) : [],
+    plats,
     liste,
     groupes: liste ? grouperParRayon(liste, { rayons: ordreRayons(ctx.reglages) }) : null,
+    proposition,
+    sansProposition,
   });
 }
 
@@ -813,32 +872,120 @@ export function creer(ctx) {
   const maintenant = new Date();
   const prenom = prenomDe(ctx.utilisateur);
 
+  const visible = (n) => Boolean(n?.isConnected && !n.hidden && !n.closest('[hidden]'));
+
+  /**
+   * Après « Annuler » d'une proposition : le bouton de la carte revenue (« ✨ Proposer … », sinon « Préparer la semaine
+   * du … », sinon son bouton principal) ; d'un « 🔄 Une autre idée » (`platId` : l'ancien plat), sa carte.
+   */
+  function apresAnnulation(platId = null) {
+    if (platId) {
+      sectionPlats.rendreFocus(platId);
+      return;
+    }
+    const zone = carteAction.noeud;
+    const cible = zone.querySelector('[data-action="proposer"]') ?? zone.querySelector('[data-action="preparer"]')
+      ?? zone.querySelector('.bouton-principal') ?? zone.querySelector('.actions-carte a, .actions-carte button');
+    if (visible(cible)) cible.focus();
+  }
+
+  /**
+   * Après « Annuler » d'une proposition de desserts : « 🍰 Proposer des desserts » sous les plats, sinon « ＋ Choisir
+   * d'autres plats », sinon comme ✨ (la semaine vidée revient à la carte « prochaine action »).
+   */
+  function apresAnnulationDesserts(platId = null) {
+    if (platId) {
+      apresAnnulation(platId);
+      return;
+    }
+    const zone = sectionPlats.noeud;
+    const cible = [zone.querySelector('[data-action="desserts"]'), zone.querySelector('[data-action="autres"]')].find(visible);
+    if (cible) cible.focus();
+    else apresAnnulation();
+  }
+
+  /** Focus sur la carte d'un plat qui vient d'arriver (proposition, desserts), une fois l'écran à jour. */
+  function viserCarte(platId) {
+    if (platId) sectionPlats.rendreFocus(platId);
+  }
+
   /**
    * Feuille « Ajouter à la semaine » ; le focus revient au bouton qui l'a ouverte, ou, s'il a disparu (la carte est
-   * passée de « ＋ Choisir les plats » à « Faire les courses › »), à l'action de la carte.
+   * passée de « ＋ Choisir les plats » à « Faire les courses › »), à l'action de la carte. Après « ✨ » : la carte du
+   * premier plat proposé ; après « 🍰 » : la feuille « Combien de desserts ? », sur la même semaine visée.
    */
   function choisir(depuis = null) {
     ouvrirChoixDesPlats(lireContexte, {
-      onFermer: () => {
-        const visible = (n) => Boolean(n?.isConnected && !n.hidden && !n.closest('[hidden]'));
+      apresAnnulation,
+      onFermer: (suite) => {
+        if (suite?.desserts) {
+          ouvrirCombienDeDesserts(suite.desserts, depuis);
+          return;
+        }
+        if (suite?.viser) {
+          viserCarte(suite.viser);
+          return;
+        }
         const cible = visible(depuis) ? depuis : carteAction.noeud.querySelector('.actions-carte a, .actions-carte button');
         if (visible(cible)) cible.focus();
       },
     });
   }
 
-  /** Feuille du plat de la semaine ; le focus revient à sa carte, ou à sa voisine si le plat a été retiré. */
+  /** « Combien de desserts ? » ; à la fermeture sans desserts, le focus revient au bouton qui l'a ouverte. */
+  function ouvrirCombienDeDesserts({ cible, restes = [], garderRestes = true }, depuis = null) {
+    if (!cible) return;
+    ouvrirDesserts(lireContexte, {
+      cible,
+      restes,
+      garderRestes,
+      apresAnnulation: apresAnnulationDesserts,
+      onFermer: (suite) => {
+        if (suite?.viser) {
+          viserCarte(suite.viser);
+          return;
+        }
+        const cibleFocus = visible(depuis) ? depuis : carteAction.noeud.querySelector('.actions-carte a, .actions-carte button');
+        if (visible(cibleFocus)) cibleFocus.focus();
+      },
+    });
+  }
+
+  /** « 🍰 Proposer des desserts » sous les plats : la semaine visée du moment (celle de « ＋ Choisir d'autres plats »). */
+  function desserts(depuis) {
+    const cible = semaineViseeDe(contexteSemaine);
+    if (!cible) return;
+    ouvrirCombienDeDesserts({ cible: { id: cible.id, debut: cible.debut, fin: cible.fin }, restes: [] }, depuis);
+  }
+
+  /**
+   * « ✨ Proposer N plats » de la carte : les plats entrent d'un coup (actions.proposerALaSemaine, semaine visée au
+   * toucher), vibration, focus sur la carte du premier plat proposé ; annonce avec « Annuler » 30 s.
+   */
+  function proposer(depuis, nombre) {
+    const resultat = contexteSemaine?.actions?.proposerALaSemaine?.({ nombreAnnonce: nombre, apresAnnulation });
+    if (resultat?.code !== 'ok' && resultat?.code !== 'peu') return;
+    vibrer();
+    viserCarte(resultat.ajoutes?.[0]?.platId ?? null);
+  }
+
+  /**
+   * Feuille du plat de la semaine ; le focus revient à sa carte, ou à sa voisine si le plat a été retiré ; après
+   * « 🔄 Une autre idée » (`viser`), à la carte du nouveau plat, à la même place.
+   */
   function ouvrir(platId, depuis) {
     ouvrirPlatDeLaSemaine(lireContexte, platId, {
-      onFermer: () => {
-        if (depuis?.isConnected) depuis.focus();
+      apresAnnulation,
+      onFermer: (suite) => {
+        if (suite?.viser) viserCarte(suite.viser);
+        else if (depuis?.isConnected) depuis.focus();
         else sectionPlats.rendreFocus(platId);
       },
     });
   }
 
-  const carteAction = creerCarteAction(choisir);
-  const sectionPlats = creerSectionPlats(choisir, ouvrir);
+  const carteAction = creerCarteAction(choisir, proposer);
+  const sectionPlats = creerSectionPlats(choisir, ouvrir, desserts);
 
   const noeud = el('div', { class: 'vue' },
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
@@ -857,7 +1004,9 @@ export function creer(ctx) {
   majChoixDesPlats(ctx);
   majPlatsDeLaSemaine(ctx);
   // « Choisir les plats › » de Courses : la feuille s'ouvre une fois l'écran en place.
-  if (prendreChoixDemande()) setTimeout(() => choisir(carteAction.noeud.querySelector('button')), 0);
+  if (prendreChoixDemande()) {
+    setTimeout(() => choisir(carteAction.noeud.querySelector('[data-action="choisir"]') ?? carteAction.noeud.querySelector('button')), 0);
+  }
 
   return {
     noeud,

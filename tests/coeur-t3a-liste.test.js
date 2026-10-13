@@ -696,13 +696,15 @@ function carte(semaine, { aujourdhui = '2026-10-12', semaines = [semaine].filter
 
 test('carteProchaineAction : chargement ; aucune semaine ou aucun plat → « Que mange-t-on… ? » + « ＋ Choisir les plats »', () => {
   assert.deepEqual(carte(SEMAINE, { chargees: false }), {
-    cas: 'chargement', titre: 'Chargement de la semaine…', texte: null, fin: null, boutons: [], suivante: null,
+    cas: 'chargement', titre: 'Chargement de la semaine…', texte: null, ligne: null, fin: null, boutons: [], suivante: null,
   });
   const vide = carte(null);
   assert.equal(vide.cas, 'choisir');
   assert.equal(vide.titre, 'Que mange-t-on cette semaine\u00A0?');
   assert.equal(vide.texte, 'Choisissez quelques plats\u00A0: la liste de courses se fait toute seule.');
-  assert.deepEqual(vide.boutons, [{ action: 'choisir', libelle: '＋ Choisir les plats', principal: true }]);
+  // T4-0 : l'emoji « ＋ » est rendu à part (span aria-hidden) ; sans proposition, « Choisir les plats » reste principal.
+  assert.deepEqual(vide.boutons, [{ action: 'choisir', emoji: '＋', libelle: 'Choisir les plats', principal: true }]);
+  assert.equal(vide.ligne, null);
   assert.equal(carte(semaineAvec({ jete: dans(1) })).cas, 'choisir', 'plat de la corbeille seulement');
   // Semaine qui commence plus tard, avec un plat de la corbeille seulement : ses dates.
   const plusTard = carte({ id: '2026-10-17', debut: '2026-10-17', fin: '2026-10-23', plats: { jete: dans(1) } }, { aujourdhui: '2026-10-16' });
