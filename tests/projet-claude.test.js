@@ -6,9 +6,12 @@ import { readFile } from 'node:fs/promises';
 import { STYLES, VOCABULAIRES } from '../js/coeur/vocabulaire.js';
 import { CHAMPS_PLAT, FORMAT, validerPaquet, extrairePaquet, controlerInstructions } from '../js/coeur/paquet.js';
 import {
-  VERSION_INSTRUCTIONS, texteDemandeIdees, texteDemandePrecautions, texteDemandeRecette, texteDemandeVariantes,
-  texteCorrectionPourClaude,
+  VERSION_INSTRUCTIONS, texteDemandeEtapes, texteDemandeIdees, texteDemandePrecautions, texteDemandeRecette,
+  texteDemandeVariantes, texteCorrectionPourClaude,
 } from '../js/coeur/claude.js';
+import { entreesPourImport, preparerImport } from '../js/coeur/paquet.js';
+import { empreinteEtapes } from '../js/coeur/realisation.js';
+import { GATEAU, GRATIN, REALISATION_GRATIN } from './donnees/exemples-etapes.js';
 import { ecrireRegime } from '../js/coeur/regles.js';
 import { slug } from '../js/coeur/slug.js';
 
@@ -55,12 +58,13 @@ test('les en-têtes des demandes produites par l’app figurent dans les instruc
     texteCorrectionPourClaude({ erreur: 'aucune' }).split('\n')[0],
     texteDemandeIdees({ profils }).split('\n')[0],
     texteDemandePrecautions([plat]).split('\n')[0],
+    texteDemandeEtapes([plat]).split('\n')[0],
   ];
-  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1', 'DEMANDE-PRECAUTIONS paquet@1']);
+  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1', 'DEMANDE-PRECAUTIONS paquet@1', 'DEMANDE-ETAPES paquet@1']);
   for (const enTete of enTetes) assert.ok(doc.includes(`\`${enTete}\``), `« ${enTete} » absent`);
   // Chaque code DEMANDE-… cité est connu.
   const cites = new Set(doc.match(/DEMANDE-[A-Z]+/g));
-  assert.deepEqual([...cites].sort(), ['DEMANDE-IDEES', 'DEMANDE-PRECAUTIONS', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
+  assert.deepEqual([...cites].sort(), ['DEMANDE-ETAPES', 'DEMANDE-IDEES', 'DEMANDE-PRECAUTIONS', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
 });
 
 test('les exemples de demandes sont ceux que l’app copie', () => {
@@ -113,15 +117,16 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
   assert.ok(exemples.includes(texteCorrectionPourClaude(validerPaquet(versionsRefusees, { profils }))), 'exemple CORRECTION de versions différent du texte copié');
 
   // Message d'idées refusé (une viande sans forme) : toutes les fiches du message sont redemandées (T2b+).
+  // Version 7 : 3 fiches par message, chacune avec sa réalisation (T5-0b).
   const ideeRendue = (nom, ingredient) => ({
-    id: slug(nom), nom, statutRecette: 'brouillon', portionsBase: 4, ingredients: [ingredient], source: 'Idée de Claude',
+    id: slug(nom), nom, statutRecette: 'brouillon', portionsBase: 4, ingredients: [ingredient], etapes: ['Cuire'],
+    realisation: [{ titre: 'Cuire', texte: 'Faites cuire à feu doux.', duree: 20, ingredients: [ingredient.produit] }],
+    source: 'Idée de Claude',
   });
   const messageRefuse = { format: FORMAT, instructions: VERSION_INSTRUCTIONS, plats: [
     ideeRendue('Dahl de lentilles corail', ing('lentille corail', 300, 'g', ['feculent'])),
     ideeRendue('Boulettes de pois chiches au cumin', ing('pois chiche', 400, 'g', ['feculent'])),
     ideeRendue('Poulet au miso et patate douce', ing('haut de cuisse de poulet', 800, 'g', ['viande', 'volaille'])),
-    ideeRendue('Tajine de poisson aux olives', ing('filet de lieu', 600, 'g', ['poisson'])),
-    ideeRendue('Gâteau carotte et orange', ing('carotte', 300, 'g', ['legume'], { role: 'incorpore' })),
   ] };
   assert.ok(exemples.includes(texteCorrectionPourClaude(validerPaquet(messageRefuse, { profils }))), 'exemple CORRECTION d’un message d’idées différent du texte copié');
 
@@ -139,8 +144,48 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
   }
   assert.ok(exemples.includes(idees), 'exemple DEMANDE-IDEES différent du texte copié');
 
+  // Demande d'étapes détaillées (T5-0b) : deux plats, parts anonymes ; correction d'un message refusé.
+  assert.ok(exemples.includes(texteDemandeEtapes([GRATIN, GATEAU])), 'exemple DEMANDE-ETAPES différent du texte copié');
+  const fautive = structuredClone(REALISATION_GRATIN);
+  fautive[7].duree = '20 min';
+  const refuse = validerPaquet({ format: FORMAT, instructions: VERSION_INSTRUCTIONS, plats: [
+    { id: GRATIN.id, nom: GRATIN.nom, empreinte: empreinteEtapes(GRATIN), realisation: fautive }] });
+  assert.equal(refuse.valide, false);
+  assert.ok(exemples.includes(texteCorrectionPourClaude(refuse)), 'exemple CORRECTION d’un message d’étapes différent du texte copié');
+
   // Une demande recollée par erreur n'est jamais prise pour une réponse.
   for (const exemple of exemples) assert.equal(extrairePaquet(exemple).erreur, 'demande');
+});
+
+test('l’exemple de réponse à DEMANDE-ETAPES s’enregistre contre les fiches de la demande, sans avertissement', () => {
+  const reponse = blocs('json').map((r) => JSON.parse(r)).find((p) => p.plats.every((plat) => 'empreinte' in plat && 'realisation' in plat));
+  assert.ok(reponse, 'exemple de réponse à DEMANDE-ETAPES absent');
+  const validation = validerPaquet([reponse], { profils });
+  assert.equal(validation.lotDEtapes, true);
+  assert.equal(validation.valide, true);
+  const prep = preparerImport(entreesPourImport(validation), { plats: [GRATIN, GATEAU], profils });
+  assert.deepEqual(prep.elements.map((e) => [e.id, e.statut, e.avertissements]), [
+    [GRATIN.id, 'etapes', []], [GATEAU.id, 'etapes', []],
+  ]);
+  assert.equal(prep.ecritures.length, 2);
+  // La fiche du §2 porte la même réalisation que la réponse (les mêmes étapes, deux fois montrées).
+  const fiche = blocs('json').map((r) => JSON.parse(r)).find((p) => p.plats[0].id === GRATIN.id && p.plats[0].ingredients).plats[0];
+  assert.deepEqual(fiche.realisation, reponse.plats[0].realisation);
+  assert.deepEqual(fiche.etapes, reponse.plats[0].realisation.map((e) => e.titre));
+});
+
+test('la section 2 bis tient les règles de l’essai du 2026-10-12 : geste de fin d’attente, mains, réchauffage, longueur', () => {
+  const section = doc.match(/\n## 2 bis\. La réalisation \(étapes détaillées\)\n([\s\S]*?)\n## 3\. /)?.[1];
+  assert.ok(section, 'section 2 bis absente, ou pas entre les sections 2 et 3');
+  for (const champ of ['titre', 'texte', 'duree', 'actif', 'appareil', 'mode', 'tempC', 'feu', 'ustensiles', 'ingredients', 'aussi', 'pret', 'apres', 'auService', 'veille', 'partAvant']) {
+    assert.ok(section.includes(`\`${champ}\``), `champ « ${champ} » absent de la section 2 bis`);
+  }
+  assert.ok(section.includes('`"reperesARevoir": true`'), 'reperesARevoir absent de la section 2 bis');
+  for (const feu of ['`doux`', '`moyen`', '`vif`']) assert.ok(section.includes(feu), feu);
+  assert.match(section, /2 ou 3 phrases courtes, 350 caractères au plus/);
+  assert.match(section, /« Cuire au four » puis « Sortir du four »/);
+  assert.match(section, /viande crue \(bœuf, porc, lardons, volaille…\), du poisson cru ou des œufs crus/);
+  assert.match(section, /réchauffer au four à 160 °C un gratin cuit à 180 °C/);
 });
 
 test('l’exemple de fiche de DEMANDE-IDEES est une idée de Claude, au statut brouillon, avec ses versions', () => {
@@ -185,4 +230,13 @@ test('les aliments permis à un profil sans viande gardent leur repère (œufs, 
   const phrase = doc.split('\n').find((l) => l.startsWith('Ne relèvent pas de la viande'));
   assert.ok(phrase, 'phrase des aliments permis absente');
   for (const repere of ['`oeuf`', '`laitier`', '`miel`', '`poisson`']) assert.ok(phrase.includes(repere), repere);
+});
+
+test('`reperesARevoir` n’est demandé que dans une réponse à DEMANDE-ETAPES (une fiche complète l’ignorerait)', () => {
+  const lignes = doc.split('\n').filter((l) => l.includes('reperesARevoir'));
+  assert.ok(lignes.length >= 2);
+  for (const l of lignes) assert.match(l, /DEMANDE-ETAPES|empreinte/, `ligne qui demande reperesARevoir hors DEMANDE-ETAPES : ${l}`);
+  assert.ok(lignes.some((l) => /jamais dans une fiche complète/.test(l)));
+  // L'app ne le connaît que dans un lot d'étapes : une fiche complète le traite comme un champ inconnu.
+  assert.ok(!CHAMPS_PLAT.includes('reperesARevoir'));
 });

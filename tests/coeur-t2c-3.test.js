@@ -463,10 +463,10 @@ test('sauvegarde : aller-retour de `age.garde` ; validerRegles le garde ; restau
 
 // ——— Parmesan et grana padano (instructions en version 6) ———
 
-test('parmesan et grana padano : pâtes pressées cuites, jamais au lait cru (instructions v6 et aide du barème)', async () => {
-  assert.equal(VERSION_INSTRUCTIONS, 6);
+test('parmesan et grana padano : pâtes pressées cuites, jamais au lait cru (instructions v6 et suivantes, aide du barème)', async () => {
+  assert.ok(VERSION_INSTRUCTIONS >= 6);
   const doc = await readFile(new URL('../docs/projet-claude.md', import.meta.url), 'utf8');
-  assert.equal(doc.split('\n')[0], '# Instructions du projet Claude — version 6');
+  assert.equal(doc.split('\n')[0], `# Instructions du projet Claude — version ${VERSION_INSTRUCTIONS}`);
   const definition = doc.split('\n').find((l) => l.startsWith('| `lait_cru` |'));
   assert.ok(definition, 'définition de lait_cru absente');
   const pressees = definition.match(/\*\*Jamais\*\* les pâtes pressées cuites[^(]*\(([^)]*)\)/)?.[1] ?? '';

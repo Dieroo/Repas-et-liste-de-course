@@ -11,6 +11,8 @@ import {
 import { evaluer, marqueursDouteux, profilsContraints } from './compatibilite.js';
 import { aSaRecette, statutDe, typeDe } from './plats.js';
 import { estDansCorbeille } from './corbeille.js';
+import { cuissonEnTexte, empreinteDeTexte } from './empreinte.js';
+import { realisationAJour } from './realisation.js';
 
 export { VERSION_REPERES, estRelue };
 
@@ -90,40 +92,34 @@ export function lotDePrecautions(plats) {
 
 // ——— Texte d'un plat et empreinte ———
 
-/** « four 200 °C 25 min » (espaces ordinaires). */
-function cuissonEnTexte(etape) {
-  return [ligne(etape?.appareil), etape?.tempC != null ? `${ligne(etape.tempC)} °C` : '',
-    etape?.dureeMin != null ? `${ligne(etape.dureeMin)} min` : ''].filter(Boolean).join(' ');
-}
-
 /**
  * Lignes d'un plat dans DEMANDE-PRECAUTIONS, sauf `id`, `nom` et `empreinte` : `ingrédients:` (produits suivis de
- * leurs repères bruts entre crochets, sans quantités), `étapes:` et `cuisson:` (omises quand elles sont vides).
+ * leurs repères bruts entre crochets, sans quantités), `étapes:` et `cuisson:` (omises quand elles sont vides). Une
+ * réalisation à jour (realisation.js › realisationAJour, T5-0b) donne « titre : texte » de chaque étape, pour que
+ * Claude juge sur le détail ; sinon `etapes`, comme avant.
  */
 export function lignesRelecture(plat) {
   const lignes = [`  ingrédients: ${ingredientsDe(plat)
     .map((ingredient) => `${ligne(ingredient.produit)} [${marqueursDe(ingredient.marqueurs).map(ligne).join(', ')}]`)
     .join(' ; ')}`];
-  const etapes = (Array.isArray(plat?.etapes) ? plat.etapes : []).map(ligne).filter(Boolean);
+  const etapes = realisationAJour(plat)
+    ? plat.realisation.map((etape) => [ligne(etape?.titre), ligne(etape?.texte)].filter(Boolean).join(' : ')).filter(Boolean)
+    : (Array.isArray(plat?.etapes) ? plat.etapes : []).map(ligne).filter(Boolean);
   if (etapes.length) lignes.push(`  étapes: ${etapes.join(' / ')}`);
-  const cuisson = (Array.isArray(plat?.cuisson) ? plat.cuisson : []).filter(estObjet).map(cuissonEnTexte).filter(Boolean);
-  if (cuisson.length) lignes.push(`  cuisson: ${cuisson.join(' ; ')}`);
+  const cuisson = cuissonEnTexte(plat?.cuisson, { mode: false });
+  if (cuisson) lignes.push(`  cuisson: ${cuisson}`);
   return lignes;
 }
 
 /**
- * Empreinte de relecture d'un plat : 6 caractères [0-9a-z], hachage FNV-1a 32 bits du texte exact de ses lignes
- * `ingrédients:`, `étapes:` et `cuisson:` (lignesRelecture). Elle change avec un produit, un repère, une étape ou une
- * cuisson ; pas avec une quantité ni un renommage.
+ * Empreinte de relecture d'un plat : 6 caractères [0-9a-z], hachage FNV-1a 32 bits (empreinte.js › empreinteDeTexte)
+ * du texte exact de ses lignes `ingrédients:`, `étapes:` et `cuisson:`, telles qu'envoyées à Claude (lignesRelecture :
+ * le détail d'une réalisation à jour, sinon `etapes`, d'où des valeurs inchangées depuis T2d pour une fiche sans
+ * réalisation). Elle change avec un produit, un repère, une étape (titre ou texte) ou une cuisson ; pas avec une
+ * quantité ni un renommage.
  */
 export function empreinteRelecture(plat) {
-  const source = lignesRelecture(plat).join('\n');
-  let h = 0x811c9dc5;
-  for (const octet of new TextEncoder().encode(source)) {
-    h ^= octet;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return (h % (36 ** 6)).toString(36).padStart(6, '0');
+  return empreinteDeTexte(lignesRelecture(plat).join('\n'));
 }
 
 // ——— Validation d'une relecture ———

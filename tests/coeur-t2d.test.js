@@ -95,8 +95,12 @@ function blocs(langage) {
   return [...doc.matchAll(/```([a-z]*)\n([\s\S]*?)```/g)].filter((m) => m[1] === langage).map((m) => m[2].trimEnd());
 }
 
-/** Réponse de relecture (objet paquet). */
-const reponse = (plats, instructions = VERSION_INSTRUCTIONS) => ({ format: FORMAT, instructions, plats });
+/**
+ * Réponse de relecture (objet paquet). Un collage de fiches complètes seules (sans relecture) est une réponse des
+ * instructions d'avant les étapes détaillées (version 6) : leur `realisation` n'y est pas attendue (T5-0b).
+ */
+const estRelecture = (plat) => plat && typeof plat === 'object' && ('precautions' in plat || 'empreinte' in plat);
+const reponse = (plats, instructions = plats.some(estRelecture) ? VERSION_INSTRUCTIONS : 6) => ({ format: FORMAT, instructions, plats });
 const entree = (plat, precautions = [], extra = {}) => ({ id: plat.id, nom: plat.nom, empreinte: empreinteRelecture(plat), precautions, ...extra });
 
 /** Lot validé puis préparé contre des plats. */
