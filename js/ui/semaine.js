@@ -13,7 +13,7 @@
 // T4-0 : semaine sans plat, « ✨ Proposer 4 plats » est le bouton principal de la carte (« ＋ Choisir les plats » passe
 // secondaire) ; « 🍰 Proposer des desserts » sous « ＋ Choisir d'autres plats » (D6, feuille « Combien de desserts ? »).
 // Rien n'est écrit à l'ouverture : chaque section se met à jour en place (`maj`), la liste de courses suit.
-import { el, enteteVue, pastille, ecrireTexte, reconcilier, vibrer } from './dom.js';
+import { el, enteteVue, pastille, ecrireTexte, montrerAuDessusDeLAnnonce, reconcilier, vibrer } from './dom.js';
 import { prenomDe } from './profil.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
@@ -904,9 +904,15 @@ export function creer(ctx) {
     else apresAnnulation();
   }
 
-  /** Focus sur la carte d'un plat qui vient d'arriver (proposition, desserts), une fois l'écran à jour. */
+  /**
+   * Focus sur la carte d'un plat qui vient d'arriver (proposition, desserts, autre idée), une fois l'écran à jour ; la
+   * page défile juste assez pour que la carte passe au-dessus de l'annonce qui en parle (police agrandie : sans cela,
+   * la carte du premier plat proposé restait cachée sous le bandeau).
+   */
   function viserCarte(platId) {
-    if (platId) sectionPlats.rendreFocus(platId);
+    if (!platId) return;
+    sectionPlats.rendreFocus(platId);
+    montrerAuDessusDeLAnnonce(document.activeElement?.closest?.('.carte-plat-semaine') ?? null);
   }
 
   /**
@@ -960,7 +966,7 @@ export function creer(ctx) {
 
   /**
    * « ✨ Proposer N plats » de la carte : les plats entrent d'un coup (actions.proposerALaSemaine, semaine visée au
-   * toucher), vibration, focus sur la carte du premier plat proposé ; annonce avec « Annuler » 30 s.
+   * toucher), vibration, focus sur la carte du premier plat proposé ; annonce avec « Annuler » 10 s.
    */
   function proposer(depuis, nombre) {
     const resultat = contexteSemaine?.actions?.proposerALaSemaine?.({ nombreAnnonce: nombre, apresAnnulation });

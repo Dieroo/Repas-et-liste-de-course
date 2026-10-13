@@ -10,7 +10,7 @@
 // la semaine suivante les reprend (l'app les retire avec lui) et la phrase revient. Une recherche cherche dans tous les
 // types (la puce ne trie que la liste sans recherche) ; le nom d'un plat de la corbeille mène à sa fiche (« Remettre »).
 // T4-0 : quand la semaine visée n'a aucun plat, « ✨ Proposer 4 plats » est le premier bouton (la feuille se ferme, les
-// plats entrent d'un coup, « Annuler » 30 s) ; « 🍰 Proposer des desserts » (D6) ferme la feuille et ouvre « Combien de
+// plats entrent d'un coup, « Annuler » 10 s) ; « 🍰 Proposer des desserts » (D6) ferme la feuille et ouvre « Combien de
 // desserts ? » sur la même semaine visée. Présence et libellés figés à l'ouverture : la recherche ne bouge jamais.
 import { el, ecrireTexte, reconcilier, vibrer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
@@ -563,7 +563,7 @@ export function ouvrirChoixDesPlats(lireCtx, { onFermer, apresAnnulation = null 
  * à l'ouverture, préremplis comme la dernière fois (coeur/proposition.js › nombreDeDessertsParDefaut ; rien n'est
  * stocké) ; « Ils s’ajoutent aux plats de la semaine. » ; « 🍰 Proposer 2 desserts » (libellé qui suit le choix) et
  * « Fermer ». Toucher : la feuille se ferme juste avant l'écriture (actions.proposerDessertsALaSemaine, un lot, annonce
- * avec « Annuler » 30 s), puis `onFermer({ viser })` reçoit le premier dessert ajouté ; « chevauche » (dates changées sur
+ * avec « Annuler » 10 s), puis `onFermer({ viser })` reçoit le premier dessert ajouté ; « chevauche » (dates changées sur
  * l'autre téléphone) : rien n'est écrit, la feuille reste, recalcule sa semaine visée (sous-titre) et dit « Les dates
  * de la semaine ont changé : touchez de nouveau « Proposer ». ». Rien n'est écrit à l'ouverture.
  * → { maj(ctx), fermer }

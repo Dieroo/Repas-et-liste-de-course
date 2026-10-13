@@ -1737,7 +1737,7 @@ const actions = {
    * création de la semaine et articles des `restes` avec le premier plat, seulement si la cible n'avait aucun plat).
    * `nombreAnnonce` : le nombre dit par le libellé du bouton, ramené à ce qui manque (coeur/proposition.js ›
    * nombreAProposer : des cases cochées entre-temps comptent) et à ce qui est disponible ; l'annonce dit le vrai
-   * nombre. Annonce (coeur/proposition.js › annonceProposition) avec « Annuler » pendant 30 s (annulerProposition :
+   * nombre. Annonce (coeur/proposition.js › annonceProposition) avec « Annuler » pendant 10 s (annulerProposition :
    * remet tout comme avant, puis `apresAnnulation()`). Les raisons des choix sont gardées sur ce téléphone (ligne
    * « ✨ Proposé : … » de la feuille du plat). `feuille: true` (feuille de choix) : un `chevauche` est rendu tel quel
    * (la feuille recalcule sa semaine visée et le dit) ; sinon, un essai de plus sur la semaine visée du moment, puis la
@@ -1755,7 +1755,7 @@ const actions = {
   /**
    * « 🍰 Proposer 2 desserts » (D6, feuille « Combien de desserts ? », ouverte depuis Semaine ou la feuille de choix) :
    * `nombre` desserts (1 à 4) entrent d'un coup dans la semaine `cible`, comme proposerALaSemaine (même lot, mêmes
-   * restes, même « Annuler » 30 s, même `chevauche` : la feuille reste ouverte et recalcule sa semaine visée).
+   * restes, même « Annuler » 10 s, même `chevauche` : la feuille reste ouverte et recalcule sa semaine visée).
    * → mêmes retours que proposerALaSemaine.
    */
   proposerDessertsALaSemaine({
@@ -2519,8 +2519,11 @@ function remettreDans(semaineId, platId, remettre = []) {
 
 // ——— Proposer les plats de la semaine (T4-0) ———
 
-/** Durée de l'annonce d'une proposition et de son « Annuler » (D2). */
-const DUREE_ANNONCE_PROPOSITION_MS = 30000;
+/**
+ * Durée de l'annonce d'une proposition (✨ ou 🍰) et de son « Annuler » : 10 s (retour du propriétaire, 2026-10-13 :
+ * 30 s, c'était trop long sur les cartes qu'elle annonce) ; elle ne part toujours pas sous le doigt ni sous le focus.
+ */
+const DUREE_ANNONCE_PROPOSITION_MS = 10000;
 
 /**
  * Proposition de plats (`type` 'plat', « ✨ ») ou de desserts ('dessert', « 🍰 ») pour une semaine visée, écrite en un
@@ -2560,14 +2563,14 @@ function proposerDansLaSemaine(type, {
       restes,
       tousLesPlats: platsSepares().actifs,
     });
-    return { visee, proposition, ecritures };
+    return { proposition, ecritures };
   };
   let essai = essayer(cible);
   // Cible devenue impossible (dates changées sur l'autre téléphone) : la feuille recalcule elle-même la sienne et le
   // dit ; ailleurs, un essai de plus sur la semaine visée du moment.
   if (essai.ecritures?.code === 'chevauche' && cible && !feuille) essai = essayer(null);
   if (essai.code) return essai;
-  const { visee, proposition, ecritures } = essai;
+  const { proposition, ecritures } = essai;
   if (ecritures.code === 'chevauche' && !feuille) annoncer(TEXTES_PROPOSER.erreurs.chevauche);
   if (ecritures.code) return ecritures;
   if (typeof avant === 'function') avant(ecritures.ajoutes[0]?.platId ?? null);
@@ -2578,13 +2581,11 @@ function proposerDansLaSemaine(type, {
   for (const c of choisis) etat.proposes.set(`${ecritures.id}|${c.platId}`, c.raison);
   rendre();
   const nbRestes = ecritures.articles?.length ?? 0;
-  const semaine = semaineParId(ecritures.id);
+  // Ni dates ni restes dans l'annonce : la semaine proposée est celle que Semaine montre maintenant, et ses restes, la
+  // feuille venait de les dire (coeur/proposition.js › annonceProposition).
   const texte = annonceProposition({ ...proposition, choisis, ids: choisis.map((c) => c.platId) }, {
-    cible: semaine ?? visee,
-    aujourdhui,
     moi: profilDeLEmail(etat.profils, etat.utilisateur.email),
     profils: etat.profils,
-    restes: nbRestes,
   });
   const semaineId = ecritures.id;
   annoncer(texte, {
