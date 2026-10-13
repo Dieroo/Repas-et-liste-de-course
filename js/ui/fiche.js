@@ -28,6 +28,9 @@ import { majPlatsDeLaSemaine, ouvrirPlatDeLaSemaine, phraseDemandee, restesPour 
 import { texteDemandeEtapes } from '../coeur/claude.js';
 import { TEXTES_ETAPES, etapesLisibles, etatRealisation, ligneAppareil, ligneDuree } from '../coeur/realisation.js';
 import { ouvrirEnSerieEtapes } from './import.js';
+// T5-1 « Cuisiner pas à pas » : bouton sous les étapes.
+import { boutonCuisiner, TEXTES_CUISINE } from '../coeur/cuisine.js';
+import { avecPictogramme } from './etape.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -382,14 +385,16 @@ function etapeDetaillee(etape) {
 /**
  * Partie « Étapes » de la fiche (T5-0b) : étapes détaillées à jour en liste numérotée, celles « Le jour du repas » à
  * part ; sinon les étapes courtes, comme avant. `carte` : la carte « Ces étapes sont courtes » du gestionnaire.
+ * `cuisiner` (T5-1) : le bouton « 👩‍🍳 Cuisiner pas à pas », juste sous les étapes.
  */
-function sectionEtapes(plat, carte) {
+function sectionEtapes(plat, carte, cuisiner = null) {
   const { etapes, detaillee } = etapesLisibles(plat);
   if (!detaillee) {
     const courtes = (plat.etapes ?? []).map((etape) => String(etape));
-    if (!courtes.length && !carte) return null;
+    if (!courtes.length && !carte && !cuisiner) return null;
     return section('Étapes',
       courtes.length ? el('ol', { class: 'liste-etapes' }, courtes.map((etape) => el('li', {}, etape))) : null,
+      cuisiner,
       carte);
   }
   const cuisine = etapes.filter((etape) => !etape.auService);
@@ -401,6 +406,7 @@ function sectionEtapes(plat, carte) {
         el('h3', {}, TEXTES_ETAPES.jourDuRepas),
         el('ol', { class: 'liste-etapes liste-etapes-detaillees' }, service.map(etapeDetaillee)))
       : null,
+    cuisiner,
     carte);
 }
 
@@ -466,6 +472,14 @@ export function creer(ctx) {
   const blocSemaine = el('div', { class: 'bloc-semaine' }, boutonSemaine, aideSemaine);
   // Ce qui décide si le bouton est principal : la fiche a-t-elle déjà un bouton principal ? (dernier rendu)
   let autrePrincipal = false;
+
+  // « 👩‍🍳 Cuisiner pas à pas » (T5-1, les deux membres) : sous les étapes, gardé d'un rendu à l'autre ; principal si le
+  // plat est dans la semaine montrée ou en cours et que la fiche n'a pas déjà un bouton principal.
+  const lienCuisiner = el('a', {
+    class: 'bouton bouton-secondaire bouton-plein bouton-cuisiner', href: `#/cuisiner/${encodeURIComponent(id)}`,
+    'data-action': 'cuisiner',
+  }, avecPictogramme(TEXTES_CUISINE.bouton));
+  let cuisinerPrincipal = false;
 
   // « Modifier la recette » (les deux membres), ou « Reprendre » si une modification attend sur ce téléphone.
   const lienModifier = el('a', { class: 'bouton bouton-secondaire bouton-plein', href: `#/modifier/${encodeURIComponent(id)}` });
@@ -661,7 +675,7 @@ export function creer(ctx) {
     const libelle = dedans ? 'Dans la semaine · Régler ›' : 'Ajouter à la semaine';
     if (iconeSemaine.textContent !== icone) iconeSemaine.textContent = icone;
     if (libelleSemaine.textContent !== libelle) libelleSemaine.textContent = libelle;
-    const principal = !dedans && !autrePrincipal && !(actionsEnBas && demandeCopiee) && !etapesCopiees;
+    const principal = !dedans && !autrePrincipal && !(actionsEnBas && demandeCopiee) && !etapesCopiees && !cuisinerPrincipal;
     const classe = `bouton bouton-plein ${principal ? 'bouton-principal' : 'bouton-secondaire'}`;
     if (boutonSemaine.className !== classe) boutonSemaine.className = classe;
     boutonSemaine.disabled = !etat;
@@ -853,7 +867,7 @@ export function creer(ctx) {
     if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
     const blocs = [...blocsDemande.values()];
-    const focusGarde = [actionsRecette, blocSemaine, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes,
+    const focusGarde = [actionsRecette, blocSemaine, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes, lienCuisiner,
       ...blocs.flatMap((bloc) => [bloc.bouton, bloc.phrase])]
       .some((n) => n.contains(document.activeElement))
       ? document.activeElement
@@ -874,6 +888,14 @@ export function creer(ctx) {
     // alors secondaire.
     actionsEnBas = gestionnaire && statut !== 'attente' && !versionManquante;
     autrePrincipal = Boolean(brouillon) || (gestionnaire && (statut === 'attente' || Boolean(versionManquante)));
+    // « 👩‍🍳 Cuisiner pas à pas » (T5-1) : visible pour un plat qui a sa recette et ses étapes, hors corbeille.
+    const cuisiner = jete ? { visible: false, principal: false } : boutonCuisiner(plat, {
+      semaines: courant.semainesChargees ? courant.semaines ?? [] : [], aujourdhui: courant.aujourdhui,
+    });
+    cuisinerPrincipal = cuisiner.visible && cuisiner.principal && !autrePrincipal && !etapesCopiees
+      && !(actionsEnBas && demandeCopiee);
+    const classeCuisiner = `bouton bouton-plein bouton-cuisiner ${cuisinerPrincipal ? 'bouton-principal' : 'bouton-secondaire'}`;
+    if (lienCuisiner.className !== classeCuisiner) lienCuisiner.className = classeCuisiner;
     majActionsRecette();
     lienModifier.replaceChildren(
       el('span', { 'aria-hidden': 'true' }, '✏️'),
@@ -929,7 +951,7 @@ export function creer(ctx) {
         ))))
         : null,
 
-      sectionEtapes(plat, avecCarteEtapes ? carteEtapes : null),
+      sectionEtapes(plat, avecCarteEtapes ? carteEtapes : null, cuisiner.visible ? lienCuisiner : null),
 
       cuissons.length
         ? section('Cuisson', el('ul', { class: 'liste-simple' }, cuissons.map((c) => el('li', {}, cuissonLisible(c)))))

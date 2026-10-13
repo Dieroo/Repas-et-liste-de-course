@@ -49,6 +49,9 @@ import * as restaurer from './ui/restaurer.js';
 import * as regime from './ui/regime.js';
 import * as ecranDemandes from './ui/demandes.js';
 import * as accueil from './ui/accueil.js';
+// T5-1 « Cuisiner pas à pas ».
+import * as cuisiner from './ui/cuisiner.js';
+import { TEXTES_CUISINE } from './coeur/cuisine.js';
 import { cleAccueil, lireMarque, valeurVu, valeurOuverture, accueilAuto } from './coeur/accueil.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
@@ -100,6 +103,8 @@ const ECRANS = {
   demandes: { titre: 'Demandes', module: ecranDemandes, onglet: null },
   // Présentation de première ouverture (T6-0) : sans onglets, la barre « C’est parti » en bas.
   accueil: { titre: 'Bienvenue', module: accueil, onglet: null, sansOnglets: true },
+  // Cuisiner pas à pas (T5-1) : sans onglets ni en-tête de l'app (l'écran a les siens), la barre « Suivante › » en bas.
+  cuisiner: { titre: 'Cuisiner pas à pas', module: cuisiner, onglet: 'plats', sansOnglets: true },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -774,9 +779,12 @@ function rendreApp() {
     : '';
   const cle = `${route}/${parametre}|${role}|${roleReel}|${utilisateur.uid}|${moment}`;
   // Fiche : « <nom du plat> · Repas & Courses » ; modification : « <nom du plat> · Modifier · Repas & Courses ».
-  const nomPlat = route === 'plat' || route === 'modifier' ? etat.plats.find((p) => p.id === parametre)?.nom : undefined;
+  const nomPlat = ['plat', 'modifier', 'cuisiner'].includes(route) ? etat.plats.find((p) => p.id === parametre)?.nom : undefined;
   let titrePage = titre;
-  if (nomPlat) titrePage = route === 'modifier' ? `${nomPlat} · Modifier` : nomPlat;
+  if (nomPlat) {
+    if (route === 'cuisiner') titrePage = TEXTES_CUISINE.titrePage(nomPlat);
+    else titrePage = route === 'modifier' ? `${nomPlat} · Modifier` : nomPlat;
+  }
   const nomProfil = route === 'regime' ? etat.profils.find((p) => p.id === parametre)?.nom : undefined;
   if (nomProfil) titrePage = `Ce que ${nomProfil} mange`;
   monter(cle, () => (module.creer ? module.creer(ctx) : module.afficher(ctx)), {

@@ -20,6 +20,9 @@ import { listeDeCourses, restes } from '../coeur/liste.js';
 import { dateDemande, etatDemande, texteDemandee } from '../coeur/demandes.js';
 import { STYLES } from '../coeur/vocabulaire.js';
 import { TEXTES_PROPOSER, nomAutreIdee, texteRaison } from '../coeur/proposition.js';
+// T5-1 « Cuisiner pas à pas » : sous « Voir la recette › ».
+import { TEXTES_CUISINE, peutCuisiner } from '../coeur/cuisine.js';
+import { avecPictogramme } from './etape.js';
 
 /** Touchers rapides sur les cases et les compteurs : une seule écriture, 0,8 s après le dernier. */
 const DELAI_REGROUPEMENT_MS = 800;
@@ -350,12 +353,20 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer, apresAnnulati
     href: `#/plat/${encodeURIComponent(platId)}`,
     onclick: () => fermer(),
   }, 'Voir la recette ›');
+  // « 👩‍🍳 Cuisiner pas à pas » (T5-1) : plat qui a sa recette et ses étapes ; secondaire, comme « Voir la recette › ».
+  const lienCuisiner = el('a', {
+    class: 'bouton bouton-secondaire bouton-plein bouton-cuisiner',
+    href: `#/cuisiner/${encodeURIComponent(platId)}`,
+    'data-action': 'cuisiner',
+    hidden: true,
+    onclick: () => fermer(),
+  }, avecPictogramme(TEXTES_CUISINE.bouton));
   const boutonRetirer = el('button', { class: 'bouton bouton-texte', type: 'button', onclick: retirer }, 'Retirer de la semaine');
 
   const feuille = ouvrirFeuille(nomDuPlat(platCourant()), () => el('div', { class: 'feuille-plat-semaine' },
     raison, boutonAutreIdee, statutAutreIdee,
     sansRecette, blocQui, blocInvites, blocRepas, annonceCompteur, versions.noeud, conservation.noeud,
-    el('div', { class: 'actions-feuille' }, boutonDepart, lienRecette, boutonRetirer)), {
+    el('div', { class: 'actions-feuille' }, boutonDepart, lienRecette, lienCuisiner, boutonRetirer)), {
     onFermer: () => {
       ouverte = false;
       envoyer();
@@ -645,6 +656,7 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer, apresAnnulati
     versions.maj(modele ? element : null, courant);
     conservation.maj(modele ? element : null, courant);
     boutonDepart.hidden = !modele?.depart;
+    lienCuisiner.hidden = !peutCuisiner(plat);
   }
 
   const handle = {
