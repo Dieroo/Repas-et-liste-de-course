@@ -409,6 +409,27 @@ test('finDeCuisson : cuit le 18, 3 jours → au plus tard le 21 (compris) ; cong
   assert.equal(finDeCuisson(CURRY, null, '2026-10-18').auFrigo, 4);
 });
 
+test('finDeCuisson : un plat qui ne se congèle pas n’est jamais conseillé au congélateur', () => {
+  const semaine = SEMAINES['versions mer et végétale par défaut, retraits, placard'];
+  const element = elementDe(semaine, 'gratin-pates-jambon');
+  const pasCongelable = { ...GRATIN, conservation: { ...(GRATIN.conservation ?? {}), congelable: false } };
+  const fin = finDeCuisson(pasCongelable, element, '2026-10-18', { finSemaine: '2026-10-23' });
+  assert.equal(fin.congelerSiApres, null);
+  assert.equal(fin.aFinirAvant, '2026-10-21');
+  const phrases = phrasesDeFin(fin);
+  assert.equal(phrases.congeler, 'Ce plat ne se congèle pas\u00A0: prévoyez de le finir au plus tard le mercredi 21.');
+  assert.deepEqual(phrases.conseils, [CONSEILS.boites.texte, CONSEILS.etiquette.texte]);
+  assert.ok(!/congelez/i.test([phrases.congeler, ...phrases.conseils].join(' ')));
+  // La semaine finit avant la date limite : rien à dire.
+  const court = finDeCuisson(pasCongelable, element, '2026-10-18', { finSemaine: '2026-10-20' });
+  assert.equal(court.aFinirAvant, null);
+  assert.equal(phrasesDeFin(court).congeler, null);
+  // `congelable` absent : tenu pour congelable, comme avant.
+  const sansInfo = { ...GRATIN, conservation: { frigoJours: 3 } };
+  assert.equal(finDeCuisson(sansInfo, element, '2026-10-18', { finSemaine: '2026-10-23' }).congelerSiApres, '2026-10-21');
+  assert.equal(finDeCuisson(sansInfo, element, '2026-10-18', { finSemaine: '2026-10-23' }).aFinirAvant, null);
+});
+
 test('texteHeure et texteFrigoAvant : deux heures après la fin de la cuisson', () => {
   assert.equal(AU_FRIGO_AVANT_MIN, 120);
   assert.equal(texteHeure(new Date(2026, 9, 18, 14, 30)), '14\u00A0h\u00A030');
