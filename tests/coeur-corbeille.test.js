@@ -257,7 +257,9 @@ test('« Modifier » : renommer un plat du nom d’un plat de la corbeille → m
 
 // ——— Ajout de recettes ———
 
-const paquet = (...plats) => ({ format: 'paquet@1', instructions: VERSION_INSTRUCTIONS, plats });
+// Fiches rendues avec les instructions d'avant les étapes détaillées (version 6) : leur `realisation` n'est pas
+// attendue ici (T5-0b, coeur-realisation.test.js couvre la version 7).
+const paquet = (...plats) => ({ format: 'paquet@1', instructions: 6, plats });
 function valides(...plats) {
   const resultat = validerPaquet([paquet(...plats)], { profils: PROFILS });
   assert.equal(resultat.valide, true, JSON.stringify(resultat.erreurs.concat(resultat.plats.flatMap((p) => p.erreurs))));

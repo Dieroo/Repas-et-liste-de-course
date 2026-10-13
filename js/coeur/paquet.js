@@ -13,6 +13,9 @@ import { SOURCE_IDEE, VERSION_INSTRUCTIONS } from './claude.js';
 import { stylesAttendus } from './regles.js';
 import { estDansCorbeille } from './corbeille.js';
 import {
+  empreinteEtapes, realisationAJour, titresDe, travailRecette, validerRealisation,
+} from './realisation.js';
+import {
   changementsRelecture, comparerAuxReperesPres, ecrituresRelecture, effetsSurLesVersions, empreinteRelecture,
   garderReperes, texteReperes, validerPrecautions,
 } from './relecture.js';
@@ -29,13 +32,22 @@ const ID = /^[a-z0-9-]+$/;
 const APPAREILS_A_TEMPERATURE = ['four', 'airfryer'];
 
 export const CHAMPS_PLAT = ['id', 'nom', 'type', 'recurrence', 'statutRecette', 'portionsBase', 'ingredients', 'etapes',
-  'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
+  'realisation', 'cuisson', 'tempsActifMin', 'conservation', 'emporter', 'variantes', 'source'];
 // Champs de la fiche connus mais jamais repris par l'ajout de recettes (notes, dernier passage, marque « modifiée à
 // la main », marque de la corbeille) : ils voyagent dans une sauvegarde, que seule la restauration reprend.
 // `reperesRelus` (T2d) : marque posée par l'app seule, jamais reprise d'une réponse de Claude.
 const CHAMPS_IGNORES = ['notes', 'derniereFois', 'modifieeLe', 'modifieePar', 'corbeille', 'reperesRelus'];
 // Champs d'une entrée de relecture (réponse à DEMANDE-PRECAUTIONS, T2d).
 const CHAMPS_RELECTURE = ['id', 'nom', 'empreinte', 'precautions'];
+// Champs d'une entrée d'un lot d'étapes (réponse à DEMANDE-ETAPES, T5-0b) ; `etapes` (titres) y est ignoré en silence.
+const CHAMPS_ETAPES = ['id', 'nom', 'empreinte', 'realisation', 'reperesARevoir', 'etapes'];
+/** Version des instructions à partir de laquelle une fiche complète porte sa `realisation` (docs/projet-claude.md). */
+export const VERSION_REALISATION = 7;
+/**
+ * Champs qu'écrit un lot d'étapes (ecrituresEtapes, une transaction par plat) : liste fermée. `reperesRelus` n'est
+ * qu'effacé, et seulement quand Claude signale un repère à revoir (`reperesARevoir`).
+ */
+export const CHAMPS_ECRITS_PAR_ETAPES = Object.freeze(['realisation', 'etapes', 'majPar', 'majLe', 'reperesRelus']);
 const CHAMPS_CUISSON = ['appareil', 'tempC', 'mode', 'dureeMin'];
 const CHAMPS_CONSERVATION = ['frigoJours', 'congelable'];
 const CHAMPS_VARIANTE = ['pour', 'style', 'retirer', 'ajouter', 'consigne', 'frigoJours'];
@@ -239,6 +251,61 @@ function validerEntreeRelecture(brut, index) {
 }
 
 /**
+ * Une entrée d'un lot d'étapes (réponse à DEMANDE-ETAPES, T5-0b) : `id` obligatoire, `nom` facultatif (jamais repris),
+ * `empreinte` et `realisation` obligatoires, `reperesARevoir` facultatif ; une recette entière (`ingredients`,
+ * `variantes` ou `portionsBase`) est refusée : rien n'est jamais créé ni remplacé par un lot d'étapes. La réalisation
+ * n'est vérifiée ici que dans sa structure (preparerImport la juge contre la fiche). Tout autre champ est ignoré
+ * (`autresChamps`, « Seules les étapes de « X » sont reprises. »).
+ * → même forme que validerPlat, avec `etapesSeules` ; chaque erreur porte aussi `code` (sans préfixe) et `refus` (la
+ *   phrase de l'aperçu) ; `donnees` : { id, nom?, empreinte, realisation, reperesARevoir?, autresChamps? }.
+ */
+function validerEntreeEtapes(brut, index) {
+  const erreurs = [];
+  const avertissements = [];
+  const nom = texte(brut?.nom);
+  const id = slug(typeof brut?.id === 'string' && brut.id.trim() ? brut.id : '');
+  const affiche = nom ? `«\u00A0${nom}\u00A0»` : (id ? `«\u00A0${id}\u00A0»` : `Recette ${index + 1}`);
+  const claude = `plats[${index}]${id ? ` (${id})` : ''}`;
+  const signaler = (message, codeClaude, refus = null) => erreurs.push({
+    message, code: codeClaude, pourClaude: `${claude} ${codeClaude}`,
+    refus: refus ?? `${affiche} n’est pas repris\u00A0: ${message.replace(/^.*?\u00A0:\s*/, '').replace(/\.$/, '')}. Il restera à détailler.`,
+  });
+  const resultat = (donnees) => ({
+    index, id, nom, donnees: erreurs.length ? null : donnees, erreurs, avertissements, etapesSeules: true,
+  });
+  if (!estObjet(brut)) {
+    signaler(`${affiche}\u00A0: la réponse est illisible.`, ': objet attendu');
+    return resultat(null);
+  }
+  if (brut.ingredients != null || brut.variantes != null || brut.portionsBase != null) {
+    const phrase = `Claude a rendu la recette entière de ${affiche}\u00A0: seules ses étapes étaient demandées.`;
+    signaler(phrase, 'rends seulement { "id", "nom", "empreinte", "realisation" }, sans la recette', phrase);
+    return resultat(null);
+  }
+  if (!id || !ID.test(id)) signaler(`${affiche}\u00A0: identifiant invalide (minuscules, chiffres et tirets seulement).`, 'id : minuscules, chiffres et tirets seulement');
+  const donnees = { id };
+  if (nom) donnees.nom = nom;
+  const empreinte = typeof brut.empreinte === 'string' || typeof brut.empreinte === 'number' ? texte(String(brut.empreinte)) : '';
+  if (!empreinte) signaler(`${affiche}\u00A0: l’empreinte de la demande manque.`, 'empreinte manquante, recopie celle de la demande');
+  else donnees.empreinte = empreinte;
+  // Réalisation rangée ailleurs (sous `etapes`, sous une clé accentuée) ou oubliée : jamais devinée, redemandée.
+  const lu = Object.hasOwn(brut, 'realisation') ? validerRealisation(brut.realisation, { prefixe: claude, nom: nom || id })
+    : { realisation: null, avertissements: [], erreurs: [{
+      message: `${affiche}\u00A0: les étapes détaillées manquent.`, raison: 'les étapes détaillées manquent',
+      code: 'realisation attendue (la liste des étapes va sous la clé "realisation", jamais "etapes")',
+      pourClaude: `${claude} realisation attendue (la liste des étapes va sous la clé "realisation", jamais "etapes")`,
+    }] };
+  for (const e of lu.erreurs) {
+    erreurs.push({ ...e, refus: `${affiche} n’est pas repris\u00A0: ${e.raison}. Il restera à détailler.` });
+  }
+  for (const a of lu.avertissements) avertissements.push({ message: a.message, pourClaude: a.pourClaude });
+  if (lu.realisation) donnees.realisation = lu.realisation;
+  if (booleen(brut.reperesARevoir) === true) donnees.reperesARevoir = true;
+  if (Object.keys(brut).some((cle) => !CHAMPS_ETAPES.includes(cle))) donnees.autresChamps = true;
+  return resultat(donnees);
+}
+
+/**
  * Une recette du collage. → { index, id, nom, donnees (null si erreur), erreurs, avertissements }
  * Versions d'un même profil : une par style (`mer`, `vegetal`), et une version sans style est la seule de son profil.
  * `versionsEnDouble` : à l'ajout de recettes ('erreur'), deux versions en conflit sont une erreur, comme une version
@@ -246,7 +313,12 @@ function validerEntreeRelecture(brut, index) {
  * ailleurs (fiches en base, sauvegardes, empreintes : 'premiere'), seule la première version en conflit est gardée et
  * une version incohérente reste, avec un avertissement.
  */
-function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } = {}) {
+function validerPlat(brut, index, idsProfils, {
+  versionsEnDouble = 'premiere',
+  realisationAbimee = versionsEnDouble === 'erreur' ? 'erreur' : 'ignorer',
+  ecartCuisson = versionsEnDouble === 'erreur' ? 'erreur' : 'avertissement',
+  realisationAttendue = false,
+} = {}) {
   const erreurs = [];
   const avertissements = [];
   const nom = texte(brut?.nom);
@@ -385,6 +457,35 @@ function validerPlat(brut, index, idsProfils, { versionsEnDouble = 'premiere' } 
       });
       if (cuissons.every(Boolean) && (cuissons.length || aRecette)) donnees.cuisson = cuissons;
     }
+  }
+
+  // Étapes détaillées (T5-0b) : validées contre les ingrédients et la cuisson de la fiche reçue ; dans une réponse de
+  // Claude, `etapes` devient leurs titres (la liste `etapes` reçue avec elles est ignorée en silence). Abîmées dans une
+  // fiche en base ou une sauvegarde (`realisationAbimee: 'ignorer'`) : retirées avec un avertissement, la recette
+  // reste valide.
+  if (brut.realisation != null) {
+    const lu = validerRealisation(brut.realisation, {
+      produits: Array.isArray(donnees.ingredients) ? donnees.ingredients : null,
+      cuisson: Array.isArray(donnees.cuisson) ? donnees.cuisson : null,
+      prefixe: claude,
+      nom: nom || id,
+      ecart: ecartCuisson,
+    });
+    if (lu.realisation) {
+      donnees.realisation = lu.realisation;
+      // Réponse de Claude : `etapes` = les titres. Fiche en base ou sauvegarde : les `etapes` lues restent (une app
+      // d'avant a pu les changer : la réalisation n'est alors plus à jour, et la différence doit se voir).
+      if (realisationAbimee === 'erreur' || !donnees.etapes) donnees.etapes = titresDe(lu.realisation);
+      for (const a of lu.avertissements) avertissements.push({ message: a.message, pourClaude: a.pourClaude });
+    } else if (realisationAbimee === 'ignorer') {
+      prevenir(`${affiche}\u00A0: ses étapes détaillées sont abîmées, elles ne sont pas reprises.`, 'realisation abîmée, ignorée');
+    } else {
+      for (const e of lu.erreurs) erreurs.push({ message: e.message, pourClaude: e.pourClaude });
+      for (const a of lu.avertissements) avertissements.push({ message: a.message, pourClaude: a.pourClaude });
+    }
+  } else if (realisationAttendue && aRecette) {
+    // Réponse en version 7 ou plus : une recette porte ses étapes détaillées (jamais un plat ⏳).
+    signaler(`${affiche}\u00A0: les étapes détaillées manquent.`, 'realisation attendue');
   }
 
   if (brut.tempsActifMin != null) {
@@ -578,17 +679,30 @@ export function estSauvegarde(paquets) {
  * `versionsEnDouble` : 'erreur' (ajout de recettes) ou 'premiere' (sauvegarde, fiches en base : seule la première de
  * deux versions en conflit est gardée ; une version dont le style ne va pas avec ses ajouts ou ses jours au frigo
  * reste, avec un avertissement).
- * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide, relecture? }
+ * → { plats: [{ index, id, nom, donnees, erreurs, avertissements }], erreurs, avertissements, valide, relecture?,
+ *     lotDEtapes? }
  *   `donnees` ne contient que des champs présents et valides (aucune valeur undefined, aucune table vide).
- *   `relecture` (T2d) : vrai si une entrée porte `precautions` ou `empreinte` (réponse à DEMANDE-PRECAUTIONS) ; chaque
- *   entrée est alors une relecture (`precautionsSeules`), jamais une recette.
+ *   Nature du collage, dans cet ordre (T5-0b) : une entrée porte `precautions` → `relecture` (T2d, réponse à
+ *   DEMANDE-PRECAUTIONS ; chaque entrée est une relecture, `precautionsSeules`) ; sinon une entrée porte `realisation`
+ *   avec `empreinte`, ou sans `ingredients` ni `portionsBase` dans un collage dont aucune entrée ne les porte →
+ *   `lotDEtapes` (aussi une entrée avec `empreinte` dont les étapes sont sous `etapes` en objets ou sous une clé
+ *   accentuée, et, avec `serieEtapes`, toute entrée avec `empreinte`) (réponse à DEMANDE-ETAPES ; jamais avec
+ *   `lotsDEtapes: false` : sauvegarde, dernier filet de
+ *   « Modifier » ; chaque entrée est jugée seule, `etapesSeules` : une entrée fautive, ou rendue deux fois, n'empêche pas les autres ; `valide` dès qu'une entrée
+ *   l'est) ; sinon une entrée porte `empreinte` → `relecture` ; sinon des fiches complètes. Une fiche complète d'une
+ *   réponse en version VERSION_REALISATION ou plus (`instructions` de son bloc) sans `realisation` est une erreur
+ *   (`realisation attendue`), jamais pour un plat ⏳, une sauvegarde ou une fiche en base (sans `instructions`), ni
+ *   pour un plat de `relectureEnCours` (dernier lot de relecture copié : preparerImport dit « au lieu de sa seule
+ *   relecture »).
  */
 export function validerPaquet(paquets, {
-  profils = null, platsMax = PLATS_MAX, doublonsDeNom = true, versionsEnDouble = 'erreur',
+  profils = null, platsMax = PLATS_MAX, doublonsDeNom = true, versionsEnDouble = 'erreur', relectureEnCours = [],
+  lotsDEtapes = true, serieEtapes = false,
 } = {}) {
   const erreurs = [];
   const avertissements = [];
   const bruts = [];
+  const versionsDesBruts = []; // version des instructions du bloc de chaque entrée (null : absente)
   let clesIgnorees = false;
   for (const paquet of Array.isArray(paquets) ? paquets : [paquets]) {
     if (!estObjet(paquet) || code(paquet.format) !== code(FORMAT)) {
@@ -602,6 +716,9 @@ export function validerPaquet(paquets, {
       continue;
     }
     bruts.push(...paquet.plats);
+    const version = typeof paquet.instructions === 'number' && Number.isInteger(paquet.instructions) ? paquet.instructions
+      : (typeof paquet.instructions === 'string' && /^\s*\d+\s*$/.test(paquet.instructions) ? Number(paquet.instructions) : null);
+    versionsDesBruts.push(...paquet.plats.map(() => version));
   }
   if (clesIgnorees) {
     avertissements.push({ message: 'Seules les recettes sont ajoutées ici\u00A0: le reste a été ignoré.', pourClaude: 'clés autres que plats ignorées' });
@@ -621,12 +738,53 @@ export function validerPaquet(paquets, {
   }
 
   const idsProfils = Array.isArray(profils) && profils.length ? new Set(profils.map((p) => p.id)) : null;
-  // Lot de relecture (réponse à DEMANDE-PRECAUTIONS, T2d) : une seule entrée qui porte `precautions` ou `empreinte`
-  // suffit ; toutes les entrées sont alors des relectures (validerEntreeRelecture).
-  const relecture = bruts.some((brut) => estObjet(brut) && (Object.hasOwn(brut, 'precautions') || Object.hasOwn(brut, 'empreinte')));
-  const plats = bruts.map((brut, index) => (relecture
-    ? validerEntreeRelecture(brut, index)
-    : validerPlat(brut, index, idsProfils, { versionsEnDouble })));
+  // Nature du collage : relecture (T2d), lot d'étapes (T5-0b) ou fiches complètes (ordre testé).
+  const porte = (cle) => bruts.some((brut) => estObjet(brut) && Object.hasOwn(brut, cle));
+  // Sans `empreinte`, une entrée { id, nom, realisation } ne fait un lot d'étapes que si aucune entrée du collage n'a la
+  // forme d'une fiche (`ingredients` ou `portionsBase`) : une idée sans ingrédients reste une fiche complète. Jamais pour
+  // une sauvegarde ni pour « Modifier » (`lotsDEtapes: false`).
+  // Une entrée avec `empreinte` dont les étapes sont rangées ailleurs (liste d'objets sous `etapes`, clé
+  // « réalisation » accentuée) est aussi une entrée d'étapes ; en série d'étapes (`serieEtapes`, écran ouvert depuis une
+  // carte d'étapes), toute entrée avec `empreinte` sans `precautions` l'est : jamais une relecture des repères.
+  const formeDeFiche = (brut) => estObjet(brut) && (Object.hasOwn(brut, 'ingredients') || Object.hasOwn(brut, 'portionsBase'));
+  const porteEtapes = (brut) => Object.hasOwn(brut, 'realisation')
+    || Object.keys(brut).some((cle) => code(cle) === 'realisation')
+    || (Array.isArray(brut.etapes) && brut.etapes.some(estObjet));
+  const lotDEtapes = lotsDEtapes && !porte('precautions') && bruts.some((brut) => estObjet(brut)
+    && (Object.hasOwn(brut, 'empreinte')
+      ? serieEtapes || porteEtapes(brut)
+      : Object.hasOwn(brut, 'realisation') && !formeDeFiche(brut) && !bruts.some(formeDeFiche)));
+  const relecture = !lotDEtapes && (porte('precautions') || porte('empreinte'));
+  // Plat du dernier lot de relecture copié (T2d) : une recette entière rendue à sa place est l'erreur « au lieu de sa
+  // seule relecture » de preparerImport, jamais « étapes détaillées manquent » (la correction redemande la relecture).
+  const enRelecture = new Set((Array.isArray(relectureEnCours) ? relectureEnCours : []).map(String));
+  const plats = bruts.map((brut, index) => {
+    if (relecture) return validerEntreeRelecture(brut, index);
+    if (lotDEtapes) return validerEntreeEtapes(brut, index);
+    return validerPlat(brut, index, idsProfils, {
+      versionsEnDouble,
+      realisationAttendue: (versionsDesBruts[index] ?? 0) >= VERSION_REALISATION
+        && !enRelecture.has(slug(typeof brut?.id === 'string' ? brut.id : '')),
+    });
+  });
+
+  if (lotDEtapes) {
+    // Chaque entrée vaut pour elle-même : un identifiant rendu deux fois refuse la seconde seulement.
+    const vusEtapes = new Set();
+    for (const plat of plats) {
+      if (!plat.id) continue;
+      if (vusEtapes.has(plat.id)) {
+        const affiche = `«\u00A0${plat.nom || plat.id}\u00A0»`;
+        const phrase = `Claude a rendu deux fois ${affiche}\u00A0: seule la première est reprise.`;
+        plat.erreurs.push({ message: phrase, code: 'rendu deux fois dans le message', pourClaude: `plats[${plat.index}] (${plat.id}) rendu deux fois dans le message`, refus: phrase });
+        plat.donnees = null;
+      } else {
+        vusEtapes.add(plat.id);
+      }
+    }
+    const valide = !erreurs.length && plats.some((plat) => !plat.erreurs.length);
+    return { plats, erreurs, avertissements, valide, lotDEtapes: true };
+  }
 
   // Doublons dans le collage : même identifiant ou même nom (sauf demande contraire).
   const vus = new Map();
@@ -911,11 +1069,22 @@ function aSaRecette(plat) {
  * comparerAuxReperesPres : `egaux` ou `plusIci`). Une recette recollée sans les repères posés depuis par une
  * relecture n'est donc pas « différente ».
  */
-function memeRecette(actuelle, recue) {
+function memeRecette(actuelle, recue, { ficheAJour = false } = {}) {
   if (!actuelle || !recue) return false;
-  const { ingredients: ici, ...resteIci } = actuelle;
-  const { ingredients: la, ...resteLa } = recue;
+  const {
+    ingredients: ici, realisation: realisationIci, etapes: etapesIci, ...resteIci
+  } = actuelle;
+  const {
+    ingredients: la, realisation: realisationLa, etapes: etapesLa, ...resteLa
+  } = recue;
   if (!egales(resteIci, resteLa)) return false;
+  // Étapes (T5-0b) : même réalisation ; ou, face à une réponse sans réalisation, une fiche détaillée à jour garde la
+  // sienne (rien n'est réécrit) ; sinon les étapes courtes se comparent comme avant.
+  if (realisationLa !== undefined) {
+    if (!egales(realisationIci, realisationLa)) return false;
+  } else if (!(ficheAJour && realisationIci !== undefined) && !egales(etapesIci, etapesLa)) {
+    return false;
+  }
   return ['egaux', 'plusIci'].includes(comparerAuxReperesPres(ici ?? [], la ?? []));
 }
 
@@ -969,10 +1138,16 @@ function recetteSansVersions(plat) {
  */
 export function preparerImport(valides, {
   plats = [], demandes = [], cible = null, profils = [], choix = {}, relectureEnCours = [], controle = null,
+  serieEtapes = false,
 } = {}) {
   if ((Array.isArray(valides) ? valides : []).some((donnees) => Array.isArray(donnees?.precautions))) {
     return preparerRelecture(valides, { plats, profils, controle });
   }
+  if ((Array.isArray(valides) ? valides : []).some(estEntreeEtapes)) {
+    return preparerEtapes(valides, { plats, controle });
+  }
+  // Entrée refusée à la validation (null) : rien à préparer.
+  valides = (Array.isArray(valides) ? valides : []).filter(estObjet);
   const enRelecture = new Set(Array.isArray(relectureEnCours) ? relectureEnCours : []);
   let recetteAuLieuDeRelecture = false;
   const erreurs = [];
@@ -1280,6 +1455,24 @@ export function preparerImport(valides, {
       continue;
     }
 
+    // Écran en série d'étapes (T5-0b) : une recette entière glissée dans la série (Claude qui dérive après plusieurs
+    // « suite ») ne remplace jamais une recette du foyer ; refusée entrée par entrée, sans erreur, les autres passent.
+    const dejaRemplie = serieEtapes && !viseCible && recue && !idee ? parId.get(vise) : null;
+    if (dejaRemplie && aSaRecette(dejaRemplie) && statutDe(dejaRemplie) !== 'attente') {
+      elements.push({
+        index,
+        id: vise,
+        nom: dejaRemplie.nom,
+        statut: 'refusee',
+        raison: `Claude a rendu la recette entière de «\u00A0${dejaRemplie.nom}\u00A0»\u00A0: seules ses étapes étaient demandées.`,
+        ingredients: dejaRemplie.ingredients.length,
+        etapes: Array.isArray(dejaRemplie.etapes) ? dejaRemplie.etapes.length : 0,
+        avertissements: [...avertissementsPlat],
+        versions: [],
+      });
+      continue;
+    }
+
     if (vises.has(vise)) {
       erreurs.push({
         message: `«\u00A0${vises.get(vise)}\u00A0» et «\u00A0${donnees.nom}\u00A0» visent le même plat.`,
@@ -1310,7 +1503,7 @@ export function preparerImport(valides, {
         continue;
       }
       const actuelle = recetteSansVersions(existant);
-      if (actuelle && memeRecette(actuelle, recetteSansVersions(ecriture))) {
+      if (actuelle && memeRecette(actuelle, recetteSansVersions(ecriture), { ficheAJour: realisationAJour(existant) })) {
         // Même recette (hors versions, nom et statut) : seules les versions reçues comptent ; le nom reste.
         if (slug(nomRetenu) !== slug(existant.nom)) {
           avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
@@ -1361,6 +1554,10 @@ export function preparerImport(valides, {
     // fiche n'était pas relue à l'aperçu : une relecture enregistrée entre-temps ailleurs (ou avant l'envoi d'un ajout
     // fait hors ligne) jugeait l'ancienne recette.
     const effacerRelue = statut === 'remplace' || statut === 'complete';
+    // Réponse sans étapes détaillées (instructions d'avant la version 7) sur une fiche qui en a : jamais de recette
+    // hybride, la réalisation est effacée avec la recette remplacée.
+    const effacerRealisation = statut === 'remplace' && existant?.realisation != null && !ecriture.realisation;
+    if (effacerRealisation) avertissementsPlat.push('Les étapes détaillées actuelles seront remplacées par des étapes courtes.');
     const secondes = existant?.modifieeLe?.seconds;
     const fiche = { ...(existant ?? {}), ...ecriture };
     const { versions } = jugerVersions(vise, fiche, recues, existant?.variantes, avertissementsPlat, attendus);
@@ -1388,6 +1585,7 @@ export function preparerImport(valides, {
       donnees: propre(ecriture),
       ...(effacerModification ? { effacerModification: true } : {}),
       ...(effacerRelue ? { effacerRelue: true } : {}),
+      ...(effacerRealisation ? { supprimer: ['realisation'] } : {}),
     });
     clore(demandesSatisfaites(vise, ecriture, ouvertes, { plat: fiche, profils: connus }));
   }
@@ -1482,6 +1680,197 @@ function preparerRelecture(valides, { plats = [], profils = [], controle = null 
   if (controle) return { ...preparation, refus: 'instructions', messageRefus: MESSAGE_REFUS_RELECTURE };
   preparation.ecritures = ecrituresRelecture(preparation, {});
   return preparation;
+}
+
+// ——— Lot d'étapes (réponse à DEMANDE-ETAPES, T5-0b) ———
+
+/** Vrai pour une entrée d'un lot d'étapes passée à preparerImport (donnees validées, ou entrée refusée d'entreesPourImport). */
+function estEntreeEtapes(entree) {
+  return estObjet(entree) && (entree.etapesSeules === true
+    || (Object.hasOwn(entree, 'realisation') && Object.hasOwn(entree, 'empreinte')));
+}
+
+/**
+ * Entrées à passer à preparerImport après validerPaquet. Lot d'étapes : toutes les entrées, dans l'ordre, les
+ * refusées comprises (`{ index, id, nom, etapesSeules: true, refus, aCorriger }` : phrase de l'aperçu et codes pour
+ * la ligne `à corriger:` de la demande redemandée), pour que l'aperçu les montre « pas repris » ; sinon les `donnees`
+ * des entrées valides (chemin d'aujourd'hui).
+ */
+export function entreesPourImport(validation) {
+  const plats = Array.isArray(validation?.plats) ? validation.plats : [];
+  if (!validation?.lotDEtapes) return plats.filter((plat) => estObjet(plat?.donnees)).map((plat) => plat.donnees);
+  return plats.map((plat) => (estObjet(plat.donnees) && !plat.erreurs?.length
+    ? { ...plat.donnees, etapesSeules: true }
+    : {
+      index: plat.index,
+      id: plat.id,
+      nom: plat.nom,
+      etapesSeules: true,
+      refus: plat.erreurs?.[0]?.refus ?? `«\u00A0${plat.nom || plat.id}\u00A0» n’est pas repris. Il restera à détailler.`,
+      aCorriger: (plat.erreurs ?? []).map((e) => e.code ?? e.pourClaude).filter(Boolean),
+    }));
+}
+
+const MESSAGES_REFUS_ETAPES = {
+  instructions: 'Ces étapes ne viennent pas des instructions actuelles. Recopiez-les depuis Réglages › Projet Claude, puis redemandez ces recettes.',
+  app: 'Ces étapes viennent d’instructions plus récentes que votre app. Fermez puis rouvrez l’app, puis collez de nouveau la réponse.',
+};
+
+/**
+ * Branche « étapes » de preparerImport (T5-0b) : chaque entrée vise un plat par son seul `id` (jamais créé, renommé
+ * ni remplacé) et vaut pour elle-même. Statuts, dans l'ordre de l'examen :
+ * `refusee` (entrée refusée à la validation, ou réalisation fautive contre la fiche : `raison`, phrase de l'aperçu,
+ * et `aCorriger`, codes pour Claude), `inconnu`, `corbeille`, `attente` (⏳ ou sans ingrédients), `identique` (la
+ * fiche a déjà cette réalisation, à jour), `dejaDetaille` (la fiche a une réalisation à jour : rien à écrire, compte
+ * comme fait), `change` (empreinte des étapes de la fiche différente de celle de la demande), `etapes` (à écrire :
+ * `realisation`, `titres`, `etapes` (nombre), `travail` (minutes), `empreinte` (de la fiche, revérifiée à l'envoi),
+ * `remplace` (une réalisation qui n'est plus à jour est remplacée), `modifieeA` (secondes de `modifieeLe`, ou true :
+ * fiche modifiée à la main), `reperesARevoir`). `avertissements` : tolérances de la validation, en mots simples, et
+ * « Seules les étapes de « X » sont reprises. » pour une entrée qui portait d'autres champs.
+ * `controle` (controlerInstructions) non nul : rien n'est enregistrable (`refus` 'instructions', ou 'app' pour une
+ * réponse plus récente que l'app ; `messageRefus`).
+ * → { lotDEtapes: true, elements, ecritures (ecrituresEtapes), demandesAClore: [], erreurs: [], avertissements: [],
+ *     corrections: [], refus?, messageRefus? }
+ */
+function preparerEtapes(entrees, { plats = [], controle = null } = {}) {
+  const parId = new Map((Array.isArray(plats) ? plats : []).filter(estObjet).map((p) => [p.id, p]));
+  const elements = [];
+  for (const [position, entree] of entrees.entries()) {
+    if (!estObjet(entree)) continue;
+    const index = Number.isInteger(entree.index) ? entree.index : position;
+    const plat = parId.get(entree.id);
+    const nom = texte(plat?.nom) || entree.nom || entree.id;
+    const element = {
+      index,
+      id: entree.id,
+      nom,
+      ingredients: Array.isArray(plat?.ingredients) ? plat.ingredients.length : 0,
+      etapes: 0,
+      titres: [],
+      avertissements: [],
+      versions: [],
+    };
+    if (entree.refus) {
+      elements.push({ ...element, statut: 'refusee', raison: entree.refus, aCorriger: entree.aCorriger ?? [] });
+      continue;
+    }
+    if (!plat) {
+      elements.push({ ...element, statut: 'inconnu' });
+      continue;
+    }
+    if (estDansCorbeille(plat)) {
+      elements.push({ ...element, statut: 'corbeille' });
+      continue;
+    }
+    if (statutDe(plat) === 'attente' || !aSaRecette(plat)) {
+      elements.push({ ...element, statut: 'attente' });
+      continue;
+    }
+    const lu = validerRealisation(entree.realisation, {
+      produits: plat.ingredients,
+      cuisson: Array.isArray(plat.cuisson) ? plat.cuisson : [],
+      prefixe: `plats[${index}] (${entree.id})`,
+      nom,
+    });
+    const aJour = realisationAJour(plat);
+    if (lu.realisation && aJour && egales(propre(plat.realisation), lu.realisation)) {
+      elements.push({ ...element, statut: 'identique' });
+      continue;
+    }
+    if (aJour) {
+      elements.push({ ...element, statut: 'dejaDetaille' });
+      continue;
+    }
+    const empreinte = empreinteEtapes(plat);
+    if (entree.empreinte !== empreinte) {
+      elements.push({ ...element, statut: 'change', empreinte, empreinteClaude: entree.empreinte });
+      continue;
+    }
+    if (!lu.realisation) {
+      const [premiere] = lu.erreurs;
+      elements.push({
+        ...element,
+        statut: 'refusee',
+        raison: `«\u00A0${nom}\u00A0» n’est pas repris\u00A0: ${premiere?.raison ?? 'ses étapes sont illisibles'}. Il restera à détailler.`,
+        aCorriger: lu.erreurs.map((e) => e.code),
+      });
+      continue;
+    }
+    const titres = titresDe(lu.realisation);
+    const avertissements = lu.avertissements.map((a) => a.message);
+    if (entree.autresChamps) avertissements.push(`Seules les étapes de «\u00A0${nom}\u00A0» sont reprises.`);
+    const secondes = plat.modifieeLe?.seconds;
+    elements.push({
+      ...element,
+      statut: 'etapes',
+      realisation: lu.realisation,
+      titres,
+      etapes: titres.length,
+      travail: travailRecette({ ...plat, realisation: lu.realisation, etapes: titres }),
+      empreinte,
+      remplace: plat.realisation != null,
+      ...(modifieeALaMain(plat) ? { modifieeA: typeof secondes === 'number' && Number.isFinite(secondes) ? secondes : true } : {}),
+      reperesARevoir: entree.reperesARevoir === true,
+      avertissements,
+    });
+  }
+  const preparation = {
+    lotDEtapes: true, elements, ecritures: [], demandesAClore: [], erreurs: [], avertissements: [], corrections: [],
+  };
+  if (controle) {
+    const refus = controle.sens === 'recente' ? 'app' : 'instructions';
+    return { ...preparation, refus, messageRefus: MESSAGES_REFUS_ETAPES[refus] };
+  }
+  preparation.ecritures = ecrituresEtapes(preparation);
+  return preparation;
+}
+
+/**
+ * Écritures d'un lot d'étapes : une par élément `etapes` retenu (pas décoché : `retenu !== false`), aucune si la
+ * préparation est refusée. → [{ id, mode: 'etapes', realisation, etapes (titres), empreinte (empreinte des étapes de
+ * la fiche à l'aperçu), effacerRelue (Claude signale un repère à revoir, D4) }]. À l'écriture (donnees.js), une
+ * transaction par plat, en ligne seulement, qui relit la fiche (verifierEcritureEtapes) et n'écrit que
+ * CHAMPS_ECRITS_PAR_ETAPES (champsEcritureEtapes).
+ */
+export function ecrituresEtapes(preparation) {
+  if (preparation?.refus) return [];
+  return (Array.isArray(preparation?.elements) ? preparation.elements : [])
+    .filter((element) => estObjet(element) && element.statut === 'etapes' && element.retenu !== false)
+    .map((element) => ({
+      id: element.id,
+      mode: 'etapes',
+      realisation: propre(element.realisation),
+      etapes: [...element.titres],
+      empreinte: element.empreinte,
+      effacerRelue: element.reperesARevoir === true,
+    }));
+}
+
+/**
+ * Pourquoi une écriture d'étapes ne s'applique plus à la fiche relue dans la transaction : 'supprime' (plus de
+ * fiche), 'corbeille', 'sansRecette' (⏳ ou sans ingrédients), 'dejaFaite' (la fiche porte déjà, à jour, exactement
+ * cette réalisation : écrite par l'autre appareil ou par un premier envoi ; rien à écrire, comptée comme écrite),
+ * 'change' (empreinte des étapes différente de celle de l'aperçu) ; null : à écrire.
+ */
+export function verifierEcritureEtapes(ecriture, fiche) {
+  if (!estObjet(fiche)) return 'supprime';
+  if (estDansCorbeille(fiche)) return 'corbeille';
+  if (statutDe(fiche) === 'attente' || !aSaRecette(fiche)) return 'sansRecette';
+  if (realisationAJour(fiche) && egales(propre(fiche.realisation), propre(ecriture?.realisation ?? null))) return 'dejaFaite';
+  if (empreinteEtapes(fiche) !== ecriture?.empreinte) return 'change';
+  return null;
+}
+
+/**
+ * Champs écrits par une écriture d'étapes, hors `majPar` et `majLe` (posés par donnees.js) : { champs: { realisation,
+ * etapes }, effacer: ['reperesRelus'] seulement si `effacerRelue` }. Jamais `ingredients`, `cuisson`, `variantes`,
+ * `notes`, `statutRecette`, `modifieeLe`, `modifieePar` (CHAMPS_ECRITS_PAR_ETAPES).
+ */
+export function champsEcritureEtapes(ecriture) {
+  return {
+    champs: { realisation: propre(ecriture?.realisation ?? []), etapes: [...(ecriture?.etapes ?? [])] },
+    effacer: ecriture?.effacerRelue ? ['reperesRelus'] : [],
+  };
 }
 
 /**

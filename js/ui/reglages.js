@@ -25,6 +25,10 @@ import { majFeuillesArticle, ouvrirOrdreDesRayons } from './article.js';
 import { LIBELLES_RAYON } from '../coeur/edition.js';
 import { ficheProduit, indexDesRecettes } from '../coeur/produits.js';
 import { TEXTES_T3D, ordreRayons, placardDuFoyer, textePlacard } from '../coeur/liste.js';
+// T5-0b « Étapes détaillées » : carte de Réglages (creerCarteEtapes).
+import { texteDemandeEtapes } from '../coeur/claude.js';
+import { carteEtapesDetaillees, platsADetailler, TEXTES_ETAPES } from '../coeur/realisation.js';
+import { ouvrirEnSerieEtapes } from './import.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -412,6 +416,91 @@ function creerCarteRelecture(ctx) {
     if (!pret) message.textContent = '';
     const dejaRelues = (nouveau.plats ?? []).some((plat) => estRelue(plat));
     boutonDemander.replaceChildren(el('span', { 'aria-hidden': 'true' }, '📋'), ` ${libelleLotRelecture(n, dejaRelues)}`);
+    majBoutons();
+  }
+
+  maj(ctx);
+  return { noeud, maj };
+}
+
+/**
+ * Carte « 👩‍🍳 Étapes détaillées » (T5-0b, gestionnaire hors aperçu, sous « 🧸 Relire les recettes ») : une seule
+ * demande DEMANDE-ETAPES pour toutes les recettes qui ont des étapes courtes (plats de la semaine d'abord), puis
+ * « Coller la réponse de Claude », qui ouvre « Ajouter des recettes » en série d'étapes. Absente quand plus rien n'est à
+ * détailler. Instructions pas encore copiées : la copie est inactive. Hors ligne : la copie reste permise, la carte dit
+ * qu'il faudra du réseau pour enregistrer. Nœuds gardés : le focus reste sur le bouton touché.
+ * → { noeud, maj }
+ */
+function creerCarteEtapes(ctx) {
+  let courant = ctx;
+  let copie = false;
+  const phrases = el('div', { class: 'carte-etapes-phrases' });
+  const boutonDemander = el('button', { class: 'bouton bouton-plein', type: 'button', 'data-action': 'demander-etapes', onclick: demander });
+  const lienColler = el('a', {
+    class: 'bouton bouton-plein',
+    href: '#/import',
+    'data-action': 'coller-etapes',
+    onclick: () => ouvrirEnSerieEtapes(),
+  }, TEXTES_ETAPES.collerLaReponse);
+  const horsLigne = el('p', { class: 'aide', hidden: true });
+  const message = el('p', { class: 'aide', role: 'status' });
+  const noeud = el('section', { class: 'carte carte-etapes', hidden: true, 'aria-labelledby': 'titre-etapes-detaillees' },
+    el('h2', { id: 'titre-etapes-detaillees' }, el('span', { 'aria-hidden': 'true' }, '👩‍🍳'), ' Étapes détaillées'),
+    phrases,
+    el('div', { class: 'actions-recette' }, boutonDemander, lienColler),
+    horsLigne,
+    message);
+
+  /** État de la carte (coeur/realisation.js › carteEtapesDetaillees), ou null si elle n'a pas lieu d'être. */
+  function etatCarte(c) {
+    if (c.role !== 'gestionnaire' || !c.platsCharges) return null;
+    return carteEtapesDetaillees({
+      plats: c.plats ?? [],
+      semaines: c.semaines ?? [],
+      aujourdhui: c.aujourdhui ?? new Date(),
+      instructionsAJour: Boolean(c.instructionsAJour),
+      enLigne: c.enLigne ?? navigator.onLine,
+    });
+  }
+
+  async function demander() {
+    const etat = etatCarte(courant);
+    if (!etat?.visible || !etat.copieActive) return;
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    const plats = platsADetailler(courant.plats ?? [], { semaines: courant.semaines ?? [], aujourdhui: courant.aujourdhui ?? new Date() });
+    if (!plats.length) return;
+    const reussi = await copier(texteDemandeEtapes(plats, { appareils: courant.reglages?.appareils ?? null }));
+    if (reussi) {
+      copie = true;
+      message.textContent = [etat.annonce, etat.phraseSemaine].filter(Boolean).join(' ');
+    } else {
+      message.textContent = 'La copie n’a pas marché. Réessayez.';
+    }
+    majBoutons();
+  }
+
+  function majBoutons() {
+    boutonDemander.className = `bouton bouton-plein ${copie ? 'bouton-secondaire' : 'bouton-principal'}`;
+    lienColler.className = `bouton bouton-plein ${copie ? 'bouton-principal' : 'bouton-secondaire'}`;
+    message.hidden = !message.textContent;
+  }
+
+  function maj(nouveau) {
+    courant = nouveau;
+    const etat = etatCarte(nouveau);
+    noeud.hidden = !etat?.visible;
+    if (!etat?.visible) return;
+    const textes = etat.phrases;
+    if ([...phrases.children].map((p) => p.textContent).join('\n') !== textes.join('\n')) {
+      phrases.replaceChildren(...textes.map((texte, i) => el('p', { class: i === 2 ? 'aide' : null }, texte)));
+    }
+    boutonDemander.disabled = !etat.copieActive;
+    const libelle = etat.bouton.replace(/^📋\s*/u, '');
+    if (boutonDemander.lastChild?.textContent !== libelle) {
+      boutonDemander.replaceChildren(el('span', { 'aria-hidden': 'true' }, '📋\u00A0'), el('span', {}, libelle));
+    }
+    horsLigne.textContent = etat.horsLigne ?? '';
+    horsLigne.hidden = !etat.horsLigne;
     majBoutons();
   }
 
@@ -836,6 +925,7 @@ export function creer(ctx) {
   let courant = ctx;
   const carteProjetClaude = creerCarteProjetClaude(ctx);
   const carteRelecture = creerCarteRelecture(ctx);
+  const carteEtapes = creerCarteEtapes(ctx);
   const carteNotifications = creerCarteNotifications(ctx);
   const carteDrive = creerCarteDrive(ctx);
   const carteRayons = creerCarteRayons(ctx);
@@ -969,6 +1059,7 @@ export function creer(ctx) {
       carteSauvegarde,
       carteProjetClaude.noeud,
       carteRelecture.noeud,
+      carteEtapes.noeud,
       carteNotifications.noeud,
       carteDrive.noeud,
       carteRayons.noeud,
@@ -985,6 +1076,7 @@ export function creer(ctx) {
       remplir();
       carteProjetClaude.maj(nouveau);
       carteRelecture.maj(nouveau);
+      carteEtapes.maj(nouveau);
       carteNotifications.maj(nouveau);
       carteDrive.maj(nouveau);
       carteRayons.maj(nouveau);

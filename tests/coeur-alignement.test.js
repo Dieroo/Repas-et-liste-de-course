@@ -31,6 +31,9 @@ const LARDONS = ing('lardon fumé', 200, 'g', ['viande', 'porc', 'charcuterie'],
 const QUICHE = {
   id: 'quiche-test', nom: 'Quiche test', portionsBase: 4,
   ingredients: [ing('pâte brisée', 1, 'pc', ['feculent']), LARDONS, ing('œuf', 3, 'pc', ['oeuf'])],
+  // Version 7 (T5-0b) : une recette rendue par Claude porte ses étapes détaillées, `etapes` = leurs titres.
+  etapes: ['Garnir et cuire'],
+  realisation: [{ titre: 'Garnir et cuire', texte: 'Garnissez la pâte des lardons et des œufs battus, puis faites cuire.', duree: 40, actif: 5, ingredients: ['pâte brisée', 'lardon fumé', 'œuf'] }],
 };
 const TOFU = { produit: 'tofu fumé', qtePortion: 100, unite: 'g', rayon: 'cremerie', marqueurs: [] };
 const paquet = (...plats) => ({ format: FORMAT, instructions: VERSION_INSTRUCTIONS, plats });

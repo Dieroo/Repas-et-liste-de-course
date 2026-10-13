@@ -13,7 +13,7 @@ import { db } from './firebase.js';
 import { gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
 import { demandeDeRecette } from './coeur/plats.js';
 import { appliquerConditions } from './coeur/sauvegarde.js';
-import { fusionnerVariantes } from './coeur/paquet.js';
+import { fusionnerVariantes, verifierEcritureEtapes, champsEcritureEtapes } from './coeur/paquet.js';
 import { cheminNote, noteValide } from './coeur/notes.js';
 import { estDansCorbeille } from './coeur/corbeille.js';
 import { empreinteRelecture, appliquerReperes } from './coeur/relecture.js';
@@ -249,36 +249,46 @@ function cloreDemandes(demandesAClore) {
  *   disparu entre-temps : rien n'est écrit, son identifiant est rendu dans `manquants`. Hors ligne, une transaction
  *   échoue au lieu d'être mise en file : l'app refuse ces envois avant d'appeler (actions.importer).
  * - Relectures des repères `{ id, mode: 'precautions', ajouts, retraits, marquerRelue, empreinte }` (T2d) : une
- *   transaction par plat (relireReperes). Un autre `mode` est refusé : rien n'est écrit.
+ *   transaction par plat (relireReperes).
+ * - Étapes détaillées `{ id, mode: 'etapes', realisation, etapes, empreinte, effacerRelue }` (T5-0b) : une transaction
+ *   par plat (ecrireEtapes). Un autre `mode` est refusé : rien n'est écrit.
+ * Une fiche complète qui porte `supprimer` (T5-0b : `['realisation']`, recette remplacée par une réponse sans étapes
+ * détaillées) efface ces champs dans le même `set` (jamais de recette hybride).
  * Les demandes satisfaites sont closes dans un lot à part : celles des fiches complètes tout de suite, celles des
  * versions après leurs transactions, sauf pour un plat disparu. Une relecture n'en clôt aucune.
- * → { envoi, versions, precautions } : `envoi`, promesse de l'envoi du lot des fiches (rejetée aussi si le lot n'a
- *   pas pu être construit) ; `versions`, promesse de { manquants: [id] } (rejetée à la première transaction qui
+ * → { envoi, versions, precautions, etapes } : `envoi`, promesse de l'envoi du lot des fiches (rejetée aussi si le lot
+ *   n'a pas pu être construit) ; `versions`, promesse de { manquants: [id] } (rejetée à la première transaction qui
  *   échoue ; les précédentes restent faites, et une relance ne fait que fusionner à nouveau les mêmes versions) ;
- *   `precautions`, promesse de { manquants, corbeille, changes, ecrites } (relireReperes).
+ *   `precautions`, promesse de { manquants, corbeille, changes, ecrites } (relireReperes) ; `etapes`, promesse de
+ *   { ecrites, supprime, corbeille, sansRecette, change } (ecrireEtapes).
  */
 export function importer({ ecritures, demandesAClore }, auteur) {
   // Un mode inconnu est refusé : `{ ...undefined, id }` recréerait sinon une fiche vide (T2d).
   const inconnue = ecritures.find((ecriture) => ecriture.mode !== undefined
-    && ecriture.mode !== 'versions' && ecriture.mode !== 'precautions');
+    && ecriture.mode !== 'versions' && ecriture.mode !== 'precautions' && ecriture.mode !== 'etapes');
   if (inconnue) {
     const refus = Promise.reject(new Error('Écriture d’import inconnue.'));
     refus.catch(() => {});
-    return { envoi: refus, versions: refus, precautions: refus };
+    return { envoi: refus, versions: refus, precautions: refus, etapes: refus };
   }
   const completes = ecritures.filter((ecriture) => ecriture.mode === undefined);
   const versions = ecritures.filter((ecriture) => ecriture.mode === 'versions');
   const relectures = ecritures.filter((ecriture) => ecriture.mode === 'precautions');
+  const detaillees = ecritures.filter((ecriture) => ecriture.mode === 'etapes');
   const idsVersions = new Set(versions.map(({ id }) => id));
   const deVersion = (demande) => idsVersions.has(String(demande).split('__')[0]);
   let envoi;
   try {
     const lot = writeBatch(db);
-    for (const { id, donnees, effacerModification, effacerRelue } of completes) {
+    for (const { id, donnees, effacerModification, effacerRelue, supprimer } of completes) {
       const document = { ...donnees, id, ...trace(auteur) };
       if (effacerModification) Object.assign(document, { modifieeLe: deleteField(), modifieePar: deleteField() });
       // Recette remplacée ou complétée par Claude : elle n'est plus relue (T2d).
       if (effacerRelue) document.reperesRelus = deleteField();
+      // Recette remplacée sans étapes détaillées (T5-0b) : celles de la fiche partent avec l'ancienne recette.
+      for (const champ of Array.isArray(supprimer) ? supprimer : []) {
+        if (champ === 'realisation') document.realisation = deleteField();
+      }
       lot.set(doc(db, 'plats', id), document, { mergeFields: Object.keys(document) });
     }
     // Recettes toutes identiques : seules les demandes restées ouvertes sont closes.
@@ -307,7 +317,45 @@ export function importer({ ecritures, demandesAClore }, auteur) {
     cloreDemandes((demandesAClore ?? []).filter((demande) => deVersion(demande) && !absents.has(String(demande).split('__')[0])));
     return { manquants };
   })();
-  return { envoi, versions: envoiVersions, precautions: relireReperes(relectures, auteur) };
+  const etapes = detaillees.length ? ecrireEtapes(detaillees, auteur) : Promise.resolve(VIDE_ETAPES());
+  etapes.catch(() => {});
+  return { envoi, versions: envoiVersions, precautions: relireReperes(relectures, auteur), etapes };
+}
+
+const VIDE_ETAPES = () => ({ ecrites: [], supprime: [], corbeille: [], sansRecette: [], change: [] });
+
+/**
+ * Étapes détaillées d'un lot DEMANDE-ETAPES (T5-0b, mode `etapes`) : une transaction par plat, qui relit la fiche
+ * (coeur/paquet.js › verifierEcritureEtapes) et n'écrit que `realisation`, `etapes` (ses titres), `majPar`, `majLe`,
+ * et efface `reperesRelus` seulement quand Claude signale un repère à revoir (champsEcritureEtapes). Jamais les
+ * ingrédients, la cuisson, les versions, les notes, le statut ni la marque « modifiée à la main ». Rien n'est écrit si
+ * la fiche a disparu (`supprime`), est passée à la corbeille (`corbeille`), n'a plus sa recette (`sansRecette`) ou si
+ * ses étapes ont changé depuis l'aperçu (`change`) ; une fiche qui porte déjà exactement ces étapes compte parmi
+ * `ecrites`, sans rien réécrire. Hors ligne, une transaction échoue : l'app refuse l'envoi avant.
+ * Aucune demande créée ni close.
+ * → promesse de { ecrites, supprime, corbeille, sansRecette, change } (identifiants), rejetée à la première
+ *   transaction qui échoue (les précédentes restent faites).
+ */
+async function ecrireEtapes(ecritures, auteur) {
+  const resultat = VIDE_ETAPES();
+  for (const ecriture of ecritures) {
+    const issue = await runTransaction(db, async (transaction) => {
+      const reference = doc(db, 'plats', ecriture.id);
+      const actuel = await transaction.get(reference);
+      const fiche = actuel.exists() ? { id: ecriture.id, ...actuel.data() } : null;
+      const refus = verifierEcritureEtapes(ecriture, fiche);
+      // Déjà détaillée de ces mêmes étapes (autre appareil, premier envoi) : rien à écrire, comptée comme écrite.
+      if (refus === 'dejaFaite') return 'ecrites';
+      if (refus) return refus;
+      const { champs, effacer } = champsEcritureEtapes(ecriture);
+      const document = { realisation: champs.realisation, etapes: champs.etapes, ...trace(auteur) };
+      if (effacer.includes('reperesRelus')) document.reperesRelus = deleteField();
+      transaction.update(reference, document);
+      return 'ecrites';
+    });
+    (resultat[issue] ?? resultat.change).push(ecriture.id);
+  }
+  return resultat;
 }
 
 /**

@@ -564,12 +564,16 @@ export function validerSauvegarde(sauvegarde, { cles = CLES_SAUVEGARDE } = {}) {
   const recettes = validerPaquet([{
     format: FORMAT,
     plats: retenus.map(({ brut }) => Object.fromEntries(Object.entries(brut).filter(([cle]) => !CHAMPS_SUIVI.includes(cle)))),
-  }], { platsMax: PLATS_MAX_SAUVEGARDE, doublonsDeNom: false, versionsEnDouble: 'premiere' });
+  }], { platsMax: PLATS_MAX_SAUVEGARDE, doublonsDeNom: false, versionsEnDouble: 'premiere', lotsDEtapes: false });
 
   const plats = retenus.map(({ brut, id, nom }, i) => {
     const valide = recettes.plats[i];
     const recette = valide && !valide.erreurs.length ? valide.donnees : null;
     if (!recette) avertissements.push(`${guillemets(nom)}\u00A0: sa recette est abîmée dans ce fichier, elle ne sera pas reprise.`);
+    // Étapes détaillées abîmées (T5-0b) : la recette reste, sans elles.
+    else if (brut.realisation != null && recette.realisation === undefined) {
+      avertissements.push(`${guillemets(nom)}\u00A0: ses étapes détaillées sont abîmées dans ce fichier, elles ne seront pas reprises.`);
+    }
     const plat = { id, nom, recette, notes: {} };
 
     if (brut.notes != null) {
@@ -848,13 +852,21 @@ export function preparerRestauration(validation, {
         const appEnAttente = statutDe(existant) === 'attente';
         const modifieeLe = versDate(existant.modifieeLe);
         const enPlus = comparaison === 'moinsIci' ? reperesEnPlus(ingredientsIci, ingredientsLa) : [];
+        // Étapes détaillées de la fiche, absentes du fichier (sauvegarde d'avant T5-0b) : reprendre la recette les
+        // remplace par les étapes courtes du fichier (jamais de recette hybride) ; l'aperçu le dit.
+        const nomIci = reduire(existant.nom) || plat.nom;
+        const mentions = [
+          ...(enPlus.length ? [`Le fichier a des repères que l’app n’a plus\u00A0: ${texteReperes(enPlus)}.`] : []),
+          ...(existant.realisation != null && recette.realisation === undefined
+            ? [`${guillemets(nomIci)}\u00A0: les étapes détaillées seront remplacées par les étapes courtes du fichier.`] : []),
+        ];
         recettesDifferentes.push({
           id: plat.id,
-          nom: reduire(existant.nom) || plat.nom,
+          nom: nomIci,
           ...(modifieeLe ? { modifieeLe } : {}),
           appEnAttente,
           cocheeParDefaut: appEnAttente,
-          ...(enPlus.length ? { mention: `Le fichier a des repères que l’app n’a plus\u00A0: ${texteReperes(enPlus)}.` } : {}),
+          ...(mentions.length ? { mention: mentions.join(' ') } : {}),
         });
         if (reprises.has(plat.id)) {
           reprise = true;

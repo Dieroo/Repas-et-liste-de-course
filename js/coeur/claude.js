@@ -12,16 +12,18 @@ import { slug } from './slug.js';
 import { estDansCorbeille } from './corbeille.js';
 import { MARQUEURS_PRECAUTION, VOCABULAIRES, code, texte } from './vocabulaire.js';
 import { LOT_PRECAUTIONS, empreinteRelecture, lignesRelecture } from './relecture.js';
+import { ETAPES_PAR_MESSAGE, empreinteEtapes, partsAMettreDeCote } from './realisation.js';
+import { cuissonEnTexte } from './empreinte.js';
 
-export { LOT_PRECAUTIONS };
+export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE };
 
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 6;
+export const VERSION_INSTRUCTIONS = 7;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '4ab6eb4468e0';
+export const EMPREINTE_INSTRUCTIONS = '7a89b4bc0e57';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -33,7 +35,7 @@ export const LOT_VERSIONS = 10;
 export const IDEES_NOMBRES = [5, 10, 15];
 export const IDEES_NOMBRE_DEFAUT = 15;
 /** Recettes par message de Claude : on colle chaque message, puis on écrit « suite » pour les suivantes. */
-export const IDEES_PAR_MESSAGE = 5;
+export const IDEES_PAR_MESSAGE = 3;
 /** Longueur de l'envie facultative (une ligne). */
 export const IDEES_ENVIE_MAX = 120;
 /** Noms au plus des lignes « aimés » et « évités ». */
@@ -49,9 +51,9 @@ const APPAREILS_PAR_DEFAUT = ['plaque', 'four', 'cookeo', 'airfryer'];
 // Critères de toute demande d'idées (décision du propriétaire) : plats originaux, faciles à faire en batch.
 const CRITERES_IDEES = 'plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts.';
 // Dernière ligne d'une demande d'idées.
-const CONSIGNE_IDEES = `(Rends ${IDEES_PAR_MESSAGE} fiches complètes par message, chacune avec un \`id\` nouveau (slug du nom), \`"statutRecette": "brouillon"\` et \`"source": "${SOURCE_IDEE}"\`, et leurs variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l'app ». Après chaque message, attends « suite » pour les ${IDEES_PAR_MESSAGE} suivantes. Un seul bloc par message.)`;
+const CONSIGNE_IDEES = `(Rends ${IDEES_PAR_MESSAGE} fiches complètes par message, chacune avec un \`id\` nouveau (slug du nom), \`"statutRecette": "brouillon"\`, \`"source": "${SOURCE_IDEE}"\`, sa \`realisation\` (section 2 bis) et ses variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l'app ». Après chaque message, attends « suite » pour les ${IDEES_PAR_MESSAGE} suivantes. Un seul bloc par message.)`;
 // Dernière ligne d'une demande de recette avec des versions.
-const CONSIGNE_RECETTE = '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)';
+const CONSIGNE_RECETTE = '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, avec sa `realisation` (section 2 bis), en un seul bloc.)';
 // Consigne d'une demande groupée de versions : une seule version par plat (profil sans style attendu)…
 const CONSIGNE_VARIANTES = '(Pour chaque plat, rends seulement { "id", "nom", "variantes": [la variante pour ce profil] }, jamais la recette entière. Remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Tous les plats dans un seul bloc paquet@1. Un plat impossible à adapter : ne le rends pas, et dis-le en une phrase.)';
 // … ou une par style de sa ligne « à faire » (fusion par style : les autres versions restent).
@@ -59,6 +61,13 @@ const CONSIGNE_STYLES = '(Pour chaque plat, rends seulement { "id", "nom", "vari
 
 // Consigne d'une demande de relecture des repères (T2d) : changements seuls, jamais la recette.
 export const CONSIGNE_PRECAUTIONS = '(Relis les repères de chaque ingrédient selon leurs définitions (section 3), en t\'aidant des étapes et de la cuisson ; seulement ceux de la ligne « repères ». Pour chaque plat, rends seulement { "id", "nom", "empreinte", "precautions": [{ "produit", "poser", "enlever", "pourquoi" }] } avec les seuls ingrédients à changer, ou "precautions": [] si tout est juste ; recopie l\'empreinte telle quelle. Dans le doute, pose ; n\'enlève que ce qui contredit une définition. Jamais la recette entière. Tous les plats du lot dans un seul bloc paquet@1.)';
+
+// Consignes d'une demande d'étapes détaillées (T5-0b) : toutes les recettes à détailler, ETAPES_PAR_MESSAGE par
+// message ; ou un seul plat (fiche).
+const CONSIGNE_ETAPES = `(Écris la réalisation détaillée de chaque plat de la liste, selon la section 2 bis, dans l'ordre de la liste, ${ETAPES_PAR_MESSAGE} plats par message. Après chaque message, attends « suite » pour les ${ETAPES_PAR_MESSAGE} suivants ; dans le dernier, écris « C'est tout. » avant le bloc. Ne change ni les ingrédients, ni les quantités, ni les portions, ni la manière de cuire, ni les repères. Nomme chaque ingrédient exactement comme dans la ligne \`ingrédients:\`. Pour chaque plat, rends seulement { "id", "nom", "empreinte", "realisation" }, \`id\`, \`nom\` et \`empreinte\` recopiés tels quels. Un seul bloc par message.)`;
+const CONSIGNE_ETAPES_UN_PLAT = '(Écris la réalisation détaillée de ce plat, selon la section 2 bis. Ne change ni les ingrédients, ni les quantités, ni les portions, ni la manière de cuire, ni les repères. Nomme chaque ingrédient exactement comme dans la ligne `ingrédients:`. Rends seulement { "id", "nom", "empreinte", "realisation" }, `id`, `nom` et `empreinte` recopiés tels quels, en un seul bloc.)';
+/** Dernière ligne d'une correction d'un message d'étapes dont aucune recette n'a pu être reprise. */
+export const FORMULE_CORRECTION_ETAPES = '(Rends seulement { "id", "nom", "empreinte", "realisation" } de chaque plat de ce message, corrigé, en un seul bloc ; puis attends « suite ».)';
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
 
@@ -340,6 +349,55 @@ export function texteDemandePrecautions(plats) {
 }
 
 /**
+ * (e) Texte copié pour demander à Claude les étapes détaillées (DEMANDE-ETAPES, T5-0b) : une seule demande pour toutes
+ * les recettes reçues (realisation.js › platsADetailler, plats de la semaine en tête), ETAPES_PAR_MESSAGE par message,
+ * « suite » entre deux ; avec un seul plat (carte de la fiche), `nombre:` et `par message:` sont omis. Pour chaque plat
+ * (ceux qui ont des ingrédients, dans l'ordre reçu) : `id`, `nom`, `empreinte` (realisation.js › empreinteEtapes, que
+ * Claude recopie), `portions`, `ingrédients:` (quantité, unité, produit, repères entre crochets), `étapes actuelles:`
+ * (les `etapes` de la fiche, jointes par « / »), `cuisson:` (avec le mode), `temps de travail:`, `parts à mettre de
+ * côté:` (anonymes : ni profil, ni style, ni identifiant), `à corriger:` (une ligne par code, `aCorriger[id]`, quand
+ * l'écran redemande des recettes refusées). Lignes omises quand elles sont vides. Aucun profil n'est reçu : rien sur
+ * les personnes ne peut partir. `appareils` : reglages.appareils (comme DEMANDE-IDEES).
+ */
+export function texteDemandeEtapes(plats, { appareils = null, aCorriger = {} } = {}) {
+  const fiches = (Array.isArray(plats) ? plats : [])
+    .filter((plat) => estObjet(plat) && Array.isArray(plat.ingredients) && plat.ingredients.some(estObjet));
+  const corrections = estObjet(aCorriger) ? aCorriger : {};
+  const unSeul = fiches.length === 1;
+  const lignes = [
+    `DEMANDE-ETAPES ${FORMAT}`,
+    LIGNE_INSTRUCTIONS,
+    `appareils: ${appareilsActifs(appareils).join(', ')}`,
+  ];
+  if (!unSeul) {
+    lignes.push(`nombre: ${fiches.length}`);
+    lignes.push(`par message: ${ETAPES_PAR_MESSAGE}`);
+  }
+  lignes.push(unSeul ? CONSIGNE_ETAPES_UN_PLAT : CONSIGNE_ETAPES);
+  lignes.push('plats:');
+  for (const plat of fiches) {
+    lignes.push(`- id: ${ligne(plat.id)}`);
+    lignes.push(`  nom: ${ligne(plat.nom)}`);
+    lignes.push(`  empreinte: ${empreinteEtapes(plat)}`);
+    if (plat.portionsBase != null) lignes.push(`  portions: ${ligne(plat.portionsBase)}`);
+    lignes.push(`  ingrédients: ${plat.ingredients.filter(estObjet)
+      .map((ingredient) => `${quantite(ingredient)} [${(Array.isArray(ingredient.marqueurs) ? ingredient.marqueurs : [])
+        .filter((m) => typeof m === 'string' && m).map(ligne).join(', ')}]`)
+      .join(' ; ')}`);
+    const etapes = (Array.isArray(plat.etapes) ? plat.etapes : []).map(ligne).filter(Boolean);
+    if (etapes.length) lignes.push(`  étapes actuelles: ${etapes.join(' / ')}`);
+    const cuisson = cuissonEnTexte(plat.cuisson);
+    if (cuisson) lignes.push(`  cuisson: ${cuisson}`);
+    if (typeof plat.tempsActifMin === 'number' && Number.isFinite(plat.tempsActifMin)) lignes.push(`  temps de travail: ${plat.tempsActifMin} min`);
+    const parts = partsAMettreDeCote(plat);
+    if (parts.length) lignes.push(`  parts à mettre de côté: ${parts.join(' ; ')}`);
+    const codes = Array.isArray(corrections[plat.id]) ? corrections[plat.id].map(ligne).filter(Boolean) : [];
+    for (const codeClaude of codes) lignes.push(`  à corriger: ${codeClaude}`);
+  }
+  return lignes.join('\n');
+}
+
+/**
  * Texte copié par « Copier les corrections pour Claude ».
  * `probleme` : { erreur } (texte illisible), résultat de validerPaquet ({ plats, erreurs }) ou de preparerImport
  * ({ erreurs, corrections }). `corrections` : versions importées qui ne conviennent pas encore
@@ -378,7 +436,11 @@ export function texteCorrectionPourClaude(probleme) {
   const lotDeVersions = !probleme?.erreur && plats.length > 0 && plats.every((plat) => plat.versionsSeules);
   // Plats sans erreur à eux : rien n'a été enregistré, Claude les rend aussi, tels quels.
   const autres = plats.filter((plat) => !plat.erreurs?.length && plat.id).map((plat) => ligne(plat.id));
-  if (!probleme?.erreur && probleme?.relecture) {
+  if (!probleme?.erreur && probleme?.lotDEtapes) {
+    // Message d'étapes (T5-0b) : chaque recette vaut pour elle-même ; la correction ne sert que quand aucune n'a pu
+    // être reprise, et redemande les seules réalisations du message.
+    lignes.push(FORMULE_CORRECTION_ETAPES);
+  } else if (!probleme?.erreur && probleme?.relecture) {
     // Lot de relecture (T2d), même si l'entrée fautive est une recette entière : relectures seules, tout le lot.
     if (autres.length) lignes.push(`- Rien n’a été enregistré : rends aussi, telles quelles, les relectures des autres plats du lot (${autres.join(', ')}).`);
     lignes.push('(Rends seulement { "id", "nom", "empreinte", "precautions" } de chaque plat du lot, corrigé, en un seul bloc.)');

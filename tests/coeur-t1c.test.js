@@ -594,6 +594,7 @@ test('normaliserPourEdition : valeurs affichées d’une recette complète', () 
     portionsBase: 6,
     ingredients: RISOTTO.ingredients,
     etapes: RISOTTO.etapes,
+    realisation: null, // pas d'étapes détaillées (T5-0b)
     cuisson: RISOTTO.cuisson,
     frigoJours: 2,
     congelable: false,
@@ -606,7 +607,7 @@ test('normaliserPourEdition : valeurs affichées d’une recette complète', () 
 
 test('normaliserPourEdition : valeurs par défaut d’un plat ajouté par son nom', () => {
   assert.deepEqual(normaliserPourEdition(SOUPE, { frigoJoursDefaut: 5 }), {
-    nom: 'Soupe test', type: 'plat', portionsBase: 4, ingredients: [], etapes: [], cuisson: [],
+    nom: 'Soupe test', type: 'plat', portionsBase: 4, ingredients: [], etapes: [], realisation: null, cuisson: [],
     frigoJours: 5, congelable: null, emporter: true, verifiee: false,
   });
   assert.equal(normaliserPourEdition(SOUPE).frigoJours, 3);
@@ -781,7 +782,9 @@ test('preparerModification : rien de touché → rien à écrire', () => {
   for (const plat of [RISOTTO, GRATIN, SOUPE]) {
     const base = normaliserPourEdition(plat, REGLAGES);
     const r = preparerModification(base, clone(base), plat, contexte);
-    assert.deepEqual(r, { champs: {}, supprimer: [], demandesAClore: [], conflits: [], erreurs: [], rien: true }, plat.id);
+    assert.deepEqual(r, {
+      champs: {}, supprimer: [], demandesAClore: [], conflits: [], erreurs: [], avertissements: [], rien: true,
+    }, plat.id);
   }
 });
 

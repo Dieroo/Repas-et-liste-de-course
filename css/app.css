@@ -4542,3 +4542,109 @@ body:has(.barre-courses) .annonce {
 /* Réglages : « Ordre des rayons » et « 🏠 Placard ». */
 .carte-rayons p,
 .carte-placard p { overflow-wrap: anywhere; }
+
+/* ——— T5-0b « Étapes détaillées » : fiche, carte de Réglages, aperçu d'un lot d'étapes, « Modifier » réduit ——— */
+
+/* Fiche : une étape détaillée par ligne numérotée ; titre en gras, texte, repères, quantités, signe que c'est prêt. */
+.liste-etapes-detaillees { gap: 16px; }
+
+/* `list-item` (jamais `flex`) : le numéro de l'étape (et le « 6 » du jour du repas, `value`) reste dessiné. */
+.etape-detaillee {
+  display: list-item;
+  overflow-wrap: anywhere;
+}
+
+.etape-detaillee > :not(:first-child) { margin-top: 4px; }
+
+.etape-detaillee p { margin: 0; }
+
+.etape-titre { font-weight: 600; }
+
+.etape-reperes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+}
+
+.etape-ingredients {
+  margin: 0;
+  padding-left: 1.1em;
+  font-size: 0.9375rem;
+}
+
+.etape-aussi { font-size: 0.9375rem; }
+
+.etape-libelle { font-weight: 600; }
+
+.etape-pret {
+  color: var(--olive);
+  font-weight: 600;
+}
+
+.etapes-service {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.etapes-service h3 { font-size: 1.0625rem; }
+
+/* Fiche (gestionnaire) : « Ces étapes sont courtes. … », sous les étapes. */
+.carte-etapes-courtes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--fond);
+}
+
+.carte-etapes-courtes p { margin: 0; }
+
+/* Réglages : carte « 👩‍🍳 Étapes détaillées », comme « 🧸 Relire les recettes ». */
+.carte-etapes { gap: 10px; }
+
+.carte-etapes h2,
+.carte-etapes p { margin: 0; overflow-wrap: anywhere; }
+
+.carte-etapes-phrases {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* « Ajouter des recettes » : titres d'une recette détaillée, repliés ; fin de la série. */
+.liste-titres-etapes {
+  margin: 0;
+  padding-left: 1.4em;
+  overflow-wrap: anywhere;
+}
+
+.serie-fin {
+  color: var(--olive);
+  font-weight: 600;
+}
+
+/* « Modifier » : une étape détaillée, son titre en gras, son texte sur deux lignes au plus. */
+.ligne-etape-detaillee .ligne-texte {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+}
+
+.ligne-etape-titre { font-weight: 600; }
+
+.ligne-etape-texte {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--texte-doux);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}

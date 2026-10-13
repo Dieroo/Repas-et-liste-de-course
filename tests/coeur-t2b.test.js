@@ -88,7 +88,7 @@ test('texteDemandeRecette : une ligne de versions par profil contraint, dans l�
     '- pour: profil-b — Ne mange pas de viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni de bouillon ou de fond de viande ou de volaille, ni de gélatine animale, ni de graisse animale (saindoux, graisse de canard). Mange du poisson, des fruits de mer, du fumet de poisson, des œufs, du fromage (même à présure animale) et du miel. — styles: mer, vegetal',
     '- pour: enfant — Ne mange ni viande (bœuf, porc, volaille, agneau, charcuterie, escargots, grenouilles), ni poisson, ni fruits de mer, ni bouillon ou fond de viande, de volaille ou de poisson, ni gélatine animale, ni graisse animale. Mange des œufs, du fromage (même à présure animale) et du miel. — styles: vegetal',
     '(Ajoute un lien, une photo ou la recette dictée.)',
-    '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, en un seul bloc.)',
+    '(Si le plat contient ce qu\'un de ces profils ne mange pas, ajoute sa variante — une par style indiqué, avec `style` (et `frigoJours` pour `mer`) : remplace ce qui est retiré par une vraie alternative, riche en goût et en texture (section 4). Rends la fiche complète, avec sa `realisation` (section 2 bis), en un seul bloc.)',
   ].join('\n'));
 });
 
