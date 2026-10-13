@@ -673,9 +673,16 @@ test('pasAPas : longue cuisson au four après une étape du jour (porc effiloch�
     cuisson: [{ appareil: 'four', tempC: 120, dureeMin: 360 }],
   }, realisation);
   const ecran = pasAPas(porc, { aujourdhui: '2026-10-18' });
-  assert.deepEqual(ecran.avant.veille.map((e) => e.titre), ['Couper et saisir le porc', 'Cuire au four']);
+  // Seconde relecture : la cuisson de la veille a sa fin (« Sortir du four ») et le conseil de la mettre au frigo.
+  assert.deepEqual(ecran.avant.veille.map((e) => e.titre), ['Couper et saisir le porc', 'Cuire au four', FINS_IMPLICITES.four.titre]);
   assert.deepEqual(ecran.avant.veille.find((e) => e.titre === 'Cuire au four').conseils, [CONSEILS.coeur.texte]);
+  assert.deepEqual(ecran.avant.veille.at(-1).conseils, [TEXTES_CUISINE.frigoVeille]);
   assert.deepEqual(ecran.etapes.map((e) => e.titre), ['Effilocher']);
+  // La viande cuite la veille (le 17) : 3 jours au frigo comptés depuis le 17 ; elle n'est pas à « sortir » le jour même.
+  assert.equal(ecran.fin.details.jour, '2026-10-17');
+  assert.equal(ecran.fin.details.auPlusTard, '2026-10-20');
+  assert.match(ecran.fin.portions, /au plus tard le mardi 20 octobre\. Compté depuis la cuisson de la veille\.$/);
+  assert.deepEqual(ecran.avant.reunir.ingredients, []);
   // Des yaourts : on mélange avant de faire prendre.
   const yaourts = avecRealisation({
     id: 'yaourts', nom: 'Yaourts maison', type: 'preparation', statutRecette: 'brouillon', portionsBase: 8,
@@ -742,4 +749,106 @@ test('pasAPas : la fin se calcule sur le jour de cuisson (fin rouverte le lendem
   const a = pasAPas(DAUPHINOIS, { aujourdhui: veille }).fin.portions;
   assert.equal(a, pasAPas(DAUPHINOIS, { aujourdhui: '2026-10-18' }).fin.portions);
   assert.notEqual(a, pasAPas(DAUPHINOIS, { aujourdhui: lendemain }).fin.portions, 'l’écran passe le jour de cuisson, pas le jour d’affichage');
+});
+
+// ——— Seconde relecture de T5-1 ———
+
+const avecMer = (frigoJours) => avecRealisation({ ...GRATIN_EXEMPLE, variantes: [{ ...MER, frigoJours }] }, REALISATION_GRATIN);
+
+test('pasAPas : la part au poisson qui se garde moins a sa date en quantités « la recette » et hors semaine', () => {
+  const plat = avecMer(1);
+  const semaine = { ...S, plats: { [plat.id]: dans(1, { repas: 3 }) } };
+  const [element] = platsDeLaSemaine(semaine, { tousLesPlats: [plat], profils: PROFILS, evaluer });
+  const avecSemaine = { ...element, semaine: { id: S.id, debut: S.debut, fin: S.fin } };
+  const attendu = '🐟 La part d’Adulte B\u00A0: au plus tard le lundi 19 octobre.';
+  for (const portions of ['semaine', 'recette']) {
+    const ecran = pasAPas(plat, { element: avecSemaine, profils: PROFILS, evaluer, portions, aujourdhui: '2026-10-18' });
+    assert.equal(ecran.avant.parts.length, 1, portions);
+    assert.equal(ecran.fin.partFragile, attendu, portions);
+  }
+  const hors = pasAPas(plat, { profils: PROFILS, evaluer, aujourdhui: '2026-10-18' });
+  assert.equal(hors.avant.parts.length, 1);
+  assert.equal(hors.fin.partFragile, attendu, 'hors semaine');
+  // Une version qui se garde autant que le plat : rien de plus.
+  assert.equal(pasAPas(avecMer(3), { profils: PROFILS, evaluer, aujourdhui: '2026-10-18' }).fin.partFragile, null);
+});
+
+const BOEUF_MARINE = (() => {
+  const realisation = [
+    { titre: 'Préparer la marinade', texte: 'Mélangez la sauce soja, le miel et l’ail.', duree: 5, ingredients: ['sauce soja', 'miel', 'ail'] },
+    { titre: 'Mariner le bœuf', texte: 'Ajoutez le bœuf, couvrez, une nuit au frigo.', duree: 720, actif: 5, ingredients: ['bœuf à braiser'], partAvant: true },
+    { titre: 'Émincer les oignons', texte: 'Émincez.', duree: 8, apres: [], ingredients: ['oignon jaune'] },
+    { titre: 'Cuire', texte: 'Cuisez le tout en cocotte.', duree: 40, actif: 10, appareil: 'plaque', feu: 'moyen', apres: [2, 3], pret: 'Tendre.' },
+  ];
+  return avecRealisation({
+    id: 'boeuf-marine', nom: 'Bœuf mariné', type: 'plat', statutRecette: 'brouillon', portionsBase: 4,
+    ingredients: [ing('sauce soja', 4, 'cs', 'epicerie_salee'), ing('miel', 2, 'cs', 'epicerie_sucree', ['miel']),
+      ing('ail', 2, 'pc', 'fruits_legumes', ['legume'], { role: 'incorpore' }),
+      ing('bœuf à braiser', 800, 'g', 'boucherie', ['viande', 'boeuf'], { forme: 'morceaux' }),
+      ing('oignon jaune', 2, 'pc', 'fruits_legumes', ['legume'], { role: 'incorpore' })],
+    cuisson: [{ appareil: 'plaque', dureeMin: 40 }],
+    variantes: [{ pour: 'profil-b', style: 'vegetal', retirer: ['bœuf à braiser'], ajouter: [ajout('tofu ferme', 120, 'g', 'cremerie', ['soja'])], consigne: 'Sa part au tofu.' }],
+  }, realisation);
+})();
+
+test('pasAPas : une part à mettre de côté la veille (marinade) : rappel et case sur l’étape de la veille, 🧸 aussi', () => {
+  const semaine = { ...S, plats: { [BOEUF_MARINE.id]: dans(1, { mange: { enfant: true } }) } };
+  const [element] = platsDeLaSemaine(semaine, { tousLesPlats: [BOEUF_MARINE], profils: PROFILS, evaluer });
+  const ecran = pasAPas(BOEUF_MARINE, { element: { ...element, semaine }, profils: PROFILS, evaluer, role: 'gestionnaire', aujourdhui: '2026-10-18' });
+  assert.deepEqual(ecran.avant.veille.map((e) => e.titre), ['Préparer la marinade', 'Mariner le bœuf']);
+  assert.deepEqual(ecran.avant.parts, ['✂️ La part d’Adulte B se met de côté la veille, avant «\u00A0Mariner le bœuf\u00A0»\u00A0: Sa part au tofu.']);
+  const mariner = ecran.avant.veille.find((e) => e.titre === 'Mariner le bœuf');
+  const part = mariner.rappels.find((r) => r.genre === 'part');
+  assert.ok(part, 'le rappel de la part est sur l’étape de la veille');
+  assert.equal(part.case.cle, 'part:profil-b');
+  assert.ok(ecran.avant.veille[0].rappels.some((r) => r.genre === 'enfant'), 'le miel est rappelé à l’étape qui l’utilise');
+  assert.ok(ecran.etapes.every((e) => !e.rappels.some((r) => r.genre === 'part')));
+  // Rien de la marinade à « sortir » le jour même (sauf les oignons, cités le jour même).
+  assert.deepEqual(ecran.avant.reunir.ingredients.map((i) => i.cle).filter((c) => c.startsWith('ing:')), ['ing:oignon-jaune']);
+});
+
+test('pasAPas : une version qui ajoute une volaille porte le conseil de cuisson à cœur avec sa part', () => {
+  const C = { id: 'profil-c', nom: 'Adulte C', ordre: 4, coefPortion: 1, regles: [{ type: 'exclureProduits', produits: ['jambon blanc'], severite: 'exclu' }] };
+  const plat = avecRealisation({ ...GRATIN_EXEMPLE, variantes: [{ pour: 'profil-c', retirer: ['jambon blanc'],
+    ajouter: [ajout('blanc de poulet', 120, 'g', 'boucherie', ['viande', 'volaille'])], consigne: 'Sa part au poulet.' }] }, REALISATION_GRATIN);
+  assert.deepEqual(etapesDuCoeur(etapesLisibles(plat).etapes, plat).size, 0, 'la fiche seule ne demande pas de cuisson à cœur');
+  const ecran = pasAPas(plat, { profils: [A, C], evaluer, aujourdhui: '2026-10-18' });
+  assert.equal(ecran.avant.parts.length, 1);
+  assert.ok(ecran.avant.parts[0].endsWith(` ${CONSEILS.coeur.texte}`), ecran.avant.parts[0]);
+  const part = ecran.etapes.flatMap((e) => e.rappels).find((r) => r.genre === 'part');
+  assert.equal(part.consigne, `Sa part au poulet. ${CONSEILS.coeur.texte}`);
+});
+
+test('rappelsDeLEtape : « Rallumez » un four éteint, « Réglez » un four chaud, « Dès que le four est libre »', () => {
+  const sequence = [{ cle: '1', titre: 'Préparer', citations: [] }, { cle: '2', titre: 'Cuire', citations: [] }];
+  const texte = (p) => rappelsDeLEtape({ sequence, prechauffages: [{ appareil: 'four', tempC: 180, pour: '2', avant: '1', ...p }] }, '1')[0].texte;
+  assert.equal(texte({ etat: 'allume' }), '🔥 Allumez le four à 180\u00A0°C maintenant\u00A0: il servira à «\u00A0Cuire\u00A0».');
+  assert.equal(texte({ etat: 'rallume' }), '🔥 Rallumez le four à 180\u00A0°C maintenant\u00A0: il servira à «\u00A0Cuire\u00A0».');
+  assert.equal(texte({ etat: 'regle' }), '🔥 Réglez le four à 180\u00A0°C maintenant\u00A0: il servira à «\u00A0Cuire\u00A0».');
+  assert.equal(texte({ etat: 'regle', quandLibre: true }), '🔥 Dès que le four est libre, réglez-le à 180\u00A0°C\u00A0: il servira à «\u00A0Cuire\u00A0».');
+});
+
+test('pasAPas : un fond de tarte cuit à blanc puis refroidi une heure : le four est rallumé pour la tarte', () => {
+  const realisation = [
+    { titre: 'Foncer le moule', texte: 'Étalez la pâte dans le moule.', duree: 5 },
+    { titre: 'Cuire à blanc', texte: 'Enfournez.', duree: 15, actif: 1, appareil: 'four', tempC: 180 },
+    { titre: 'Sortir le fond', texte: 'Sortez le fond.', duree: 1 },
+    { titre: 'Laisser refroidir', texte: 'Laissez refroidir.', duree: 60, actif: 0 },
+    { titre: 'Garnir', texte: 'Garnissez.', duree: 5 },
+    { titre: 'Cuire la tarte', texte: 'Enfournez.', duree: 30, actif: 1, appareil: 'four', tempC: 180 },
+    { titre: 'Sortir la tarte', texte: 'Sortez la tarte.', duree: 1 },
+  ];
+  const tarte = avecRealisation({ id: 'tarte', nom: 'Tarte', type: 'dessert', statutRecette: 'brouillon', portionsBase: 6, ingredients: [ing('pâte brisée', 1, 'pc', 'cremerie')] }, realisation);
+  const ecran = pasAPas(tarte, { aujourdhui: '2026-10-18' });
+  const textes = ecran.etapes.flatMap((e) => e.rappels.filter((r) => r.genre === 'four').map((r) => [e.titre, r.texte]));
+  assert.equal(textes.length, 2, JSON.stringify(textes));
+  assert.match(textes[0][1], /^🔥 Allumez le four/);
+  assert.match(textes[1][1], /^🔥 Rallumez le four à 180/);
+});
+
+test('reprise : le jour où l’on a commencé à cuisiner est gardé (élément de la semaine pris ce jour-là)', () => {
+  const valeur = valeurReprise({ etape: '2', debut: 500, maintenant: 1000 });
+  assert.equal(valeur.debut, 500);
+  assert.equal(lireReprise(valeur, { maintenant: 2000 }).debut, 500);
+  assert.equal(lireReprise(valeurReprise({ etape: '2', maintenant: 1000 }), { maintenant: 2000 }).debut, undefined);
 });

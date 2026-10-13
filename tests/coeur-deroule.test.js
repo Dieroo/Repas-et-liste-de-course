@@ -35,7 +35,7 @@ function tachesDuTirage(plats) {
  * Vérifie les invariants du §6.4 sur un plan ; renvoie la liste des défauts (vide si tout va bien).
  * Réservations d'un appareil gardé : de la fin de l'étape d'avant au début de la suivante.
  */
-function defauts(taches, plan, caps = capacites(null)) {
+function defauts(taches, plan, caps = capacites(null), { continu = true } = {}) {
   const erreurs = [];
   const actions = parCle(plan);
   const parTache = new Map(taches.map((t) => [t.cle, t]));
@@ -48,8 +48,18 @@ function defauts(taches, plan, caps = capacites(null)) {
   }
   const minutes = Math.ceil(plan.finMin);
   const reservations = taches.filter((t) => t.chaineAvec).map((t) => ({
-    cle: t.cle, appareil: t.appareil, de: actions.get(t.chaineAvec).fin, a: actions.get(t.cle).debut,
+    cle: t.cle, appareil: t.appareil, de: actions.get(t.chaineAvec).fin, a: actions.get(t.cle).debut, temp: actions.get(t.chaineAvec).tempC,
   }));
+  // Température au four à chaque début d'action (seconde relecture) : les plats dedans et ceux qui attendent leur étape
+  // gardée (encore dedans, à la température d'avant) s'écartent de `ecartC` au plus.
+  for (const a of plan.actions.filter((x) => !x.prechauffe && x.appareil === 'four')) {
+    const d = a.debut;
+    const temps = [
+      ...plan.actions.filter((x) => !x.prechauffe && x.appareil === 'four' && x.debut <= d && d < x.fin).map((x) => x.tempC),
+      ...reservations.filter((r) => r.appareil === 'four' && r.de <= d && d < r.a).map((r) => r.temp),
+    ].filter((x) => x !== null && x !== undefined);
+    if (temps.length && Math.max(...temps) - Math.min(...temps) > caps.four.ecartC) erreurs.push(`début de ${a.cle} : four à ${temps.join(' et ')} °C`);
+  }
   for (let m = 0; m < minutes; m += 1) {
     const actives = plan.actions.filter((a) => a.debut <= m && m < a.finActif);
     if (actives.length > 1) erreurs.push(`minute ${m} : la personne fait ${actives.map((a) => a.cle).join(', ')}`);
@@ -74,21 +84,25 @@ function defauts(taches, plan, caps = capacites(null)) {
     // (sans appareil, ou un appareil sans préchauffage avec une place libre ou gardée pour elle), sauf si la lancer
     // ferait attendre une étape qui demande la personne et ne doit pas attendre (étape gardée, ou étape pour laquelle
     // un appareil chauffe) : elle deviendrait prête pendant ce travail.
-    if (!actives.length) {
+    if (continu && !actives.length) {
       const attendues = [];
       for (const g of taches) {
         const a = actions.get(g.cle);
         if (!(g.actif > 0) || a.debut <= m) continue;
-        if (g.chaineAvec && actions.get(g.chaineAvec).debut <= m) attendues.push(actions.get(g.chaineAvec).fin);
-        const four = plan.actions.find((x) => x.prechauffe?.pour === g.cle && x.debut <= m);
+        if (g.chaineAvec && actions.get(g.chaineAvec).debut <= m) attendues.push({ h: actions.get(g.chaineAvec).fin, actif: g.actif });
+        // Le dernier préchauffage lancé pour elle (un four rallumé remplace le premier).
+        const four = plan.actions.filter((x) => x.prechauffe?.pour === g.cle && x.debut <= m).at(-1);
         if (four && g.apres.every((x) => actions.get(x).debut <= m)) {
-          attendues.push(Math.max(four.fin, ...g.apres.map((x) => actions.get(x).fin)));
+          attendues.push({ h: Math.max(four.fin, ...g.apres.map((x) => actions.get(x).fin)), actif: g.actif });
         }
       }
       for (const t of taches) {
         const a = actions.get(t.cle);
         if (!(t.actif > 0) || a.debut <= m || !t.apres.every((x) => actions.get(x).fin <= m)) continue;
-        if (attendues.some((h) => h > m && h < m + t.actif)) continue;
+        if (attendues.some(({ h }) => h > m && h < m + t.actif)) continue;
+        // Son étape gardée, qui demande la personne, tomberait sur une étape attendue : elle attendrait sur le feu.
+        const sienne = taches.find((g) => g.chaineAvec === t.cle && g.actif > 0);
+        if (sienne && attendues.some(({ h, actif }) => h > m && h < m + t.duree + sienne.actif && h + actif > m + t.duree)) continue;
         if (!t.appareil) {
           erreurs.push(`minute ${m} : personne libre, ${t.cle} prête`);
           continue;
@@ -111,12 +125,41 @@ function defauts(taches, plan, caps = capacites(null)) {
   if (plan.finMin < plusLong) erreurs.push(`finMin ${plan.finMin} < chemin ${plusLong}`);
   const sommeDurees = taches.reduce((s, t) => s + t.duree, 0)
     + plan.actions.filter((a) => a.prechauffe).reduce((s, a) => s + (a.fin - a.debut), 0);
-  if (plan.finMin > sommeDurees) erreurs.push(`finMin ${plan.finMin} > somme ${sommeDurees}`);
+  // (L'ordre affiché peut attendre l'écran suivant pour allumer le four : pas de borne haute.)
+  if (continu && plan.finMin > sommeDurees) erreurs.push(`finMin ${plan.finMin} > somme ${sommeDurees}`);
   // Travail : Σ actif, plus les préchauffages.
   const travail = sommeActif + plan.actions.filter((a) => a.prechauffe).reduce((s, a) => s + (a.finActif - a.debut), 0);
   if (plan.travailMin !== travail) erreurs.push(`travail ${plan.travailMin} au lieu de ${travail}`);
   void parTache;
   return erreurs;
+}
+
+/**
+ * Plan d'une recette seule tel que l'écran le suit (ordreDUnPlat : préchauffages ramenés à l'arrivée sur un écran),
+ * sous la forme de planifier, pour defauts().
+ */
+function planDeLOrdre(etapes, caps = capacites(null)) {
+  const o = ordreDUnPlat(etapes, caps);
+  const taches = new Map(tachesDUnPlat(etapes).map((t) => [t.cle, t]));
+  const actions = [
+    ...o.ordre.map((x) => ({ cle: x.cle, debut: x.debut, finActif: x.finActif, fin: x.fin, appareil: taches.get(x.cle).appareil, tempC: taches.get(x.cle).tempC })),
+    ...o.prechauffages.map((p) => ({
+      cle: p.cle, debut: p.debut, finActif: p.debut + PRECHAUFFAGE_TRAVAIL_MIN, fin: p.debut + caps[p.appareil].prechauffeMin,
+      appareil: p.appareil, tempC: p.tempC, prechauffe: { pour: p.pour, tempC: p.tempC },
+    })),
+  ].sort((a, b) => a.debut - b.debut);
+  return { ordre: o, plan: { actions, finMin: o.finMin, travailMin: o.travailMin } };
+}
+
+/** Moment d'arrivée sur l'écran de chaque étape de l'ordre (après le travail de l'étape d'avant). */
+function arrivees(ordre) {
+  const vues = new Map();
+  let vue = 0;
+  for (const x of ordre) {
+    vues.set(x.cle, vue);
+    if (x.finActif > x.debut) vue = x.finActif;
+  }
+  return vues;
 }
 
 // ——— Capacités ———
@@ -399,13 +442,42 @@ test('ordreDUnPlat : « Allumez le four » sur l’étape commencée juste aprè
   assert.ok(four.debut + PRECHAUFFAGE_MIN <= gratin.ordre.find((o) => o.cle === '8').debut);
 });
 
-test('dureeTotale = finMin de planifier sur ce seul plat (même calcul pour l’Aperçu et le batch)', () => {
+test('dureeTotale = finMin de l’ordre affiché (même calcul pour l’Aperçu et « Cuisiner pas à pas »)', () => {
   for (const id of ['gratin-dauphinois', 'carbonade-flamande', 'gateau-chocolat']) {
     const etapes = lire(ficheEssai(id));
-    assert.equal(dureeTotale(etapes), planifier(tachesDUnPlat(etapes), capacites(null)).finMin, id);
+    assert.equal(dureeTotale(etapes), ordreDUnPlat(etapes).finMin, id);
     assert.deepEqual(defauts(tachesDUnPlat(etapes), planifier(tachesDUnPlat(etapes))), [], id);
+    const { plan } = planDeLOrdre(etapes);
+    assert.deepEqual(defauts(tachesDUnPlat(etapes), plan, capacites(null), { continu: false }), [], `${id} (écrans)`);
   }
   assert.equal(dureeTotale([]), 0);
+});
+
+test('ordreDUnPlat : gratin dauphinois de l’essai : le four est allumé à temps, en arrivant sur un écran (seconde relecture)', () => {
+  // Le réveil du préchauffage (à r − 10, où « attendre » ne retarde pas encore) était perdu : four allumé 10 min plus
+  // tard, plat prêt qui l'attendait, « Environ 1 h 36 ».
+  const o = ordreDUnPlat(lire(ficheEssai('gratin-dauphinois')));
+  assert.ok(o.finMin <= 90, `fin ${o.finMin}`);
+  const four = o.prechauffages[0];
+  const debut = new Map(o.ordre.map((x) => [x.cle, x]));
+  assert.ok(four.debut + PRECHAUFFAGE_MIN <= debut.get('5').debut, 'le four est chaud quand le plat est prêt');
+  assert.equal(arrivees(o.ordre).get(four.avant), four.debut, 'on lit « Allumez le four » au moment d’allumer');
+  // Préparer, poêle (3 min de travail), four : allumé en arrivant sur l'écran du four, pendant la poêle.
+  const court = ordreDUnPlat([etape(1, 10), etape(2, 15, { actif: 3, appareil: 'plaque' }), etape(3, 40, { actif: 2, appareil: 'four', tempC: 180 })]);
+  assert.equal(court.finMin, 10 + 15 + 40 + FIN_IMPLICITE_MIN);
+  assert.equal(arrivees(court.ordre).get(court.prechauffages[0].avant), court.prechauffages[0].debut);
+});
+
+test('ordreDUnPlat : un préchauffage pendant une longue attente n’est pas lu une heure trop tôt', () => {
+  // Mijoter 60 min, puis gratiner : l'écran du gratin arrive au début du mijotage. Le four n'est pas allumé alors (chaud
+  // à vide près d'une heure) : il l'est en arrivant sur l'écran du four, quitte à attendre 10 min.
+  const o = ordreDUnPlat([etape(1, 5), etape(2, 60, { actif: 2, appareil: 'plaque' }), etape(3, 4),
+    etape(4, 30, { actif: 1, appareil: 'four', tempC: 200 })]);
+  const four = o.prechauffages[0];
+  const vues = arrivees(o.ordre);
+  assert.equal(vues.get(four.avant), four.debut);
+  const servie = o.ordre.find((x) => x.cle === '4');
+  assert.ok(servie.debut - (four.debut + PRECHAUFFAGE_MIN) <= 15, 'jamais longtemps chaud à vide');
 });
 
 // ——— Actions figées ———
@@ -455,8 +527,13 @@ test('invariants sur 200 tirages de 1 à 6 plats (générateur à graine fixe)',
     assert.deepEqual(melange, plan, `tirage ${i} mélangé`);
     actionsVues += plan.actions.length;
     prechauffages += plan.actions.filter((a) => a.prechauffe).length;
-    // Recette seule : dureeTotale = finMin de planifier.
-    for (const { etapes } of plats) assert.equal(dureeTotale(etapes), planifier(tachesDUnPlat(etapes)).finMin);
+    // Recette seule : dureeTotale = finMin de l'ordre affiché, qui respecte les invariants (sauf le travail continu :
+    // le four s'allume en arrivant sur un écran).
+    for (const { etapes } of plats) {
+      const { ordre, plan: affiche } = planDeLOrdre(etapes);
+      assert.equal(dureeTotale(etapes), ordre.finMin);
+      if (ordre.ordre.length && ordre.finMin !== null) assert.deepEqual(defauts(tachesDUnPlat(etapes), affiche, capacites(null), { continu: false }), [], `tirage ${i} (écrans)`);
+    }
   }
   assert.ok(actionsVues > 1000, 'les tirages sont variés');
   assert.ok(prechauffages > 50, 'des fours à préchauffer');
@@ -606,4 +683,110 @@ test('etapesDeLaVeille et tachesDUnPlat : la marinade passe la veille avec ce do
   assert.deepEqual(ordreDUnPlat(etapes).ordre.map((o) => o.cle), ['3', '4']);
   // Une étape du jour du repas n'est jamais ramenée à la veille.
   assert.deepEqual([...etapesDeLaVeille([etape(1, 5, { auService: true }), etape(2, 600, { actif: 0, veille: true, apres: [1] })])], [2]);
+});
+
+// ——— Seconde relecture de T5-1 ———
+
+const ordreTexte = (o) => o.ordre.map((x) => x.cle);
+
+test('tachesDUnPlat et planifier : « Sortir le gratin » écrit par Claude garde le four et sort le plat à l’heure', () => {
+  // Version 7 : l'étape « Sortir … » est écrite, sans appareil. Une longue préparation indépendante ne la retarde pas.
+  const etapes = [etape(1, 10), etape(2, 30, { actif: 1, appareil: 'four', tempC: 200 }), etape(3, 1, { titre: 'Sortir le gratin' }),
+    etape(4, 40, { actif: 40, apres: [] })];
+  const taches = tachesDUnPlat(etapes);
+  const sortie = taches.find((t) => t.cle === '3');
+  assert.equal(sortie.sortie, true);
+  assert.equal(sortie.appareil, 'four');
+  assert.equal(sortie.tempC, 200);
+  assert.equal(sortie.chaineAvec, '2');
+  assert.equal(sortie.implicite, null, 'son texte reste celui de Claude');
+  assert.ok(!taches.some((t) => t.implicite), 'pas de fin implicite en plus');
+  const plan = planifier(taches);
+  const a = parCle(plan);
+  assert.equal(a.get('3').debut, a.get('2').fin, 'sorti à la fin de la cuisson');
+  assert.deepEqual(defauts(taches, plan), []);
+  // Tarte à 160 °C puis légumes à 220 °C : on ne règle pas le four à 220 °C avec la tarte dedans.
+  const tarte = [etape(1, 5), etape(2, 25, { actif: 1, appareil: 'four', tempC: 160 }), etape(3, 2, { titre: 'Sortir la tarte' }),
+    etape(4, 30, { actif: 2, appareil: 'plaque', apres: [] }), etape(5, 5, { apres: [4] }),
+    etape(6, 20, { actif: 1, appareil: 'four', tempC: 220, apres: [5] }), etape(7, 3, { apres: [3, 6] })];
+  const t2 = tachesDUnPlat(tarte);
+  const p2 = planifier(t2);
+  const b = parCle(p2);
+  assert.equal(b.get('3').debut, b.get('2').fin);
+  const regle = p2.actions.find((x) => x.prechauffe?.pour === '6');
+  assert.ok(regle.debut >= b.get('3').fin, `four réglé à 220 °C après la sortie de la tarte (${regle.debut})`);
+  assert.deepEqual(defauts(t2, p2), []);
+  // Une étape longue ou un repos après le four n'est pas une sortie.
+  assert.ok(!tachesDUnPlat([etape(1, 30, { actif: 1, appareil: 'four', tempC: 200 }), etape(2, 20)]).some((t) => t.sortie));
+  assert.ok(!tachesDUnPlat([etape(1, 30, { actif: 1, appareil: 'four', tempC: 200 }), etape(2, 10, { actif: 0 })]).some((t) => t.sortie));
+});
+
+test('planifier : un rôti qui baisse à 170 °C n’est pas bloqué par un plat mis à côté à 210 °C', () => {
+  const etapes = [etape(1, 5), etape(2, 15, { actif: 1, appareil: 'four', tempC: 220 }), etape(3, 40, { actif: 1, appareil: 'four', tempC: 170 }),
+    etape(4, 10, { apres: [] }), etape(5, 45, { actif: 2, appareil: 'four', tempC: 210, apres: [4] }), etape(6, 5, { apres: [3, 5] })];
+  const taches = tachesDUnPlat(etapes);
+  const plan = planifier(taches);
+  const a = parCle(plan);
+  assert.equal(a.get('3').debut, a.get('2').fin, 'le rôti passe à 170 °C sans attendre');
+  assert.ok(a.get('5').debut >= a.get('3').fin, 'les pommes de terre attendent la sortie du rôti');
+  assert.deepEqual(defauts(taches, plan), []);
+  // Même chose en batch : quiche 200 puis 180 °C, gratin à 210 °C.
+  const batch = [
+    ...tachesDUnPlat([etape(1, 10), etape(2, 15, { actif: 1, appareil: 'four', tempC: 200 }), etape(3, 25, { actif: 1, appareil: 'four', tempC: 180 })], { plat: 'quiche', priorite: 0 }),
+    ...tachesDUnPlat([etape(1, 12), etape(2, 30, { actif: 1, appareil: 'four', tempC: 210 })], { plat: 'gratin', priorite: 1 }),
+  ];
+  const pb = planifier(batch);
+  const b = parCle(pb);
+  assert.equal(b.get('quiche/3').debut, b.get('quiche/2').fin);
+  assert.deepEqual(defauts(batch, pb), []);
+});
+
+test('planifier : un four vide plus de 15 min refroidit : « Rallumez » pour la cuisson suivante', () => {
+  const etapes = [etape(1, 5), etape(2, 15, { actif: 1, appareil: 'four', tempC: 180 }), etape(3, 1, { titre: 'Sortir le fond' }),
+    etape(4, 60, { actif: 0 }), etape(5, 5), etape(6, 30, { actif: 1, appareil: 'four', tempC: 180 }), etape(7, 1, { titre: 'Sortir la tarte' })];
+  const taches = tachesDUnPlat(etapes);
+  const plan = planifier(taches);
+  const prechauffages = plan.actions.filter((x) => x.prechauffe);
+  assert.equal(prechauffages.length, 2, 'rallumé pour la tarte');
+  assert.equal(prechauffages[1].prechauffe.etat, 'rallume');
+  assert.ok(prechauffages[1].fin <= parCle(plan).get('6').debut);
+  assert.deepEqual(defauts(taches, plan), []);
+  const o = ordreDUnPlat(etapes);
+  assert.deepEqual(o.prechauffages.map((p) => p.etat), ['allume', 'rallume']);
+  // Une seconde cuisson à la même température 10 min après : le four est encore chaud, pas de préchauffage.
+  const court = tachesDUnPlat([etape(1, 15, { actif: 1, appareil: 'four', tempC: 180 }), etape(2, 1, { titre: 'Sortir' }), etape(3, 10),
+    etape(4, 20, { actif: 1, appareil: 'four', tempC: 180 }), etape(5, 1, { titre: 'Sortir' })]);
+  assert.equal(planifier(court).actions.filter((x) => x.prechauffe).length, 1);
+});
+
+test('planifier : on ne lance pas « Faire revenir » si sa cuisson en remuant tomberait sur une sortie (risotto)', () => {
+  const etapes = [etape(1, 10), etape(2, 25, { actif: 1, appareil: 'four', tempC: 200 }), etape(3, 5, { apres: [] }),
+    etape(4, 5, { actif: 5, appareil: 'plaque' }), etape(5, 20, { actif: 20, appareil: 'plaque' })];
+  const taches = tachesDUnPlat(etapes);
+  const plan = planifier(taches);
+  const a = parCle(plan);
+  assert.equal(a.get('5').debut, a.get('4').fin, 'le riz revenu ne reste pas sur le feu');
+  assert.equal(a.get('2-fin').debut, a.get('2').fin, 'les légumes sortent à l’heure');
+  assert.deepEqual(defauts(taches, plan), []);
+});
+
+test('ordreDUnPlat : chaque préchauffage se lit en arrivant sur l’écran de son étape (recettes réalistes)', () => {
+  const hasard = generateur(4242);
+  let vus = 0;
+  let recettes = 0;
+  while (recettes < 1500) {
+    const etapes = recetteAUnFour(hasard);
+    if (!etapes) continue;
+    recettes += 1;
+    const { ordre, plan } = planDeLOrdre(etapes);
+    assert.deepEqual(defauts(tachesDUnPlat(etapes), plan, capacites(null), { continu: false }), [], `recette ${recettes}`);
+    const vues = arrivees(ordre.ordre);
+    for (const p of ordre.prechauffages) {
+      vus += 1;
+      assert.ok(p.quandLibre || vues.get(p.avant) === p.debut, `recette ${recettes} : « Allumez » lu à ${vues.get(p.avant)}, allumé à ${p.debut}`);
+      const servie = ordre.ordre.find((x) => x.cle === p.pour);
+      assert.ok(p.debut + PRECHAUFFAGE_MIN <= servie.debut, `recette ${recettes} : four chaud à temps`);
+    }
+  }
+  assert.ok(vus >= 1000);
 });

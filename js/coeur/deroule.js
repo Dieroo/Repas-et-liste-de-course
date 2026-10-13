@@ -23,6 +23,8 @@ export const TEMPERATURE_DEFAUT = 180;
 export const APPAREILS_A_SORTIR = Object.freeze(['four', 'cookeo', 'airfryer']);
 /** Durée (et travail) d'une fin implicite. */
 export const FIN_IMPLICITE_MIN = 1;
+/** Travail au plus d'une étape écrite qui sort le plat (« Sortir le gratin ») : elle garde l'appareil (tachesDUnPlat). */
+export const SORTIE_ECRITE_MAX_MIN = 5;
 
 /** Appareils du foyer tant que `reglages.appareils` n'est pas réglé (CLAUDE.md §6). */
 export const APPAREILS_DEPART = Object.freeze([
@@ -106,7 +108,8 @@ function tachesLues(taches, signales) {
       chaineAvec: typeof brute.chaineAvec === 'string' ? brute.chaineAvec : null,
       priorite: estNombre(brute.priorite) ? brute.priorite : 0,
       frigoAvant: estNombre(brute.frigoAvant) ? brute.frigoAvant : null,
-      implicite: Boolean(brute.implicite),
+      // Une sortie écrite (tachesDUnPlat) passe devant et sort le plat comme une fin implicite.
+      implicite: Boolean(brute.implicite) || brute.sortie === true,
     });
   }
   for (const tache of parCle.values()) {
@@ -177,7 +180,9 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
     const entree = {
       cap,
       chauffe: cap.prechauffeMin > 0,
-      liste: Array.from({ length: cap.nombre }, () => ({ occupants: [], reserves: [], chaud: null, chauffeFin: null, chauffeTemp: null, pour: null })),
+      liste: Array.from({ length: cap.nombre }, () => ({
+        occupants: [], reserves: [], chaud: null, chauffeFin: null, chauffeTemp: null, pour: null, froidA: null, utilise: false,
+      })),
     };
     unites.set(id, entree);
     return entree;
@@ -194,6 +199,24 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
     const autres = [...u.occupants, ...(avecReserves ? u.reserves : [])].filter((o) => o.cle !== sauf);
     if (autres.length) return temp === null || autres.every((o) => o.temp === null || Math.abs(o.temp - temp) <= ecart);
     return true;
+  };
+  /** Températures des étapes gardées qui suivent une tâche (le plat reste dans l'appareil). */
+  const tempsApres = (tache) => {
+    const temps = [];
+    for (let g = tache?.gardee ?? null; g; g = g.gardee) if (g.tempC !== null) temps.push(g.tempC);
+    return temps;
+  };
+  /** Températures qu'un plat dans l'unité (occupant ou place gardée) aura jusqu'à sa sortie. */
+  const tempsDuPlat = (o) => [o.temp, o.avant ?? null, ...(o.reserve ? [parCle.get(o.cle)?.tempC ?? null] : []),
+    ...tempsApres(parCle.get(o.cle))].filter((x) => x !== null);
+  /**
+   * Vrai si un plat aux températures `temps` (la sienne et celles de ses étapes gardées) peut entrer à côté des plats de
+   * l'unité, jusqu'à leur sortie : un plat gardé qui changera de température ne sera jamais bloqué par lui.
+   */
+  const compatibleJusquALaSortie = (u, temps, ecart) => {
+    const lus = temps.filter((x) => x !== null);
+    return [...u.occupants, ...u.reserves.map((r) => ({ ...r, reserve: true }))]
+      .every((o) => tempsDuPlat(o).every((b) => lus.every((a) => Math.abs(a - b) <= ecart)));
   };
   const tempEffective = (tache, u) => tache.tempC ?? u.chaud ?? u.occupants.find((o) => o.temp !== null)?.temp ?? null;
   /** Vrai si l'unité chauffe, ou est chaude, à une température qui convient à `temp` (null : toute température). */
@@ -222,7 +245,9 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
         // Seuls les plats déjà dedans comptent : deux places gardées à des températures trop écartées s'attendraient
         // l'une l'autre sans fin.
         // Une fin implicite sort le plat : elle n'attend aucune température.
-        if (!tache.implicite && !compatible(u, temp, cap.ecartC, tache.cle, false)) return null;
+        // Une fin implicite (ou une sortie écrite) déjà attendue, elle, sort bientôt un plat qui est encore dedans.
+        const sorties = { ...u, reserves: u.reserves.filter((r) => r.cle !== tache.cle && parCle.get(r.cle)?.implicite) };
+        if (!tache.implicite && !compatible(sorties, temp, cap.ecartC, tache.cle)) return null;
         return { unite: i, temp };
       }
     }
@@ -234,6 +259,14 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
       if (u.chaud === null) continue;
       const temp = tempEffective(tache, u);
       if (Math.abs(temp - u.chaud) > cap.ecartC || !compatible(u, temp, cap.ecartC)) continue;
+      if (!compatibleJusquALaSortie(u, [temp, ...tempsApres(tache)], cap.ecartC)) continue;
+      // Appareil allumé pour une autre étape, pas encore commencée : on lui laisse sa place et sa température.
+      if (u.pour !== null && u.pour !== tache.cle && pourEnAttente(u, cap)) {
+        const servie = parCle.get(u.pour);
+        if (u.occupants.length + u.reserves.length + 1 >= cap.places) continue;
+        if (!compatibleJusquALaSortie({ occupants: [{ cle: servie.cle, temp: servie.tempC ?? temp }], reserves: [] },
+          [temp, ...tempsApres(tache)], cap.ecartC)) continue;
+      }
       return { unite: i, temp };
     }
     return null;
@@ -253,6 +286,7 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
       const u = unites.get(tache.appareil).liste[place.unite];
       u.reserves = u.reserves.filter((r) => r.cle !== tache.cle);
       u.occupants.push({ cle: tache.cle, temp: action.tempC });
+      u.froidA = null;
       if (unites.get(tache.appareil).chauffe && action.tempC !== null && u.occupants.length === 1) u.chaud = action.tempC;
       if (u.pour === tache.cle) u.pour = null;
     }
@@ -276,7 +310,19 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
       const u = unites.get(action.appareil).liste[action.unite];
       u.occupants = u.occupants.filter((o) => o.cle !== action.cle);
       const gardee = parCle.get(action.cle)?.gardee;
-      if (gardee && restantes.has(gardee.cle)) u.reserves.push({ cle: gardee.cle, temp: action.tempC });
+      // Place gardée à la température de l'étape qui suit ; le plat est encore à celle d'avant (`avant`).
+      if (gardee && restantes.has(gardee.cle)) u.reserves.push({ cle: gardee.cle, temp: gardee.tempC ?? action.tempC, avant: action.tempC });
+      // Appareil vidé : il reste chaud A_VIDE_MAX minutes au plus (on l'éteint ensuite : il faudra le rallumer).
+      if (unites.get(action.appareil).chauffe && !u.occupants.length && !u.reserves.length && u.chauffeFin === null
+        && !(u.pour !== null && restantes.has(u.pour))) u.froidA = action.fin + A_VIDE_MAX;
+    }
+    for (const { chauffe, liste } of unites.values()) {
+      if (!chauffe) continue;
+      for (const u of liste) {
+        if (u.froidA === null || u.froidA > t) continue;
+        u.froidA = null;
+        if (!u.occupants.length && !u.reserves.length && u.chauffeFin === null) u.chaud = null;
+      }
     }
   };
 
@@ -322,7 +368,10 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
       action.unite = i === -1 ? 0 : i;
       const u = liste[action.unite];
       u.occupants.push({ cle: tache.cle, temp: tache.tempC });
-      if (chauffe) u.chaud = tache.tempC ?? u.chaud ?? TEMPERATURE_DEFAUT;
+      if (chauffe) {
+        u.chaud = tache.tempC ?? u.chaud ?? TEMPERATURE_DEFAUT;
+        u.utilise = true;
+      }
     }
     if (action.finActif > depart && tache.actif > 0) personneLibreA = Math.max(personneLibreA, action.finActif);
     actions.set(tache.cle, action);
@@ -337,6 +386,7 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
     const fin = estNombre(f.fin) && f.fin >= f.debut ? f.fin : f.debut + cap.prechauffeMin;
     const i = Math.max(0, liste.findIndex((u) => !u.occupants.length && !u.reserves.length));
     const u = liste[i];
+    u.utilise = true;
     if (fin > depart) {
       u.chauffeFin = fin;
       u.chauffeTemp = temp;
@@ -349,7 +399,7 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
     if (finActif > depart) personneLibreA = Math.max(personneLibreA, finActif);
     actions.set(cle, {
       cle, debut: f.debut, finActif, fin, appareil: pour.appareil, tempC: temp, unite: i, rang: rangDepart, fige: true,
-      prechauffe: { pour: pour.cle, tempC: temp },
+      prechauffe: { pour: pour.cle, tempC: temp, ...(['allume', 'regle', 'rallume'].includes(f.etat) ? { etat: f.etat } : {}) },
     });
     rangDepart += 1;
   }
@@ -393,6 +443,9 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
    */
   const retarderait = (x, t) => {
     if (x.actif > 0) {
+      // L'étape gardée de `x` qui demande la personne (« Cuire en remuant » après « Faire revenir ») : son travail
+      // commencera à la fin de `x` ; il ne doit pas tomber sur une étape protégée (ni l'une ni l'autre n'attend).
+      const sienne = x.gardee && x.gardee.actif > 0 ? [t + x.duree, t + x.duree + x.gardee.actif] : null;
       for (const tache of ordre) {
         if (!(tache.actif > 0) || !restantes.has(tache.cle) || tache.cle === x.cle) continue;
         let prete = null;
@@ -404,7 +457,13 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
             .map((u) => u.chauffeFin ?? t));
           prete = Math.max(t, chaud, ...tache.apres.map((a) => actions.get(a).fin));
         }
-        if (prete !== null && prete > t && prete < t + x.actif) return true;
+        if (prete === null) continue;
+        if (prete > t && prete < t + x.actif) return true;
+        if (sienne && prete > t && prete < sienne[1] && prete + tache.actif > sienne[0]) {
+          // Revenir quand cette étape sera faite.
+          bloquees.push(prete + tache.actif - x.duree);
+          return true;
+        }
       }
       return false;
     }
@@ -465,7 +524,7 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
       // l'appareil chaud à vide trop longtemps (sinon, plutôt quelques minutes de plus que le four allumé pour rien).
       const aVide = r - (t + cap.prechauffeMin);
       const retard = libreApres + cap.prechauffeMin - r;
-      if (retard > 0 && (aVide <= A_VIDE_MAX || retard > aVide)) {
+      if (retard >= 0 && (aVide <= A_VIDE_MAX || retard > aVide)) {
         if (!choix || r < choix.r || (r === choix.r && avant(tache, choix.tache) < 0)) choix = { tache, r, unite: libre };
       } else {
         reveils.push(r - cap.prechauffeMin);
@@ -478,6 +537,8 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
     const { cap, liste } = unites.get(tache.appareil);
     const temp = tache.tempC ?? TEMPERATURE_DEFAUT;
     const u = liste[unite];
+    // « Allumez » la première fois, « Réglez » un appareil encore chaud, « Rallumez » un appareil éteint depuis.
+    const etat = u.chaud !== null ? 'regle' : (u.utilise ? 'rallume' : 'allume');
     const finActif = t + Math.min(PRECHAUFFAGE_TRAVAIL_MIN, cap.prechauffeMin);
     // Une clé par préchauffage : un appareil rallumé pour la même étape (remis à une autre température entre-temps)
     // reçoit « prechauffe:<cle>#2 », pour être libéré à son tour.
@@ -487,10 +548,12 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
     u.chauffeTemp = temp;
     u.chaud = null;
     u.pour = tache.cle;
+    u.froidA = null;
+    u.utilise = true;
     personneLibreA = Math.max(personneLibreA, finActif);
     actions.set(cle, {
       cle, debut: t, finActif, fin: u.chauffeFin, appareil: tache.appareil, tempC: temp, unite, rang: rangDepart,
-      prechauffe: { pour: tache.cle, tempC: temp },
+      prechauffe: { pour: tache.cle, tempC: temp, etat },
     });
     rangDepart += 1;
   };
@@ -534,6 +597,7 @@ export function planifier(taches, caps, { maintenant = 0, fige = new Map() } = {
       if (action.finActif > t) evenements.push(action.finActif);
     }
     for (const r of reveils) if (r > t) evenements.push(r);
+    for (const { liste } of unites.values()) for (const u of liste) if (u.froidA !== null && u.froidA > t) evenements.push(u.froidA);
     for (const r of bloquees) if (r > t) evenements.push(r);
     bloquees = [];
     if (evenements.length) {
@@ -606,7 +670,10 @@ export function etapesDeLaVeille(etapes) {
  * - appareil gardé (`chaineAvec`) : l'unique `apres` est l'étape précédente, sur le même appareil ;
  * - fin implicite : une étape d'attente (duree > actif) au four, au Cookeo ou à l'airfryer, qu'aucune étape n'attend,
  *   est suivie d'une tâche '<clé>-fin' (FIN_IMPLICITE_MIN de travail, même appareil, gardé : on ne laisse pas le plat
- *   dans le four) ; `implicite` : l'appareil, `pour` : la clé de l'étape d'attente.
+ *   dans le four) ; `implicite` : l'appareil, `pour` : la clé de l'étape d'attente ;
+ * - sortie écrite : une étape sans appareil, de SORTIE_ECRITE_MAX_MIN minutes de travail au plus, dont l'unique `apres`
+ *   est l'attente d'avant au four, au Cookeo ou à l'airfryer (« Sortir le gratin ») : `sortie: true`, l'appareil et la
+ *   température de l'attente, gardé ; planifier la traite comme une fin implicite.
  * Chaque tâche garde `n` (numéro de l'étape ; celui de son étape d'attente pour une fin implicite).
  */
 export function tachesDUnPlat(etapes, { plat = '', priorite = 0 } = {}) {
@@ -621,16 +688,25 @@ export function tachesDUnPlat(etapes, { plat = '', priorite = 0 } = {}) {
   };
   const attendues = new Set();
   for (const e of gardees) for (const k of apresDe(e)) attendues.add(k);
+  const dureeDe = (e) => (estNombre(e.duree) && e.duree > 0 ? e.duree : 0);
+  const actifDe = (e) => (estNombre(e.actif) ? Math.min(dureeDe(e), Math.max(0, e.actif)) : dureeDe(e));
   const taches = [];
   for (const e of gardees) {
-    const duree = estNombre(e.duree) && e.duree > 0 ? e.duree : 0;
-    const actif = estNombre(e.actif) ? Math.min(duree, Math.max(0, e.actif)) : duree;
+    const duree = dureeDe(e);
+    const actif = actifDe(e);
     const apres = apresDe(e);
     const precedente = parN.get(e.n - 1);
+    // Sortie écrite (version 7 des instructions : « Sortir le gratin », étape courte à part, sans appareil) : un geste
+    // de SORTIE_ECRITE_MAX_MIN minutes au plus qui suit une attente au four, au Cookeo ou à l'airfryer dont il est
+    // l'unique `apres`. Il garde l'appareil et passe devant comme une fin implicite ; son texte ne change pas.
+    const sortie = !e.appareil && apres.length === 1 && apres[0] === e.n - 1 && actif > 0 && actif <= SORTIE_ECRITE_MAX_MIN
+      && APPAREILS_A_SORTIR.includes(precedente?.appareil) && dureeDe(precedente) > actifDe(precedente);
     const chaine = apres.length === 1 && apres[0] === e.n - 1 && e.appareil && precedente?.appareil === e.appareil;
     taches.push({
-      cle: cleDe(e.n), plat, n: e.n, duree, actif, appareil: e.appareil ?? null, tempC: estNombre(e.tempC) ? e.tempC : null,
-      apres: apres.map(cleDe), chaineAvec: chaine ? cleDe(e.n - 1) : null, priorite, implicite: null, pour: null,
+      cle: cleDe(e.n), plat, n: e.n, duree, actif, appareil: sortie ? precedente.appareil : (e.appareil ?? null),
+      tempC: sortie ? (estNombre(precedente.tempC) ? precedente.tempC : null) : (estNombre(e.tempC) ? e.tempC : null),
+      apres: apres.map(cleDe), chaineAvec: chaine || sortie ? cleDe(e.n - 1) : null, priorite, implicite: null, pour: null,
+      ...(sortie ? { sortie: true } : {}),
       estime: !(duree > 0) || Boolean(e.estime),
     });
     if (APPAREILS_A_SORTIR.includes(e.appareil) && duree > actif && !attendues.has(e.n)) {
@@ -645,14 +721,92 @@ export function tachesDUnPlat(etapes, { plat = '', priorite = 0 } = {}) {
 }
 
 /**
+ * Moment où la personne arrive sur l'écran de chaque étape, dans l'ordre affiché : au début pour la première ; ensuite
+ * quand elle a fini le travail de l'étape d'avant (une étape sans travail, un repos, se passe aussitôt). → [minutes]
+ */
+function momentsDesEcrans(etapes, depart) {
+  const vues = [];
+  let vue = depart;
+  for (const action of etapes) {
+    vues.push(vue);
+    if (action.finActif > action.debut) vue = action.finActif;
+  }
+  return vues;
+}
+
+/**
+ * Plan d'une recette seule, sans minuteur : « Allumez le four … maintenant » se lit en arrivant sur l'écran d'une
+ * étape. Chaque préchauffage est donc ramené à un de ces moments : celui de l'écran qu'on a sous les yeux quand il
+ * faudrait allumer (un peu tôt), ou, si le four resterait alors chaud à vide plus de A_VIDE_MAX minutes et que ce serait
+ * pire, l'écran suivant (un peu tard). Le reste est replanifié depuis ce moment (actions d'avant figées).
+ */
+function planAuxEcrans(taches, caps) {
+  let plan = planifier(taches, caps);
+  let actions = plan.actions;
+  const fixes = new Set();
+  for (let tour = 0; tour < 4 * taches.length + 4; tour += 1) {
+    const a = actions.find((x) => x.prechauffe && !fixes.has(x.cle));
+    if (!a) break;
+    fixes.add(a.cle);
+    const etapes = actions.filter((x) => !x.prechauffe);
+    const vues = momentsDesEcrans(etapes, 0);
+    const k = vues.reduce((dernier, vue, i) => (vue <= a.debut ? i : dernier), -1);
+    const tot = k === -1 ? 0 : vues[k];
+    if (tot === a.debut) continue;
+    const chauffe = a.fin - a.debut;
+    const servie = actions.find((x) => x.cle === a.prechauffe.pour);
+    // L'appareil est occupé (un plat dedans, ou gardé entre deux étapes chaînées) jusqu'à `libreA` : on n'allume pas
+    // pour une autre température avant.
+    const surAppareil = etapes.filter((x) => x.appareil === a.appareil);
+    let libreA = 0;
+    for (const x of surAppareil) {
+      if (x.debut >= a.debut) continue;
+      const suite = taches.find((t) => t.chaineAvec === x.cle);
+      const finGardee = suite ? (actions.find((y) => y.cle === suite.cle)?.debut ?? x.fin) : x.fin;
+      libreA = Math.max(libreA, x.fin, finGardee);
+    }
+    const totPossible = tot >= libreA;
+    const tard = vues.find((vue) => vue > a.debut);
+    const tardPossible = tard !== undefined && servie && tard <= servie.debut
+      && !surAppareil.some((x) => x.debut >= a.debut && x.debut < tard);
+    if (!totPossible && !tardPossible) {
+      // On arrive sur l'écran pendant qu'un plat occupe encore l'appareil : « Dès que le four est libre, … ».
+      if (libreA > tot) a.prechauffe.quandLibre = true;
+      continue;
+    }
+    const aVide = servie ? servie.debut - (tot + chauffe) : 0;
+    const retard = tardPossible ? tard + chauffe - servie.debut : Infinity;
+    let moment = totPossible && (!tardPossible || aVide <= A_VIDE_MAX || retard > aVide) ? tot : tard;
+    // Jamais deux gestes en même temps : après un autre préchauffage déjà ramené là.
+    for (const x of actions) if (x.prechauffe && fixes.has(x.cle) && x !== a && x.debut <= moment && moment < x.finActif) moment = x.finActif;
+    if (moment === a.debut) continue;
+    const fige = new Map();
+    for (const x of actions) {
+      if (x.cle === a.cle) continue;
+      if (x.debut < moment || (x.prechauffe && fixes.has(x.cle) && x.debut <= moment)) {
+        fige.set(x.cle, { debut: x.debut, fin: x.fin, ...(x.prechauffe?.etat ? { etat: x.prechauffe.etat } : {}) });
+      }
+    }
+    fige.set(a.cle, { debut: moment, fin: moment + chauffe, ...(a.prechauffe.etat ? { etat: a.prechauffe.etat } : {}) });
+    const suite = planifier(taches, caps, { maintenant: moment, fige });
+    const avant = actions.filter((x) => fige.has(x.cle) && x.cle !== a.cle);
+    const gardees = new Set(avant.map((x) => x.cle));
+    actions = [...avant, ...suite.actions.filter((x) => !gardees.has(x.cle))]
+      .sort((x, y) => x.debut - y.debut);
+    plan = { ...suite, actions };
+  }
+  return plan;
+}
+
+/**
  * Ordre d'une recette seule, pour une personne → { ordre: [{ cle, n, implicite, pour, debut, finActif, fin }],
- * prechauffages: [{ cle, appareil, tempC, pour, debut, avant }], finMin, travailMin, estime, signales }.
- * Étapes datées (toutes une durée) : ordre du plan (ce qui avance pendant une attente passe avant) ; `avant` : la clé
- * de l'étape en tête de laquelle dire « Allumez le four » : celle que la personne commence juste après l'avoir allumé,
- * sinon celle qu'elle a sous les yeux à ce moment (la dernière commencée : un peu tôt plutôt que trop tard), sinon la
- * première. Une étape sans
- * durée (repli sur les étapes courtes) : ordre de la recette, fins implicites à leur place, rien de daté, `finMin`
- * null, `estime` vrai.
+ * prechauffages: [{ cle, appareil, tempC, pour, debut, avant, etat }], finMin, travailMin, estime, signales }.
+ * Étapes datées (toutes une durée) : ordre du plan (ce qui avance pendant une attente passe avant), préchauffages
+ * ramenés à l'arrivée sur l'écran d'une étape (planAuxEcrans) ; `avant` : la clé de l'étape en tête de laquelle dire
+ * « Allumez le four » : l'écran où l'on arrive à ce moment ; `etat` : 'allume' (« Allumez »), 'regle' (« Réglez » un
+ * appareil encore chaud) ou 'rallume' (« Rallumez » un appareil éteint depuis) ; `quandLibre` : on arrive sur cet écran
+ * quand un plat occupe encore l'appareil (« Dès que le four est libre, … »). Une étape sans durée (repli sur les
+ * étapes courtes) : ordre de la recette, fins implicites à leur place, rien de daté, `finMin` null, `estime` vrai.
  */
 export function ordreDUnPlat(etapes, caps) {
   const taches = tachesDUnPlat(etapes);
@@ -663,21 +817,21 @@ export function ordreDUnPlat(etapes, caps) {
       prechauffages: [], finMin: taches.length ? null : 0, travailMin: null, estime, signales: [],
     };
   }
-  const plan = planifier(taches, caps);
+  const plan = planAuxEcrans(taches, caps);
   const parCle = new Map(taches.map((t) => [t.cle, t]));
   const ordre = plan.actions.filter((a) => !a.prechauffe).map((a) => {
     const tache = parCle.get(a.cle);
     return { cle: a.cle, n: tache.n, implicite: tache.implicite, pour: tache.pour, debut: a.debut, finActif: a.finActif, fin: a.fin };
   });
+  const vues = momentsDesEcrans(ordre, 0);
   const prechauffages = plan.actions.filter((a) => a.prechauffe).map((a) => {
-    // L'étape commencée juste après avoir allumé ; sinon celle qu'on a sous les yeux à ce moment (un peu tôt plutôt
-    // que trop tard) ; sinon la première.
-    const juste = ordre.find((o) => o.debut >= a.debut && o.debut <= a.finActif);
-    const enCours = [...ordre].reverse().find((o) => o.debut <= a.debut);
-    const suivante = juste ?? enCours ?? ordre[0];
+    // L'écran où l'on arrive au moment d'allumer (le premier s'il y en a plusieurs au même moment) ; sinon la première.
+    let i = vues.reduce((dernier, vue, j) => (vue <= a.debut ? j : dernier), -1);
+    while (i > 0 && vues[i - 1] === vues[i]) i -= 1;
     return {
       cle: a.cle, appareil: a.appareil, tempC: a.prechauffe.tempC, pour: a.prechauffe.pour, debut: a.debut,
-      avant: suivante?.cle ?? a.prechauffe.pour,
+      avant: ordre[Math.max(0, i)]?.cle ?? a.prechauffe.pour, etat: a.prechauffe.etat ?? 'allume',
+      ...(a.prechauffe.quandLibre ? { quandLibre: true } : {}),
     };
   });
   return { ordre, prechauffages, finMin: plan.finMin, travailMin: plan.travailMin, estime: false, signales: plan.signales };

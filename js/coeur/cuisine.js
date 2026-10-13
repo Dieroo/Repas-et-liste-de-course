@@ -67,11 +67,16 @@ export const TEXTES_CUISINE = Object.freeze({
   titrePage: (nom) => `Cuisiner\u00A0: ${nom}`,
   quitter: '✕ Quitter',
   plusGrand: 'A+',
-  plusGrandNom: 'Texte plus grand',
+  // Nom accessible qui commence par le libellé visible (« A+ ») : une commande vocale le trouve (WCAG 2.5.3).
+  plusGrandNom: 'A+\u00A0: texte plus grand',
   // « sur N » insécable : en police très agrandie, le compteur ne se coupe jamais avant son dernier nombre.
   etapeSur: (rang, total) => `Étape ${rang} sur\u00A0${total}`,
   avantDeCommencer: 'Avant de commencer',
   laVeille: 'La veille',
+  // Cuisson de la veille sortie de l'appareil (fin implicite d'une étape « la veille ») : au frigo pour la nuit.
+  frigoVeille: '🧊 Laissez tiédir une heure au plus, couvrez, puis au frigo en moins de 2\u00A0heures.',
+  // Fin : la date limite d'un plat dont la cuisson s'est faite la veille.
+  depuisLaVeille: 'Compté depuis la cuisson de la veille.',
   sortirToutCeQuIlFaut: 'Sortir tout ce qu’il faut',
   etAussi: (noms) => `Et aussi\u00A0: ${noms}`,
   quantitesPour: 'Quantités pour\u00A0:',
@@ -411,8 +416,9 @@ const laPart = (profil, moi) => (estMoi(profil, moi) ? 'votre part' : `la part $
  * ordre pour une étape. `sequence` : étapes dans l'ordre affiché ([{ cle, n, rang, titre, implicite, citations? }]) ;
  * `prechauffages` : ceux de deroule.js › ordreDUnPlat (chacun sur l'étape `avant`) ; `parts` : [{ profil, retirer,
  * consigne, ajouts: [texte] }] ; `precautions` : precautionsDuPlat ; `cible` : rang affiché de chaque étape.
- * - four : « 🔥 Allumez le four à 200 °C maintenant : il servira à « Gratiner au four ». » (« Réglez le four à … » pour
- *   un second préchauffage du même appareil) ;
+ * - four : « 🔥 Allumez le four à 200 °C maintenant : il servira à « Gratiner au four ». » (« Réglez le four à … »
+ *   s'il est encore chaud, « Rallumez le four à … » s'il a été éteint depuis ; « 🔥 Dès que le four est libre,
+ *   réglez-le à … » quand un plat l'occupe encore) ;
  * - part : sur l'étape `partAvant`, sinon la première qui cite un ingrédient que la version retire : « ✂️ Mettez de
  *   côté la part d’Adulte B maintenant, avec une cuillère propre. », case { cle: 'part:<profilId>', libelle } ;
  * - enfant : sur la première étape qui cite un produit en cause : « 🧸 Pour Enfant : <conseil> », sinon la gravité.
@@ -424,14 +430,20 @@ export function rappelsDuDeroule({ sequence = [], prechauffages = [], parts = []
   for (const prechauffage of listeDe(prechauffages)) {
     const servie = listeDe(sequence).find((e) => e.cle === prechauffage.pour);
     const nom = NOMS_APPAREIL[prechauffage.appareil] ?? 'l’appareil';
-    const verbe = vus.has(prechauffage.appareil) ? 'Réglez' : 'Allumez';
+    // « Allumez » la première fois, « Réglez » un appareil encore chaud, « Rallumez » un appareil éteint depuis
+    // (deroule.js › ordreDUnPlat, `etat`) ; sans `etat` : « Réglez » au second préchauffage du même appareil.
+    const verbe = { allume: 'Allumez', regle: 'Réglez', rallume: 'Rallumez' }[prechauffage.etat]
+      ?? (vus.has(prechauffage.appareil) ? 'Réglez' : 'Allumez');
     vus.add(prechauffage.appareil);
     const temperature = estNombre(prechauffage.tempC) ? ` à ${prechauffage.tempC}\u00A0°C` : '';
     const titreServi = servie?.titre ?? prechauffage.titre;
     const usage = titreServi ? `\u00A0: il servira à ${guillemets(titreServi)}` : '';
     ajouter(prechauffage.avant, {
       genre: 'four', appareil: prechauffage.appareil,
-      texte: `🔥 ${verbe} ${nom}${temperature} maintenant${usage}.`,
+      // Un plat occupe encore l'appareil quand on arrive sur cet écran : pas « maintenant ».
+      texte: prechauffage.quandLibre
+        ? `🔥 Dès que ${nom} est libre, ${verbe.toLowerCase()}-le${temperature}${usage}.`
+        : `🔥 ${verbe} ${nom}${temperature} maintenant${usage}.`,
     });
   }
   for (const part of listeDe(parts)) {
@@ -441,7 +453,7 @@ export function rappelsDuDeroule({ sequence = [], prechauffages = [], parts = []
     ajouter(cle, {
       genre: 'part', profilId: part.profil.id,
       texte: `✂️ Mettez de côté ${laPart(part.profil, moi)} maintenant, avec une cuillère propre.`,
-      consigne: part.consigne ? `${sansPoint(part.consigne)}.` : '',
+      consigne: [part.consigne ? `${sansPoint(part.consigne)}.` : '', part.conseil ?? ''].filter(Boolean).join(' '),
       ajouts: listeDe(part.ajouts),
       case: { cle: `part:${part.profil.id}`, libelle: moiMeme ? 'Votre part mise de côté' : `Part ${deNom(nomDe(part.profil))} mise de côté` },
     });
@@ -486,17 +498,29 @@ const frigoJoursDuPlat = (plat) => {
  * `auPlusTard` = jour + jours au frigo (compris) : jours de l'élément de la semaine (conservation), sinon de la fiche,
  * sinon `reglages.frigoJoursDefaut`, sinon 3 ; la même date que le rappel « À congeler » (T4). `auFrigo` : portions à
  * cuisiner de la semaine (sans élément : `portions`, sinon portionsBase) ; `aCongeler` : portions à congeler ;
- * `partFragile` : la version qui se garde moins longtemps (semaine.js › conservation.limite) ; `congelerSiApres` :
+ * `partFragile` : la version qui se garde moins longtemps (semaine.js › conservation.limite ; sans élément, celle des
+ * `versions` mises de côté) ; `congelerSiApres` :
  * `auPlusTard` si la semaine (`finSemaine`) finit après.
  */
-export function finDeCuisson(plat, element, jour, { finSemaine = null, reglages = null, portions = null } = {}) {
+export function finDeCuisson(plat, element, jour, { finSemaine = null, reglages = null, portions = null, versions = null } = {}) {
   const semaine = semaineUtile(element);
   const duFoyer = Number.isInteger(reglages?.frigoJoursDefaut) && reglages.frigoJoursDefaut >= 1 && reglages.frigoJoursDefaut <= 30
     ? reglages.frigoJoursDefaut : FRIGO_JOURS_DEFAUT;
   const jours = (semaine && Number.isInteger(element.conservation?.jours) ? element.conservation.jours : null)
     ?? frigoJoursDuPlat(plat) ?? duFoyer;
   const auPlusTard = jourValide(jour) ? ajouterJours(jour, jours) : null;
-  const limite = semaine ? element.conservation?.limite ?? null : null;
+  // Sans élément de la semaine (« la recette », ou hors semaine) : la version mise de côté qui se garde le moins (`versions`
+  // de pasAPas : [{ profil, style, nomme, frigoJours | variante }]), comme semaine.js › conservation.limite.
+  let limite = semaine ? element.conservation?.limite ?? null : null;
+  if (!semaine) {
+    for (const version of listeDe(versions).filter(estObjet)) {
+      const ecrits = version.frigoJours ?? version.variante?.frigoJours;
+      const joursVersion = Number.isInteger(ecrits) && ecrits >= 1 && ecrits <= 30 ? ecrits : null;
+      if (joursVersion !== null && joursVersion < jours && (!limite || joursVersion < limite.jours)) {
+        limite = { profil: version.profil, style: version.nomme ? version.style ?? null : null, jours: joursVersion };
+      }
+    }
+  }
   const partFragile = limite && jourValide(jour)
     ? { profil: limite.profil, style: limite.style ?? null, jours: limite.jours, auPlusTard: ajouterJours(jour, limite.jours) } : null;
   return {
@@ -545,6 +569,7 @@ export function phrasesDeFin(fin, { moi = null } = {}) {
   } else if (fin?.aCongeler > 0) {
     portions = `${portionsEnMots(fin.aCongeler)} au congélateur.`;
   }
+  if (portions && fin?.depuisLaVeille) portions = `${portions} ${TEXTES_CUISINE.depuisLaVeille}`;
   let partFragile = null;
   if (fin?.partFragile && jourValide(fin.partFragile.auPlusTard)) {
     const emoji = STYLES.includes(fin.partFragile.style) ? `${EMOJIS_STYLE[fin.partFragile.style]} ` : '';
@@ -621,11 +646,13 @@ export function cleTexteCuisine(uid) {
 
 /**
  * Valeur à garder : { etape (clé d'étape, ou 'avant' / 'fin'), titre? (celui de l'étape : sa clé est un numéro, qui
- * peut désigner une autre étape si l'autre téléphone en retire une), portions ('semaine' | 'recette'), cases: [cle], le }.
+ * peut désigner une autre étape si l'autre téléphone en retire une), debut? (heure où l'on a commencé : l'élément de la
+ * semaine est pris ce jour-là, même repris après minuit), portions ('semaine' | 'recette'), cases: [cle], le }.
  */
-export function valeurReprise({ etape = 'avant', titre = null, portions = 'semaine', cases = [], maintenant = Date.now() } = {}) {
+export function valeurReprise({ etape = 'avant', titre = null, portions = 'semaine', cases = [], debut = null, maintenant = Date.now() } = {}) {
   return {
     etape: typeof etape === 'string' ? etape : 'avant',
+    ...(estNombre(debut) ? { debut } : {}),
     ...(typeof titre === 'string' && titre ? { titre } : {}),
     portions: portions === 'recette' ? 'recette' : 'semaine',
     cases: [...new Set(listeDe(cases).filter((c) => typeof c === 'string'))],
@@ -634,7 +661,7 @@ export function valeurReprise({ etape = 'avant', titre = null, portions = 'semai
 }
 
 /**
- * Reprise lue (texte JSON ou objet) → { etape, portions, cases, le } ou null : illisible, plus vieille que
+ * Reprise lue (texte JSON ou objet) → { etape, portions, cases, le, debut? } ou null : illisible, plus vieille que
  * REPRISE_HEURES, ou d'une étape qui n'existe plus (`cles` : clés des étapes du déroulé, plus 'avant' et 'fin' ;
  * alors la reprise repart de « Avant de commencer » en gardant les cases). `etapes` ([{ cle, titre }] du déroulé) :
  * une étape gardée avec son titre est retrouvée par son titre si sa clé désigne désormais une autre étape, sinon
@@ -657,7 +684,11 @@ export function lireReprise(valeur, { maintenant = Date.now(), cles = null, etap
     const meme = liste.find((e) => e.cle === etape && e.titre === lue.titre) ?? liste.find((e) => e.titre === lue.titre);
     etape = meme?.cle ?? 'avant';
   }
-  return { etape, portions: lue.portions === 'recette' ? 'recette' : 'semaine', cases: [...new Set(listeDe(lue.cases).filter((c) => typeof c === 'string'))], le: lue.le };
+  return {
+    etape, portions: lue.portions === 'recette' ? 'recette' : 'semaine',
+    cases: [...new Set(listeDe(lue.cases).filter((c) => typeof c === 'string'))], le: lue.le,
+    ...(estNombre(lue.debut) && lue.debut <= lue.le ? { debut: lue.debut } : {}),
+  };
 }
 
 // ——— Le pas à pas ———
@@ -690,7 +721,9 @@ function versionsHorsSemaine(plat, profils, evaluer) {
   for (const profil of listeDe(profils).filter(estObjet)) {
     if (!mangeParDefaut(plat, profil, { evaluer }).mange) continue;
     const servie = versionServie(plat, profil, null, evaluer);
-    if (servie?.variante) sortie.push({ profil, variante: servie.variante, style: servie.style ?? null, nomme: servie.nomme });
+    if (servie?.variante) {
+      sortie.push({ profil, variante: servie.variante, style: servie.style ?? null, nomme: servie.nomme, frigoJours: servie.frigoJours ?? null });
+    }
   }
   return sortie;
 }
@@ -781,46 +814,77 @@ export function pasAPas(plat, {
       : [];
   }
 
-  // Parts mises de côté : étape `partAvant`, sinon la première qui cite un ingrédient retiré. Hors semaine, la version
-  // que chaque profil aurait (versionServie), sauf pour qui a dit « Jamais » : sa part n'a pas de quantité.
+  // « La veille » : les étapes `veille` et celles dont elles dépendent, dans l'ordre de la recette ; une attente au four,
+  // au Cookeo ou à l'airfryer qu'aucune étape de la veille n'attend reçoit sa fin implicite (« Sortir du four ») et le
+  // conseil de la mettre au frigo pour la nuit.
+  const deLaVeille = etapesDeLaVeille(lecture.etapes);
+  const veilleLues = lecture.etapes.filter((e) => deLaVeille.has(e.n));
+  const attenduesVeille = new Set();
+  for (const e of veilleLues) for (const k of (Array.isArray(e.apres) ? e.apres : (e.n > 1 ? [e.n - 1] : []))) attenduesVeille.add(k);
+  const veille = [];
+  for (const e of veilleLues) {
+    veille.push({
+      cle: String(e.n), n: e.n, implicite: null, ...etapeAffichee(e, { quantites, facteurAussi }),
+      conseils: coeur.has(e.n) ? [CONSEILS.coeur.texte] : [],
+    });
+    const attente = estNombre(e.duree) && e.duree > (estNombre(e.actif) ? e.actif : e.duree);
+    if (APPAREILS_A_SORTIR.includes(e.appareil) && attente && !attenduesVeille.has(e.n)) {
+      const finVeille = FINS_IMPLICITES[e.appareil];
+      veille.push({
+        cle: `${e.n}-fin`, n: null, implicite: e.appareil,
+        ...etapeAffichee({ titre: finVeille.titre, texte: finVeille.texte, pret: e.pret ?? null, duree: 1, actif: 1 }, { quantites, facteurAussi }),
+        ligneAppareil: '', conseils: [TEXTES_CUISINE.frigoVeille],
+      });
+    }
+  }
+
+  // Parts mises de côté : étape `partAvant`, sinon la première qui cite un ingrédient retiré, dans les étapes de la veille
+  // puis dans celles du jour. Hors semaine, la version que chaque profil aurait (versionServie), sauf pour qui a dit
+  // « Jamais » : sa part n'a pas de quantité.
   const versions = semaine
     ? listeDe(element.versions).filter((v) => estObjet(v?.variante) && estObjet(v?.profil))
     : versionsHorsSemaine(plat, profils, evaluer);
-  const avecPart = sequence.find((e) => e.n !== null && parN.get(e.n)?.partAvant);
+  const toutes = [...veille, ...sequence];
+  const avecPart = toutes.find((e) => e.n !== null && parN.get(e.n)?.partAvant);
   const ajoutsDe = new Map(quantites.parts.map((p) => [p.profilId, p.ajouts.map((a) => a.texte)]));
   const parts = versions.map((version) => {
     const retires = new Set(listeDe(version.variante.retirer).map(cleProduit));
-    const etape = avecPart ?? sequence.find((e) => e.citations.some((c) => retires.has(c.cle))) ?? null;
+    const etape = avecPart ?? toutes.find((e) => e.n !== null && e.citations.some((c) => retires.has(c.cle))) ?? null;
+    const laVeille = Boolean(etape) && deLaVeille.has(etape.n);
+    // Une version qui ajoute une volaille, du porc ou de la viande hachée : le conseil de cuisson à cœur va avec sa part.
+    const coeurDeLaPart = hygieneDuPlat({ ingredients: [] }, listeDe(version.variante.ajouter)).includes('coeur');
     return {
-      profil: version.profil, consigne: texte(version.variante.consigne), etape: etape?.cle ?? null, rang: etape?.rang ?? null,
+      profil: version.profil, consigne: texte(version.variante.consigne), etape: etape?.cle ?? null,
+      rang: laVeille ? null : etape?.rang ?? null, veille: laVeille ? etape.titre : null,
+      conseil: coeurDeLaPart ? CONSEILS.coeur.texte : null,
       ajouts: ajoutsDe.get(version.profil.id) ?? listeDe(version.variante.ajouter).filter(estObjet).map((a) => majuscule(texte(a.produit))),
     };
   });
   const precautions = precautionsDuPlat(plat, { element, profils, evaluer });
-  const rappels = rappelsDuDeroule({ sequence, prechauffages, parts, precautions, role, moi });
-  for (const etape of sequence) etape.rappels = rappels.get(etape.cle) ?? [];
+  const rappels = rappelsDuDeroule({ sequence: toutes, prechauffages, parts, precautions, role, moi });
+  for (const etape of toutes) etape.rappels = rappels.get(etape.cle) ?? [];
 
   // Avant de commencer.
   const hygiene = hygieneDuPlat(plat, versions.flatMap((v) => listeDe(v.variante.ajouter)));
   const lignesParts = parts.map((part) => {
     const qui = majuscule(laPart(part.profil, moi));
     const consigne = part.consigne ? `\u00A0: ${sansPoint(part.consigne)}` : '';
+    const conseil = part.conseil ? ` ${part.conseil}` : '';
+    if (part.veille) return `✂️ ${qui} se met de côté la veille, avant ${guillemets(part.veille)}${consigne}.${conseil}`;
     return part.rang !== null
-      ? `✂️ ${qui} se met de côté avant l’étape ${part.rang}${consigne}.`
-      : `✂️ ${qui} se prépare à part${consigne}.`;
+      ? `✂️ ${qui} se met de côté avant l’étape ${part.rang}${consigne}.${conseil}`
+      : `✂️ ${qui} se prépare à part${consigne}.${conseil}`;
   });
-  // « La veille » : les étapes `veille` et celles dont elles dépendent, dans l'ordre de la recette.
-  const deLaVeille = etapesDeLaVeille(lecture.etapes);
-  const veille = lecture.etapes.filter((e) => deLaVeille.has(e.n)).map((e) => ({
-    cle: String(e.n), n: e.n, ...etapeAffichee(e, { quantites, facteurAussi }),
-    conseils: coeur.has(e.n) ? [CONSEILS.coeur.texte] : [],
-  }));
   const service = lecture.etapes.filter((e) => e.auService).map((e) => ({ cle: String(e.n), n: e.n, ...etapeAffichee(e, { quantites, facteurAussi }) }));
   const reunir = { ingredients: [], aussi: null, ustensiles: [] };
+  // Ce que seules les étapes de la veille utilisent (déjà fait, avec ses quantités dans « La veille ») ne se sort pas.
+  const citesLeJour = new Set(lecture.etapes.filter((e) => !deLaVeille.has(e.n)).flatMap((e) => citations(e).map((c) => c.cle)));
+  const citesLaVeille = new Set(veilleLues.flatMap((e) => citations(e).map((c) => c.cle)));
   const parProduit = new Map();
   for (const ligne of quantites.lignes) {
     if (ligne.personne || !ligne.produit) continue;
     const cle = cleProduit(ligne.produit);
+    if (citesLaVeille.has(cle) && !citesLeJour.has(cle)) continue;
     const deja = parProduit.get(cle);
     if (!deja) {
       parProduit.set(cle, { cle: `ing:${cle}`, produit: ligne.produit, mesures: new Map() });
@@ -844,7 +908,7 @@ export function pasAPas(plat, {
   }
   const aussi = [];
   const ustensiles = new Map();
-  for (const etape of lecture.etapes.filter((e) => !e.auService)) {
+  for (const etape of lecture.etapes.filter((e) => !e.auService && !deLaVeille.has(e.n))) {
     for (const chose of listeDe(etape.aussi)) {
       const produit = texte(typeof chose === 'string' ? chose : chose?.produit);
       if (produit && !aussi.some((a) => slug(a) === slug(produit))) aussi.push(produit);
@@ -868,10 +932,16 @@ export function pasAPas(plat, {
   }
 
   // Fin.
-  const jour = jourDe(aujourdhui);
-  const fin = finDeCuisson(plat, choisies === 'semaine' ? element : null, jour, {
-    finSemaine: semaine ? element.semaine?.fin ?? null : null, reglages, portions: choisies === 'recette' ? base : null,
-  });
+  // Une cuisson (étape avec un appareil) faite la veille : la date limite se compte depuis la veille.
+  const cuitLaVeille = veilleLues.some((e) => e.appareil);
+  const jour = cuitLaVeille ? ajouterJours(jourDe(aujourdhui), -1) ?? jourDe(aujourdhui) : jourDe(aujourdhui);
+  const fin = {
+    ...finDeCuisson(plat, choisies === 'semaine' ? element : null, jour, {
+      finSemaine: semaine ? element.semaine?.fin ?? null : null, reglages, portions: choisies === 'recette' ? base : null,
+      versions,
+    }),
+    ...(cuitLaVeille ? { depuisLaVeille: true } : {}),
+  };
 
   return {
     ...sortie,
@@ -898,7 +968,7 @@ export function pasAPas(plat, {
       cuissons,
       enfant: lignesEnfant(precautions, { role }),
       parts: lignesParts,
-      veille,
+      veille: veille.map(({ citations: _c, ...etape }) => etape),
       reunir,
     },
     etapes: sequence.map(({ citations: _c, ...etape }) => etape),

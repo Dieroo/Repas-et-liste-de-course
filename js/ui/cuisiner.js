@@ -51,15 +51,26 @@ function ecrire(cle, valeur) {
   }
 }
 
-/** Ligne d'une étape « La veille » ou « Le jour du repas » : titre, quantités, texte, signe. */
-function etapeCompacte(etape) {
+/**
+ * Ligne d'une étape « La veille » ou « Le jour du repas » : rappels (part mise de côté et sa case, 🧸), titre,
+ * quantités, texte, signe. `caseDe({ cle, texte })` : la case d'une part (gardée sur le téléphone).
+ */
+function etapeCompacte(etape, caseDe = null) {
+  const rappels = (etape.rappels ?? []).map((r) => el('div', { class: `etape-rappel etape-rappel-${r.genre}` },
+    el('p', { class: 'etape-rappel-texte' }, avecPictogramme(r.texte)),
+    r.consigne ? el('p', { class: 'etape-rappel-consigne' }, r.consigne) : null,
+    r.case && caseDe ? el('ul', { class: 'liste-cases' }, caseDe({ cle: r.case.cle, texte: r.case.libelle })) : null));
   return el('li', { class: 'etape-compacte' },
+    ...rappels,
     el('p', { class: 'etape-compacte-titre' }, etape.titre),
     etape.quantites?.length ? el('p', { class: 'etape-compacte-quantites' }, etape.quantites.map((q) => q.texte).join(' · ')) : null,
     etape.texte ? el('p', {}, etape.texte) : null,
     etape.pret ? el('p', { class: 'etape-compacte-pret' }, avecPictogramme(TEXTES_CUISINE.pretQuand(etape.pret))) : null,
     ...(etape.conseils ?? []).map((c) => el('p', { class: 'etape-compacte-conseil' }, c)));
 }
+
+/** Blocs de la carte d'une étape, dans leur ordre : le dernier visible doit se voir au-dessus de la barre. */
+const BLOCS_DE_LA_CARTE = ['texte', 'pret', 'puces', 'parts', 'conseils', 'pendant'].map((c) => `.etape-cuisine-${c}`).join(', ');
 
 /**
  * Écran « Cuisiner pas à pas ». `ctx` : contexte de l'app (`parametre` : le plat ; `tousLesPlats`, `semaines`,
@@ -85,6 +96,7 @@ export function creer(ctx) {
   let cases = new Set();
   let reprise = null; // reprise lue à l'ouverture, en attente de « Reprendre »
   let finLe = null; // heure de « C’est prêt › » (Date), pour « Au frigo avant … » et le jour de cuisson
+  let debutLe = null; // heure de « Commencer › » (Date) : l'élément de la semaine est pris ce jour-là (reprise après minuit)
   let finReprise = false; // page de fin rouverte plus tard (reprise) : « Recommencer » y est proposé
   let modele = null; // dernier modèle « ok » montré
   let parti = false;
@@ -157,9 +169,10 @@ export function creer(ctx) {
   const boutonSuivant = el('button', {
     class: 'bouton bouton-principal bouton-cuisine-suivant', type: 'button', onclick: () => garde() && suivant(),
   });
-  // « ↓ La suite plus bas » au-dessus de la barre : sur une étape, tant que son signe « Prêt quand » (sinon son texte)
-  // est caché sous la barre ; ailleurs, tant que la page dépasse l'écran (montré, pas lu : le lecteur d'écran lit
-  // toute la page).
+  // « ↓ La suite plus bas » au-dessus de la barre : sur une étape, tant que son dernier bloc visible (pendant que ça
+  // cuit, conseil de cuisson à cœur, ce que demande la part, puces de durée et d'appareil, « Prêt quand », texte) est
+  // caché sous la barre ; ailleurs, tant que la page dépasse l'écran (montré, pas lu : le lecteur d'écran lit toute la
+  // page).
   const suite = el('p', { class: 'cuisiner-suite', 'aria-hidden': 'true', hidden: true }, TEXTES_CUISINE.suite);
   const barre = el('div', { class: 'barre-cuisiner' }, suite,
     el('div', { class: 'barre-cuisiner-contenu' }, boutonPrecedent, boutonSuivant));
@@ -169,8 +182,9 @@ export function creer(ctx) {
     if (!noeud.isConnected) return;
     let montre = false;
     if (page === 'etape') {
-      const signe = carte.noeud.querySelector('.etape-cuisine-pret:not([hidden])') ?? carte.noeud.querySelector('.etape-cuisine-texte');
-      montre = Boolean(signe) && signe.getBoundingClientRect().bottom > barre.getBoundingClientRect().top + 1;
+      const blocs = [...carte.noeud.querySelectorAll(BLOCS_DE_LA_CARTE)].filter((bloc) => !bloc.hidden);
+      const dernier = blocs.at(-1);
+      montre = Boolean(dernier) && dernier.getBoundingClientRect().bottom > barre.getBoundingClientRect().top + 1;
     } else if (page !== 'chargement') {
       montre = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight) > 8;
     }
@@ -181,6 +195,11 @@ export function creer(ctx) {
   };
   window.addEventListener('scroll', surDefilement, { passive: true });
   window.addEventListener('resize', surDefilement, { passive: true });
+  // La page change de hauteur sans défilement (police Fraunces arrivée après le premier dessin, « A+ ») : l'indice suit.
+  const observateur = typeof ResizeObserver === 'function' ? new ResizeObserver(surDefilement) : null;
+  observateur?.observe(carte.noeud);
+  observateur?.observe(corpsAvant);
+  document.fonts?.ready?.then(surDefilement).catch(() => {});
 
   const noeud = el('div', { class: 'vue cuisiner' }, entete,
     pageChargement, pageReprise, pageAvant, pageEtape, pageFin, pageSansEtapes, barre);
@@ -205,13 +224,15 @@ export function creer(ctx) {
     if (!courant.semainesChargees) return null;
     const plat = platCourant();
     // Jour de cuisson : celui de « C’est prêt › » une fois la cuisine finie (fin rouverte le lendemain : même date
-    // limite), sinon aujourd'hui.
+    // limite), sinon aujourd'hui. L'élément de la semaine (quantités, portions, parts) : celui du jour où l'on a commencé
+    // (une cuisine reprise ou finie après minuit, le dernier jour de la semaine, garde les quantités de la semaine).
     const jour = finLe ?? courant.aujourdhui;
-    const cles = [plat, courant.semaines, courant.profils, courant.moi, courant.role, choix, courant.reglages, jour];
+    const jourElement = debutLe ?? finLe ?? courant.aujourdhui;
+    const cles = [plat, courant.semaines, courant.profils, courant.moi, courant.role, choix, courant.reglages, jour, jourElement];
     if (memo.cles && cles.every((c, i) => c === memo.cles[i])) return memo.resultat;
     const options = {
       tousLesPlats: courant.tousLesPlats ?? [], profils: courant.profils ?? [], semaines: courant.semaines ?? [],
-      aujourdhui: courant.aujourdhui, reglages: courant.reglages ?? null,
+      aujourdhui: jourElement, reglages: courant.reglages ?? null,
       ...(typeof courant.compat === 'function' ? { evaluer: courant.compat } : {}),
     };
     const element = plat ? elementPourCuisiner(platId, options) : null;
@@ -244,6 +265,8 @@ export function creer(ctx) {
     if (sauvee) {
       portions = sauvee.portions;
       cases = new Set(sauvee.cases);
+      // Commencée (une étape ou la fin) : le jour où l'on a commencé ; reprise d'avant ce champ : sa dernière heure.
+      if (sauvee.etape !== 'avant') debutLe = new Date(sauvee.debut ?? sauvee.le);
     }
     if (sauvee?.etape === 'fin') finLe = new Date(sauvee.le);
     modele = calculer(portions);
@@ -275,7 +298,10 @@ export function creer(ctx) {
     if (!cleEtat) return;
     // La reprise de la fin garde l'heure de « C’est prêt › » (le jour de cuisson), pas celle d'une case touchée après.
     const maintenant = etape === 'fin' && finLe ? finLe.getTime() : Date.now();
-    ecrire(cleEtat, JSON.stringify(valeurReprise({ etape, titre: etape === cleEtape ? titreEtape : null, portions, cases: [...cases], maintenant })));
+    ecrire(cleEtat, JSON.stringify(valeurReprise({
+      etape, titre: etape === cleEtape ? titreEtape : null, portions, cases: [...cases], maintenant,
+      debut: debutLe ? debutLe.getTime() : null,
+    })));
   }
 
   /**
@@ -315,7 +341,10 @@ export function creer(ctx) {
     }
     if (page === 'avant') {
       const premiere = modele?.etapes?.[0];
-      if (premiere) allerALEtape(premiere);
+      if (premiere) {
+        if (!debutLe) debutLe = new Date();
+        allerALEtape(premiere);
+      }
       return;
     }
     if (page === 'etape') {
@@ -325,7 +354,11 @@ export function creer(ctx) {
       if (suivante) {
         allerALEtape(suivante);
       } else {
-        finLe = new Date();
+        // Une fin déjà atteinte (‹ puis ›, ou fin rouverte le lendemain) garde son heure : le jour de cuisson et
+        // « Au frigo avant … » ne bougent pas. Le modèle est recalculé aussitôt sur ce jour.
+        if (!finLe) finLe = new Date();
+        const nouveau = calculer(portions);
+        if (nouveau?.etat === 'ok') modele = nouveau;
         sauver('fin');
         montrer('fin');
       }
@@ -364,6 +397,7 @@ export function creer(ctx) {
     if (!garde()) return;
     reprise = null;
     finLe = null;
+    debutLe = null;
     finReprise = false;
     vueFin = null;
     cases = new Set();
@@ -400,6 +434,8 @@ export function creer(ctx) {
     noeud.classList.toggle('texte-grand', grand);
     boutonTaille.setAttribute('aria-pressed', String(grand));
     if (cleTaille) ecrire(cleTaille, grand ? 'grand' : null);
+    // Le texte grandit (ou rapetisse) : « ↓ La suite plus bas » suit.
+    surDefilement();
   }
 
   /** Retour d'où l'on vient (fiche, Semaine), sinon à la fiche ; l'étape reste gardée sur le téléphone. */
@@ -479,7 +515,7 @@ export function creer(ctx) {
       avant.veille.length
         ? el('section', { class: 'cuisiner-bloc' },
           el('h2', {}, TEXTES_CUISINE.laVeille),
-          el('ol', { class: 'liste-compacte' }, avant.veille.map(etapeCompacte)))
+          el('ol', { class: 'liste-compacte' }, avant.veille.map((etape) => etapeCompacte(etape, caseDe))))
         : null,
       el('section', { class: 'cuisiner-bloc' },
         el('h2', {}, TEXTES_CUISINE.sortirToutCeQuIlFaut),
@@ -511,7 +547,7 @@ export function creer(ctx) {
       m.service.length
         ? el('section', { class: 'cuisiner-bloc' },
           el('h2', {}, TEXTES_CUISINE.jourDuRepas),
-          el('ol', { class: 'liste-compacte' }, m.service.map(etapeCompacte)))
+          el('ol', { class: 'liste-compacte' }, m.service.map((etape) => etapeCompacte(etape))))
         : null,
       finReprise ? boutonRecommencerFin : null,
     ].filter(Boolean));
@@ -614,6 +650,7 @@ export function creer(ctx) {
       allume.liberer();
       window.removeEventListener('scroll', surDefilement);
       window.removeEventListener('resize', surDefilement);
+      observateur?.disconnect();
       if (attenteSuite) cancelAnimationFrame(attenteSuite);
     },
   };
