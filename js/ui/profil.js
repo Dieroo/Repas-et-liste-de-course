@@ -181,12 +181,14 @@ function lignesVersion(version, versionPrete) {
  * `onInstructions()`, panneau déjà fermé) ; vrai par défaut, sans rappel.
  * `demandes` : nombre de demandes à traiter (gestionnaire hors aperçu ; entrée « 📬 Demandes · N » s'il y en a) ;
  * `onDemandes()` ouvre l'écran Demandes, panneau déjà fermé.
+ * `onAccueil()` (T6-0) : « 👋 Revoir la présentation », les deux rôles, aperçu compris, juste avant « Se
+ * déconnecter » ; absent si null (la présentation est déjà à l'écran).
  */
 export function ouvrirProfil(dialogue, {
   utilisateur, role, apercu, moi = null, aRelier = [], avecProfils = false,
   onReglages, onAjouterRecettes, onApercu, onDeconnecter, onQuiEtesVous, onDelier,
   sauvegarde = null, onSauvegarder, instructionsAJour = true, onInstructions, version = null, versionPrete = false,
-  demandes = 0, onDemandes,
+  demandes = 0, onDemandes, onAccueil = null,
 }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
@@ -216,6 +218,7 @@ export function ouvrirProfil(dialogue, {
       role === 'gestionnaire'
         ? bouton(apercu ? 'Quitter l’aperçu' : `👀 Aperçu de la vue «\u00A0${LIBELLES_ROLE.courses}\u00A0»`, () => onApercu(!apercu))
         : null,
+      onAccueil ? bouton('👋 Revoir la présentation', onAccueil) : null,
       bouton('Se déconnecter', onDeconnecter),
       el('button', { class: 'bouton bouton-texte', type: 'button', onclick: fermer }, 'Fermer'),
       ...lignesVersion(version, versionPrete),

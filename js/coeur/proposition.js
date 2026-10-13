@@ -1,0 +1,777 @@
+// Proposer les plats de la semaine (T4-0, CLAUDE.md §9 Proposition) : « ✨ Proposer 4 plats » remplit une semaine
+// sans plat avec des plats du foyer qui ont leur recette ; « 🍰 Proposer des desserts » ajoute à part le nombre de
+// desserts choisi ; « 🔄 Une autre idée » change un plat. Logique pure : ni DOM, ni Firebase, ni heure, ni hasard du
+// téléphone (le jour vient de la cible, le départage d'une graine tirée des données : deux téléphones aux mêmes
+// données proposent la même chose).
+// - Filtre dur : jamais un plat sans recette, de la corbeille, un apéro, une préparation de chaque semaine, un autre
+//   type que celui demandé, un plat déjà dans la cible, un plat refusé pendant la visite (ancien plat d'un 🔄), un plat
+//   noté « Jamais » par un adulte, ni un plat dont personne ne mange.
+// - Paliers : 1 personne n'est écarté et pas mangé récemment (JOURS_RECENTS avant ou après la cible) ; 2 récent ;
+//   3 quelqu'un est écarté (pas de version qui convient, 🧸 « Pas avant… », « Jamais » de l'enfant), ECARTES_MAX par
+//   semaine, plats de la cible compris.
+// - Groupes (D4) : la moitié des emplacements pour des plats aimés, l'autre pour des plats à découvrir ; un plat noté
+//   sous 3 par un mangeur ne prend jamais un emplacement de groupe.
+// - Score : moyenne des notes des mangeurs (non noté = 3) + ancienneté − variété (même protéine, même forme) + un
+//   départage faible (BRUIT_MAX), ordre total.
+// - Aucune écriture ici : semaine.js › ecrituresAjoutGroupe, ecrituresRetraitGroupe, ecrituresRemplacement.
+import {
+  RANGS_STATUT, aDesPlats, ajouterJours, ecartJours, estDansLaSemaine, jourDeDerniereFois, jourValide, lireSemaine,
+  mangeParDefaut, peutAllerDansLaSemaine, platsDeLaSemaine, statutSemaine, texteDates,
+} from './semaine.js';
+import { estNote, melanger, noteDe, noteRetenue } from './notes.js';
+import { aSaRecette, categorieDuPlat, typeDe } from './plats.js';
+import { estEnfant, trierProfils } from './profils.js';
+import { evaluer as evaluerParDefaut } from './compatibilite.js';
+import { marqueursEffectifs } from './vocabulaire.js';
+
+// ——— Constantes ———
+
+/** Plats proposés sans historique, pour 7 jours. */
+export const NB_PLATS_DEFAUT = 4;
+/** Bornes du nombre de plats pour 7 jours, au prorata des jours de la cible (arrondi), plafond NB_PLATS_PLAFOND. */
+export const NB_PLATS_MIN = 3;
+export const NB_PLATS_MAX = 6;
+export const NB_PLATS_PLAFOND = 10;
+/** En dessous, pas de bouton ✨ (une proposition d'un seul plat est pauvre). */
+export const PROPOSITION_MIN = 2;
+/** Semaines regardées pour le nombre de plats. */
+export const SEMAINES_HISTOIRE = 3;
+/** Fenêtre « mangé récemment », avant ou après la cible. */
+export const JOURS_RECENTS = 14;
+/** Plats que quelqu'un ne mange pas, par semaine (plats de la cible compris, desserts compris). */
+export const ECARTES_MAX = 1;
+/** Ancienneté : + BONUS_PAR_SEMAINE par semaine depuis le dernier passage, SEMAINES_MAX au plus ; jamais au menu : BONUS_JAMAIS. */
+export const BONUS_PAR_SEMAINE = 0.1;
+export const SEMAINES_MAX = 8;
+export const BONUS_JAMAIS = 0.4;
+/** Raison « pas au menu depuis longtemps ». */
+export const SEMAINES_ANCIEN = 6;
+/** Variété : par plat de même protéine principale, puis par plat de même forme, plafonné. */
+export const MALUS_VARIETE = 0.4;
+export const MALUS_VARIETE_MAX = 0.8;
+/** Départage seulement : jamais assez pour renverser un écart de goût (0,25). */
+export const BRUIT_MAX = 0.15;
+/** Notes : aimé à partir de NOTE_AIMEE, mal noté sous NOTE_PLANCHER. */
+export const NOTE_AIMEE = 4;
+export const NOTE_PLANCHER = 3;
+/** Desserts (D6) : choix de 1 à DESSERTS_MAX dans la feuille « Combien de desserts ? ». */
+export const DESSERTS_MAX = 4;
+
+const ID_SUR = /^[a-z0-9-]+$/;
+const PROTEINES = ['poisson', 'boeuf', 'porc', 'volaille', 'agneau', 'viande'];
+const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
+const listeDe = (valeur) => (Array.isArray(valeur) ? valeur : []);
+const reduire = (texte) => (typeof texte === 'string' ? texte.replace(/\s+/g, ' ').trim() : '');
+/** Arrondi au milliardième : des scores égaux restent égaux (0,1 + 0,2). */
+const arrondi = (valeur) => Math.round(valeur * 1e9) / 1e9;
+const parId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const comparerNoms = new Intl.Collator('fr', { sensitivity: 'base' }).compare;
+
+// ——— Cible et semaines ———
+
+/** Cible lisible → { id, debut, fin, jours, plats } (plats : ceux de la cible donnée, sinon de son document), ou null. */
+function lireCible(cible, semaines) {
+  if (!estObjet(cible) || typeof cible.id !== 'string' || !ID_SUR.test(cible.id)) return null;
+  const duree = ecartJours(cible.debut, cible.fin);
+  if (duree === null || duree < 0 || duree + 1 > 14) return null;
+  const document = listeDe(semaines).find((s) => estObjet(s) && s.id === cible.id) ?? null;
+  const plats = estObjet(cible.plats) ? cible.plats : estObjet(document?.plats) ? document.plats : {};
+  return { id: cible.id, debut: cible.debut, fin: cible.fin, jours: duree + 1, plats };
+}
+
+/** Semaines lisibles (lireSemaine). */
+const lisibles = (semaines) => listeDe(semaines).map(lireSemaine).filter(Boolean);
+
+/** Profils lus, dans l'ordre d'affichage. */
+const profilsLus = (profils) => trierProfils(listeDe(profils).filter((p) => estObjet(p) && typeof p.id === 'string' && p.id !== ''));
+
+/**
+ * Adulte du foyer (D3-A) : un profil qui a une adresse et une portion entière. Son « Jamais » exclut le plat ; celui
+ * d'un profil sans adresse ou de portion inférieure à 1 (l'enfant, noté par ses parents) l'écarte seulement.
+ */
+function estAdulte(profil) {
+  return reduire(profil?.email) !== '' && !estEnfant(profil);
+}
+
+// ——— Historique ———
+
+/**
+ * Passages au menu de chaque plat, hors cible → Map<platId, [{ debut, fin }]> : intervalles des semaines qui ont des
+ * plats (aDesPlats) où il est « dans la semaine » (non retiré), et [jour, jour + 6] de sa `derniereFois` lisible
+ * (jourDeDerniereFois). Avant ou après la cible.
+ */
+export function historiqueDesPlats(semaines, tousLesPlats, { cible = null } = {}) {
+  const passages = new Map();
+  const ajouter = (platId, passage) => {
+    if (!passages.has(platId)) passages.set(platId, []);
+    passages.get(platId).push(passage);
+  };
+  const idCible = estObjet(cible) ? cible.id : null;
+  for (const semaine of lisibles(semaines)) {
+    if (semaine.id === idCible || !aDesPlats(semaine)) continue;
+    for (const [platId, entree] of Object.entries(semaine.plats)) {
+      if (ID_SUR.test(platId) && estDansLaSemaine(entree)) ajouter(platId, { debut: semaine.debut, fin: semaine.fin });
+    }
+  }
+  for (const plat of listeDe(tousLesPlats)) {
+    if (!estObjet(plat) || typeof plat.id !== 'string') continue;
+    const jour = jourDeDerniereFois(plat.derniereFois);
+    if (jour) ajouter(plat.id, { debut: jour, fin: ajouterJours(jour, 6) });
+  }
+  return passages;
+}
+
+/** Écart en jours entre la cible et le passage le plus proche (0 s'il la touche) ; null sans passage lisible. */
+export function ecartAuMenu(passages, cible) {
+  if (!estObjet(cible) || !jourValide(cible.debut) || !jourValide(cible.fin)) return null;
+  let ecart = null;
+  for (const p of listeDe(passages)) {
+    if (!jourValide(p?.debut) || !jourValide(p?.fin)) continue;
+    let e = 0;
+    if (p.fin < cible.debut) e = ecartJours(p.fin, cible.debut);
+    else if (p.debut > cible.fin) e = ecartJours(cible.fin, p.debut);
+    if (ecart === null || e < ecart) ecart = e;
+  }
+  return ecart;
+}
+
+/**
+ * Graine tirée des données seules : `proposer|<debut>|<fin>|<nombre d'entrées retire: true de la cible>` ; les plats
+ * de la cible viennent de `cible.plats`, sinon de son document dans `semaines`. Deux téléphones aux mêmes données
+ * proposent la même chose ; un « Annuler » (ou un plat retiré) fait avancer la graine. '' pour une cible illisible.
+ */
+export function graineProposition(cible, semaines = []) {
+  const lue = lireCible(cible, semaines);
+  if (!lue) return '';
+  const retires = Object.values(lue.plats).filter((e) => estObjet(e) && e.retire === true).length;
+  return `proposer|${lue.debut}|${lue.fin}|${retires}`;
+}
+
+// ——— Nombre voulu ———
+
+/** Plats actifs d'une semaine d'un type : `ok` ou `sansRecette`, dont quelqu'un mange (ni corbeille ni « personne »). */
+function compterActifs(semaine, type, { tousLesPlats, profils, evaluer }) {
+  if (!semaine) return 0;
+  const avecProfils = profilsLus(profils).length > 0;
+  return platsDeLaSemaine(semaine, { tousLesPlats, profils, evaluer })
+    .filter((e) => (e.etat === 'ok' || e.etat === 'sansRecette') && typeDe(e.plat) === type
+      && (!avecProfils || e.mangeurs.some((m) => m.mange)))
+    .length;
+}
+
+/** Semaines d'avant la cible (début plus tôt), la plus récente d'abord. */
+function semainesAvant(semaines, cible) {
+  return lisibles(semaines).filter((s) => s.id !== cible.id && s.debut < cible.debut)
+    .sort((a, b) => parId(b.debut, a.debut) || (b.creeLe ?? -Infinity) - (a.creeLe ?? -Infinity) || parId(b.id, a.id));
+}
+
+const auProrata = (n, jours) => Math.round((n * jours) / 7);
+
+/**
+ * Nombre de plats voulu → { voulu, presents, aProposer: max(0, voulu − presents) } : médiane des SEMAINES_HISTOIRE
+ * dernières semaines d'avant la cible qui ont des plats (type `plat`, `ok` ou `sansRecette`, ni corbeille ni
+ * « personne »), ramenée à 7 jours, puis au prorata des jours de la cible ; NB_PLATS_DEFAUT sans historique (au
+ * prorata) ; borné entre NB_PLATS_MIN et NB_PLATS_MAX au prorata (1 et NB_PLATS_PLAFOND au plus). `presents` : plats
+ * de type `plat` actifs de la cible. Les desserts se comptent à part (nombreDeDessertsParDefaut). Cible illisible :
+ * { voulu: 0, presents: 0, aProposer: 0 }.
+ */
+export function nombreAProposer(semaines, cible, { tousLesPlats = [], profils = [], evaluer = evaluerParDefaut } = {}) {
+  const lue = lireCible(cible, semaines);
+  if (!lue) return { voulu: 0, presents: 0, aProposer: 0 };
+  const options = { tousLesPlats, profils, evaluer };
+  const comptes = [];
+  for (const semaine of semainesAvant(semaines, lue)) {
+    const n = compterActifs(semaine, 'plat', options);
+    const jours = ecartJours(semaine.debut, semaine.fin) + 1;
+    if (n > 0) comptes.push((n * 7) / jours);
+    if (comptes.length >= SEMAINES_HISTOIRE) break;
+  }
+  comptes.sort((a, b) => a - b);
+  const milieu = Math.floor(comptes.length / 2);
+  const mediane = comptes.length % 2 ? comptes[milieu] : (comptes[milieu - 1] + comptes[milieu]) / 2;
+  const min = Math.max(1, auProrata(NB_PLATS_MIN, lue.jours));
+  const max = Math.min(NB_PLATS_PLAFOND, Math.max(min, auProrata(NB_PLATS_MAX, lue.jours)));
+  const brut = comptes.length ? Math.round(arrondi((mediane * lue.jours) / 7)) : auProrata(NB_PLATS_DEFAUT, lue.jours);
+  const voulu = Math.min(max, Math.max(min, brut));
+  const presents = compterActifs({ id: lue.id, debut: lue.debut, fin: lue.fin, plats: lue.plats }, 'plat', options);
+  return { voulu, presents, aProposer: Math.max(0, voulu - presents) };
+}
+
+// ——— Candidats ———
+
+/** Protéine principale d'une recette : poisson, boeuf, porc, volaille, agneau, viande (la première), sinon vegetal ; null sans ingrédient. */
+function proteineDe(plat) {
+  if (!aSaRecette(plat)) return null;
+  const marqueurs = new Set();
+  for (const ingredient of plat.ingredients) for (const m of marqueursEffectifs(ingredient)) marqueurs.add(m);
+  if (marqueurs.has('fruits_de_mer')) marqueurs.add('poisson');
+  if (marqueurs.has('charcuterie')) marqueurs.add('porc');
+  return PROTEINES.find((p) => marqueurs.has(p)) ?? 'vegetal';
+}
+
+/** Forme d'un plat : gratin ou pâtes (plats.js › categorieDuPlat), sinon null (le « mijoté » par défaut ne compte pas). */
+function formeDe(plat) {
+  const categorie = categorieDuPlat(plat);
+  return categorie === 'gratin' || categorie === 'pates' ? categorie : null;
+}
+
+const ancienneteDe = (ecart) => (ecart === null ? BONUS_JAMAIS
+  : Math.min(Math.floor(ecart / 7), SEMAINES_MAX) * BONUS_PAR_SEMAINE);
+const estRecent = (ecart) => ecart !== null && ecart <= JOURS_RECENTS;
+
+/**
+ * Analyse d'un plat pour la cible → { rejet, profilId? } (filtre dur, ou personne n'en mange) ou le candidat. `rejet` :
+ * 'recettes' (sans recette), 'jamais' (« Jamais » d'un adulte), 'personne' (aucun mangeur ; `raison` du premier
+ * écarté). Le type, la corbeille, la cible et les refusés sont filtrés avant.
+ */
+function analyserPlat(plat, { profils, evaluer, passages, cible }) {
+  if (!aSaRecette(plat)) return { rejet: 'recettes' };
+  const mangeurs = [];
+  const ecartes = [];
+  for (const profil of profils) {
+    const defaut = mangeParDefaut(plat, profil, { evaluer });
+    if (defaut.mange) {
+      mangeurs.push(profil);
+      continue;
+    }
+    if (defaut.raison === 'jamais') {
+      if (estAdulte(profil)) return { rejet: 'jamais' };
+      ecartes.push({ profilId: profil.id, raison: 'jamaisEnfant' });
+    } else ecartes.push({ profilId: profil.id, raison: defaut.raison === 'age' ? 'age' : 'version' });
+  }
+  if (profils.length && !mangeurs.length) return { rejet: 'personne', ecartes };
+  const ecart = ecartAuMenu(passages.get(plat.id), cible);
+  const notes = mangeurs.map((p) => noteDe(plat, p.id));
+  const plancher = notes.some((n) => n !== null && n < NOTE_PLANCHER);
+  const aimePar = mangeurs.filter((p) => (noteDe(plat, p.id) ?? -1) >= NOTE_AIMEE).map((p) => p.id);
+  const jamaisAuMenu = ecart === null;
+  let groupe = 'autre';
+  if (!plancher && aimePar.length) groupe = 'aime';
+  else if (!plancher && (jamaisAuMenu || mangeurs.some((p) => estAdulte(p) && !estNote(plat, p.id)))) groupe = 'decouvrir';
+  const moyenne = mangeurs.length
+    ? arrondi(mangeurs.reduce((s, p) => s + noteRetenue(plat, p.id), 0) / mangeurs.length) : 3;
+  const recent = estRecent(ecart);
+  return {
+    platId: plat.id, plat, palier: ecartes.length ? 3 : recent ? 2 : 1, groupe, jamaisAuMenu, moyenne,
+    mangeurs: mangeurs.map((p) => p.id), ecartes, ecart, recent, aimePar,
+    proteine: proteineDe(plat), forme: formeDe(plat), base: arrondi(moyenne + ancienneteDe(ecart)),
+  };
+}
+
+/**
+ * Tout ce que la proposition sait de la cible → { cible, profils, actifs (Set des plats actifs de la cible),
+ * elementsCible (platsDeLaSemaine), passages, candidats (type), rejets, ecartesCible }. `exclure` : plat de la cible
+ * qui ne compte pas (l'ancien plat d'un 🔄).
+ */
+function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses, exclure = null }) {
+  const lue = lireCible(cible, semaines);
+  if (!lue) return null;
+  const lusProfils = profilsLus(profils);
+  const evaluation = typeof evaluer === 'function' ? evaluer : evaluerParDefaut;
+  const actifs = new Set(Object.keys(lue.plats).filter((id) => ID_SUR.test(id) && estDansLaSemaine(lue.plats[id])));
+  const elementsCible = platsDeLaSemaine({ id: lue.id, debut: lue.debut, fin: lue.fin, plats: lue.plats },
+    { tousLesPlats, profils: lusProfils, evaluer: evaluation }).filter((e) => e.platId !== exclure);
+  // Un plat de la cible où quelqu'un est écarté par sa raison (pas une case décochée à la main ; une case cochée à la
+  // main le fait manger) ; ni ⏳ ni corbeille.
+  const ecartesCible = elementsCible.filter((e) => e.etat === 'ok' && e.mangeurs.some((m) => !m.mange && m.raison)).length;
+  const passages = historiqueDesPlats(semaines, tousLesPlats, { cible: lue });
+  const refusesSet = new Set(listeDe(refuses));
+  const candidats = [];
+  const rejets = [];
+  const tries = listeDe(tousLesPlats).filter((p) => estObjet(p) && typeof p.id === 'string' && ID_SUR.test(p.id))
+    .sort((a, b) => parId(a.id, b.id));
+  const vus = new Set();
+  for (const plat of tries) {
+    if (vus.has(plat.id)) continue;
+    vus.add(plat.id);
+    if (!peutAllerDansLaSemaine(plat) || typeDe(plat) !== type || actifs.has(plat.id) || refusesSet.has(plat.id)) continue;
+    const analyse = analyserPlat(plat, { profils: lusProfils, evaluer: evaluation, passages, cible: lue });
+    if (analyse.rejet) rejets.push(analyse);
+    else candidats.push(analyse);
+  }
+  return { cible: lue, profils: lusProfils, evaluer: evaluation, actifs, elementsCible, passages, candidats, rejets, ecartesCible };
+}
+
+/**
+ * Plats proposables pour la cible (filtre dur), avec palier, groupe et score de base → [{ platId, plat, palier: 1|2|3,
+ * groupe: 'aime'|'decouvrir'|'autre', jamaisAuMenu, moyenne, mangeurs: [profilId], ecartes: [{ profilId, raison:
+ * 'version'|'age'|'jamaisEnfant' }], ecart: n|null, recent, aimePar: [profilId], proteine, forme, base }], triés par
+ * identifiant. `type` : 'plat' | 'dessert' ; `refuses` : ids écartés pendant la visite (ancien plat d'un 🔄).
+ */
+export function candidats(tousLesPlats, { cible, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [] } = {}) {
+  return contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses })?.candidats ?? [];
+}
+
+// ——— Score et remplissage ———
+
+/** Emplacements (D4-A) : n → ⌈n/2⌉ 'aime' puis 'decouvrir'. 4 → ['aime', 'aime', 'decouvrir', 'decouvrir']. */
+export function emplacements(n) {
+  const nombre = Number.isInteger(n) && n > 0 ? n : 0;
+  const aimes = Math.ceil(nombre / 2);
+  return Array.from({ length: nombre }, (_, i) => (i < aimes ? 'aime' : 'decouvrir'));
+}
+
+/** Rang de départage de chaque candidat (de 0 à 1) : sa place dans les identifiants triés, mélangés par la graine. */
+function rangsDeDepartage(liste, graine) {
+  const ids = liste.map((c) => c.platId).sort(parId);
+  const melanges = melanger(ids, graine);
+  const diviseur = Math.max(1, melanges.length - 1);
+  return new Map(melanges.map((id, i) => [id, i / diviseur]));
+}
+
+/** Score face aux plats déjà là (cible du même type et plats retenus) : base − variété + départage. */
+function scoreDe(candidat, presents, rang) {
+  const memeProteine = candidat.proteine ? presents.filter((p) => p.proteine === candidat.proteine).length : 0;
+  const memeForme = candidat.forme ? presents.filter((p) => p.forme === candidat.forme).length : 0;
+  return arrondi(candidat.base
+    - Math.min(MALUS_VARIETE_MAX, MALUS_VARIETE * memeProteine)
+    - Math.min(MALUS_VARIETE_MAX, MALUS_VARIETE * memeForme)
+    + BRUIT_MAX * (rang.get(candidat.platId) ?? 0));
+}
+
+const ecartOuInfini = (c) => (c.ecart === null ? Infinity : c.ecart);
+/** Ordre d'un palier (ordre total) : 1 le score ; 2 le plus grand écart puis le score ; 3 le moins d'écartés, pas récent, puis le score. */
+function comparerDansLePalier(palier) {
+  return (a, b) => {
+    if (palier === 2 && ecartOuInfini(a) !== ecartOuInfini(b)) return ecartOuInfini(b) - ecartOuInfini(a);
+    if (palier === 3) {
+      if (a.ecartes.length !== b.ecartes.length) return a.ecartes.length - b.ecartes.length;
+      if (a.recent !== b.recent) return Number(a.recent) - Number(b.recent);
+    }
+    return b.score - a.score || ecartOuInfini(b) - ecartOuInfini(a)
+      || comparerNoms(reduire(a.plat.nom), reduire(b.plat.nom)) || parId(a.platId, b.platId);
+  };
+}
+
+/** Présents pour la variété : plats de la cible du type demandé (ni corbeille ni introuvables). */
+function presentsDeLaCible(ctx, type) {
+  return ctx.elementsCible.filter((e) => e.plat && e.etat !== 'corbeille' && e.etat !== 'absent' && typeDe(e.plat) === type)
+    .map((e) => ({ proteine: proteineDe(e.plat), forme: formeDe(e.plat) }));
+}
+
+/**
+ * Meilleur candidat de `pool` au palier `palier`, face aux `presents` (variété recalculée à chaque emplacement) ; null
+ * si le pool est vide.
+ */
+function meilleur(pool, palier, presents, rang) {
+  if (!pool.length) return null;
+  return pool.map((c) => ({ ...c, score: scoreDe(c, presents, rang) })).sort(comparerDansLePalier(palier))[0];
+}
+
+/** Raison d'un plat retenu → { code: 'aime', profils } | { code: 'decouvrir' | 'ancien' | 'recent' | 'autre' }. */
+function raisonDe(candidat) {
+  if (candidat.groupe === 'aime') return { code: 'aime', profils: [...candidat.aimePar] };
+  if (candidat.groupe === 'decouvrir') return { code: 'decouvrir' };
+  if (candidat.ecart !== null && Math.floor(candidat.ecart / 7) >= SEMAINES_ANCIEN) return { code: 'ancien' };
+  return { code: candidat.recent ? 'recent' : 'autre' };
+}
+
+const choisi = (c) => ({
+  platId: c.platId, groupe: c.groupe, palier: c.palier, raison: raisonDe(c), ecartes: c.ecartes.map((e) => ({ ...e })),
+});
+
+/**
+ * Cause d'une proposition pauvre → { cause, profilCause } : parmi les plats du type qui ne sont pas au palier 1 (sans
+ * recette, « Jamais », quelqu'un écarté, récents), la raison la plus fréquente ; à égalité : versions, age, recettes,
+ * jamais, recents. `versions` et `age` nomment le profil le plus souvent écarté (ordre des profils à égalité).
+ * 'catalogue' si rien de tout cela.
+ */
+function causeDe(ctx) {
+  const comptes = { versions: 0, age: 0, recettes: 0, jamais: 0, recents: 0 };
+  const parProfil = { versions: new Map(), age: new Map() };
+  const compterEcarte = (ecarte) => {
+    if (!ecarte) return;
+    const cause = ecarte.raison === 'version' ? 'versions' : ecarte.raison === 'age' ? 'age' : 'jamais';
+    comptes[cause] += 1;
+    if (parProfil[cause]) parProfil[cause].set(ecarte.profilId, (parProfil[cause].get(ecarte.profilId) ?? 0) + 1);
+  };
+  for (const rejet of ctx.rejets) {
+    if (rejet.rejet === 'personne') compterEcarte(rejet.ecartes[0]);
+    else comptes[rejet.rejet] += 1;
+  }
+  for (const c of ctx.candidats) {
+    if (c.palier === 3) compterEcarte(c.ecartes[0]);
+    else if (c.palier === 2) comptes.recents += 1;
+  }
+  const ordre = ['versions', 'age', 'recettes', 'jamais', 'recents'];
+  const cause = ordre.reduce((meilleure, c) => (comptes[c] > (meilleure ? comptes[meilleure] : 0) ? c : meilleure), null);
+  if (!cause) return { cause: 'catalogue', profilCause: null };
+  let profilCause = null;
+  if (parProfil[cause]) {
+    let max = 0;
+    for (const profil of ctx.profils) {
+      const n = parProfil[cause].get(profil.id) ?? 0;
+      if (n > max) [max, profilCause] = [n, profil.id];
+    }
+  }
+  return { cause, profilCause };
+}
+
+/** Remplit les emplacements (3.6 du plan) : palier par palier, groupe d'abord, puis tous groupes ; palier 3 limité. */
+function remplir(ctx, nombre, graine, type) {
+  const slots = emplacements(nombre);
+  const pris = new Array(slots.length).fill(null);
+  const utilises = new Set();
+  const rang = rangsDeDepartage(ctx.candidats, graine);
+  const presents = presentsDeLaCible(ctx, type);
+  let ecartes = ctx.ecartesCible;
+  for (const palier of [1, 2, 3]) {
+    for (const parGroupe of [true, false]) {
+      for (let i = 0; i < slots.length; i += 1) {
+        if (pris[i]) continue;
+        if (palier === 3 && ecartes >= ECARTES_MAX) break;
+        const pool = ctx.candidats.filter((c) => c.palier === palier && !utilises.has(c.platId)
+          && (!parGroupe || c.groupe === slots[i]));
+        const retenu = meilleur(pool, palier, presents, rang);
+        if (!retenu) continue;
+        pris[i] = retenu;
+        utilises.add(retenu.platId);
+        presents.push({ proteine: retenu.proteine, forme: retenu.forme });
+        if (palier === 3) ecartes += 1;
+      }
+    }
+  }
+  return pris.filter(Boolean);
+}
+
+/** Proposition vide d'une cible illisible ou d'un nombre nul. */
+const sansRien = (type, nombre) => ({
+  type, ids: [], choisis: [], manque: Math.max(0, nombre), code: 'aucun', cause: null, profilCause: null,
+});
+
+function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, graine, refuses }, type) {
+  const voulu = Number.isInteger(nombre) && nombre > 0 ? nombre : 0;
+  const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses });
+  if (!ctx || !voulu) return sansRien(type, voulu);
+  const retenus = remplir(ctx, voulu, graine, type);
+  const manque = voulu - retenus.length;
+  const code = !retenus.length ? 'aucun' : manque > 0 ? 'peu' : 'ok';
+  const { cause, profilCause } = code === 'ok' ? { cause: null, profilCause: null } : causeDe(ctx);
+  return { type, ids: retenus.map((c) => c.platId), choisis: retenus.map(choisi), manque, code, cause, profilCause };
+}
+
+/**
+ * La proposition de plats (type `plat` seulement : les desserts ont leur bouton, proposerDesserts) → { type: 'plat',
+ * ids: [platId…] (ordre des emplacements : aimés d'abord ; ordre d'ajout, donc des cartes), choisis: [{ platId, groupe,
+ * palier, raison, ecartes }], manque, code: 'ok' | 'peu' | 'aucun', cause: null | 'versions' | 'age' | 'recettes' |
+ * 'jamais' | 'recents' | 'catalogue', profilCause }. `nombre` : nombreAProposer().aProposer par défaut ; `graine` :
+ * graineProposition(cible) par défaut. `plafond` (facultatif) : le nombre dit par le libellé du bouton touché ; la
+ * proposition vise `nombre` (code 'peu' et sa cause si les plats manquent, même quand le libellé le savait déjà), et
+ * si elle trouve plus que `plafond` (plats arrivés depuis l'affichage), elle est refaite pour `plafond` plats.
+ * Déterministe, indépendante de l'ordre des plats en entrée ; rien n'est modifié.
+ */
+export function proposerPlats(tousLesPlats, {
+  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, nombre = null, graine = null, refuses = [],
+  plafond = null,
+} = {}) {
+  const n = nombre ?? nombreAProposer(semaines, cible, { tousLesPlats, profils, evaluer }).aProposer;
+  const options = { cible, semaines, profils, evaluer, graine: graine ?? graineProposition(cible, semaines), refuses };
+  const resultat = proposer(tousLesPlats, { ...options, nombre: n }, 'plat');
+  if (!Number.isInteger(plafond) || plafond < 0 || resultat.ids.length <= plafond) return resultat;
+  return proposer(tousLesPlats, { ...options, nombre: plafond }, 'plat');
+}
+
+/**
+ * Desserts (D6, « 🍰 Proposer des desserts ») : même forme que proposerPlats (`type: 'dessert'`), candidats de type
+ * `dessert` seulement ; mêmes paliers, groupes, score et départage ; la limite du palier 3 compte les plats de la cible ;
+ * graine `graineProposition(cible) + '|desserts'` par défaut ; jamais un plat ni un dessert déjà actif dans la cible.
+ */
+export function proposerDesserts(tousLesPlats, {
+  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, nombre = 1, graine = null, refuses = [],
+} = {}) {
+  return proposer(tousLesPlats, {
+    cible, semaines, profils, evaluer, nombre, graine: graine ?? `${graineProposition(cible, semaines)}|desserts`, refuses,
+  }, 'dessert');
+}
+
+/** Proposables d'un contexte : paliers 1 et 2, plus le palier 3 dans la limite ECARTES_MAX (plats de la cible compris). */
+function proposablesDe(ctx) {
+  if (!ctx) return 0;
+  const sansEcarte = ctx.candidats.filter((c) => c.palier < 3).length;
+  return sansEcarte + Math.min(ctx.candidats.length - sansEcarte, Math.max(0, ECARTES_MAX - ctx.ecartesCible));
+}
+
+/**
+ * Nombre de plats (ou de desserts) proposables pour la cible : paliers 1 et 2, plus le palier 3 dans la limite
+ * ECARTES_MAX (plats de la cible compris). 0 pour une cible illisible.
+ */
+export function nombreProposable(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [] } = {}) {
+  return proposablesDe(contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses }));
+}
+
+/**
+ * Ce que la carte « prochaine action » et la feuille de choix montrent, à l'ouverture → { plats, voulu, presents,
+ * aProposer, disponibles, cause, profilCause, desserts } : `plats` = min(aProposer, disponibles) s'il atteint
+ * PROPOSITION_MIN, sinon 0 (pas de bouton ✨) ; `cause` et `profilCause` seulement sans bouton parce que les plats
+ * manquent (texteSansProposition ; 'catalogue' sans plat du tout) ; `desserts` : desserts proposables, DESSERTS_MAX au
+ * plus (0 : pas de bouton 🍰).
+ */
+export function apercuProposition(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
+  const options = { cible, semaines, profils, evaluer, refuses };
+  const { voulu, presents, aProposer } = nombreAProposer(semaines, cible, { tousLesPlats, profils, evaluer });
+  const ctx = contexte(tousLesPlats, { ...options, type: 'plat' });
+  const disponibles = proposablesDe(ctx);
+  const n = Math.min(aProposer, disponibles);
+  const plats = n >= PROPOSITION_MIN ? n : 0;
+  const { cause, profilCause } = !ctx || plats || disponibles >= PROPOSITION_MIN
+    ? { cause: null, profilCause: null } : causeDe(ctx);
+  const desserts = Math.min(DESSERTS_MAX, nombreProposable(tousLesPlats, { ...options, type: 'dessert' }));
+  return { plats, voulu, presents, aProposer, disponibles, cause, profilCause, desserts };
+}
+
+/**
+ * Nombre de desserts prérempli dans « Combien de desserts ? » (D6) : celui de la semaine la plus récente d'avant la
+ * cible qui en avait au moins un (desserts `ok` ou `sansRecette`, ni corbeille ni « personne »), 1 sans historique ;
+ * borné de 1 à DESSERTS_MAX et au nombre de desserts proposables (s'il y en a). Rien n'est stocké.
+ */
+export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
+  const lue = lireCible(cible, semaines);
+  let n = 1;
+  if (lue) {
+    for (const semaine of semainesAvant(semaines, lue)) {
+      const compte = compterActifs(semaine, 'dessert', { tousLesPlats, profils, evaluer });
+      if (compte > 0) {
+        n = compte;
+        break;
+      }
+    }
+  }
+  const disponibles = nombreProposable(tousLesPlats, { cible, semaines, profils, evaluer, type: 'dessert', refuses });
+  const plafond = disponibles > 0 ? Math.min(DESSERTS_MAX, disponibles) : DESSERTS_MAX;
+  return Math.min(plafond, Math.max(1, n));
+}
+
+/**
+ * « 🔄 Une autre idée » → { platId, groupe, palier, raison } | null : remplaçant de `platId` (un plat ou un dessert de la
+ * cible), du même type ; palier par palier, du même groupe d'abord, puis tous groupes ; palier 3 seulement si la cible,
+ * SANS l'ancien plat, n'en a pas déjà ECARTES_MAX. Jamais l'ancien, jamais un plat de la cible, jamais un refusé.
+ * Variété face aux plats de la cible sans l'ancien. `graine` : graineProposition(cible) + '|autre' par défaut.
+ */
+export function autreIdee(tousLesPlats, platId, {
+  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, graine = null, refuses = [],
+} = {}) {
+  const ancien = listeDe(tousLesPlats).find((p) => estObjet(p) && p.id === platId) ?? null;
+  const type = typeDe(ancien);
+  if (!ancien || (type !== 'plat' && type !== 'dessert')) return null;
+  const ctx = contexte(tousLesPlats, {
+    cible, semaines, profils, evaluer, type, refuses: [...listeDe(refuses), platId], exclure: platId,
+  });
+  if (!ctx) return null;
+  const vu = analyserPlat(ancien, { profils: ctx.profils, evaluer: ctx.evaluer, passages: ctx.passages, cible: ctx.cible });
+  const groupe = vu.rejet ? null : vu.groupe;
+  const rang = rangsDeDepartage(ctx.candidats, graine ?? `${graineProposition(cible, semaines)}|autre`);
+  const presents = presentsDeLaCible(ctx, type);
+  for (const palier of [1, 2, 3]) {
+    if (palier === 3 && ctx.ecartesCible >= ECARTES_MAX) break;
+    const duPalier = ctx.candidats.filter((c) => c.palier === palier);
+    const retenu = meilleur(duPalier.filter((c) => c.groupe === groupe), palier, presents, rang)
+      ?? meilleur(duPalier, palier, presents, rang);
+    if (retenu) return { platId: retenu.platId, groupe: retenu.groupe, palier: retenu.palier, raison: raisonDe(retenu) };
+  }
+  return null;
+}
+
+/** Vrai si « 🔄 Une autre idée » a sa place sur la feuille du plat : plat ou dessert avec sa recette, semaine avant les courses faites. */
+export function peutChangerDIdee(semaine, plat) {
+  const type = typeDe(plat);
+  if (!estObjet(plat) || (type !== 'plat' && type !== 'dessert') || !aSaRecette(plat) || !peutAllerDansLaSemaine(plat)) return false;
+  const lue = lireSemaine(semaine);
+  return Boolean(lue) && RANGS_STATUT[statutSemaine(lue)] < RANGS_STATUT.courses_faites;
+}
+
+// ——— Textes ———
+
+export const TEXTES_PROPOSER = Object.freeze({
+  emoji: '✨',
+  texteCarte: 'Laissez l’app proposer, ou choisissez vous-même\u00A0: la liste de courses se fait toute seule.',
+  toucherPlat: 'Touchez un plat pour le changer.',
+  toucherDessert: 'Touchez un dessert pour le changer.',
+  pasDAutreDessert: 'Il n’y avait pas d’autre dessert à proposer.',
+  complet: 'Les plats de la semaine sont déjà choisis.',
+  causes: Object.freeze({
+    recettes: 'Les autres plats n’ont pas encore leur recette.',
+    recents: 'Les autres plats ont été mangés ces deux dernières semaines.',
+    catalogue: 'Ajoutez des plats pour avoir plus d’idées.',
+  }),
+  sansProposition: Object.freeze({
+    recettes: 'L’app proposera des plats quand ils auront leur recette.',
+    recents: 'Vos plats ont tous été mangés ces deux dernières semaines\u00A0: choisissez-les vous-même.',
+  }),
+  autreIdee: Object.freeze({
+    emoji: '🔄',
+    libelle: 'Une autre idée',
+    aucune: 'Plus d’autre idée pour l’instant.',
+    reglages: 'Invités et repas sont à régler de nouveau.',
+  }),
+  erreurs: Object.freeze({
+    echec: 'Les plats proposés n’ont pas pu être ajoutés. Réessayez.',
+    chevauche: 'Les dates de la semaine ont changé\u00A0: touchez de nouveau «\u00A0Proposer\u00A0».',
+    inutile: 'Ces plats ont été réglés sur l’autre téléphone.',
+  }),
+  desserts: Object.freeze({
+    emoji: '🍰',
+    libelle: 'Proposer des desserts',
+    titre: 'Combien de desserts\u00A0?',
+    aide: 'Ils s’ajoutent aux plats de la semaine.',
+    fermer: 'Fermer',
+  }),
+});
+
+const nomDe = (profil) => reduire(profil?.nom) || 'Sans prénom';
+const estMoi = (profilId, moi) => Boolean(moi) && typeof moi.id === 'string' && moi.id === profilId;
+const enumerer = (mots) => (mots.length > 1 ? `${mots.slice(0, -1).join(', ')} et ${mots[mots.length - 1]}` : mots.join(''));
+/** « vous » pour la personne connectée, sinon le prénom ; null pour un profil inconnu. */
+function qui(profilId, { moi, profils }) {
+  if (estMoi(profilId, moi)) return 'vous';
+  const profil = profilsLus(profils).find((p) => p.id === profilId);
+  return profil ? nomDe(profil) : null;
+}
+
+/** « ✨ Proposer 4 plats » : { emoji: '✨', libelle: 'Proposer 4 plats' } ; « Proposer un plat » pour 1. */
+export function libelleProposer({ plats } = {}) {
+  const n = Number.isInteger(plats) && plats > 0 ? plats : 0;
+  return { emoji: TEXTES_PROPOSER.emoji, libelle: n === 1 ? 'Proposer un plat' : `Proposer ${n}\u00A0plats` };
+}
+
+/** « 🍰 Proposer 2 desserts », « 🍰 Proposer un dessert » (bouton principal de « Combien de desserts ? »). */
+export function libelleProposerDesserts(nombre) {
+  const n = Number.isInteger(nombre) && nombre > 0 ? nombre : 1;
+  return { emoji: TEXTES_PROPOSER.desserts.emoji, libelle: n === 1 ? 'Proposer un dessert' : `Proposer ${n}\u00A0desserts` };
+}
+
+/** Sous-titre de « Combien de desserts ? » : « Pour cette semaine. » ou « Pour la semaine du 17 au 23 octobre. ». */
+export function sousTitreDesserts(cible, aujourdhui) {
+  return plusTard(cible, aujourdhui) ? `Pour la semaine ${texteDates(cible.debut, cible.fin)}.` : 'Pour cette semaine.';
+}
+
+/** Nom accessible de « 🔄 Une autre idée » : « Remplacer « Gratin de pâtes » par une autre idée ». */
+export function nomAutreIdee(nom) {
+  return `Remplacer «\u00A0${reduire(nom)}\u00A0» par une autre idée`;
+}
+
+/**
+ * Annonce de « 🔄 Une autre idée » : « « Curry de lentilles » à la place de « Gratin de pâtes ». » ; `reglages` (l'ancien
+ * avait des réglages écrits) : « … Invités et repas sont à régler de nouveau. ».
+ */
+export function texteAutreIdee({ nouveau, ancien, reglages = false } = {}) {
+  const phrase = `«\u00A0${reduire(nouveau)}\u00A0» à la place de «\u00A0${reduire(ancien)}\u00A0».`;
+  return reglages ? `${phrase} ${TEXTES_PROPOSER.autreIdee.reglages}` : phrase;
+}
+
+/**
+ * Raison d'un plat proposé, montrée dans sa feuille → texte ou null (recent, autre, raison inconnue) : « ✨ Proposé :
+ * vous l’aimez. », « ✨ Proposé : vous et Adulte B l’aimez. », « ✨ Proposé : Adulte B l’aime. », « ✨ Proposé : Adulte A
+ * et Enfant l’aiment. », « ✨ Proposé : à découvrir. », « ✨ Proposé : pas au menu depuis longtemps. ». La personne
+ * connectée d'abord, puis les autres dans l'ordre des profils ; un profil retiré est ignoré.
+ */
+export function texteRaison(raison, { moi = null, profils = [] } = {}) {
+  const debut = `${TEXTES_PROPOSER.emoji} Proposé\u00A0: `;
+  if (raison?.code === 'decouvrir') return `${debut}à découvrir.`;
+  if (raison?.code === 'ancien') return `${debut}pas au menu depuis longtemps.`;
+  if (raison?.code !== 'aime') return null;
+  const ids = new Set(listeDe(raison.profils));
+  const moiAussi = [...ids].some((id) => estMoi(id, moi));
+  const autres = profilsLus(profils).filter((p) => ids.has(p.id) && !estMoi(p.id, moi)).map(nomDe);
+  const noms = [...(moiAussi ? ['vous'] : []), ...autres];
+  if (!noms.length) return null;
+  const verbe = moiAussi ? 'l’aimez' : noms.length > 1 ? 'l’aiment' : 'l’aime';
+  return `${debut}${enumerer(noms)} ${verbe}.`;
+}
+
+function plusTard(cible, aujourdhui) {
+  return estObjet(cible) && jourValide(cible.debut) && jourValide(cible.fin) && jourValide(aujourdhui) && cible.debut > aujourdhui;
+}
+
+/** « pour Adulte B », « pour vous » ; '' pour un profil inconnu. */
+const pourQui = (profilId, contexteTexte) => {
+  const nom = qui(profilId, contexteTexte);
+  return nom ? `pour ${nom}` : '';
+};
+
+/**
+ * Phrase d'un plat du palier 3 retenu : « Un plat n’a pas encore de version pour vous : c’est écrit sur sa carte. »,
+ * « Un plat n’est pas encore pour Enfant : … », « Enfant a dit « Jamais » à un plat : … » ; null pour un profil inconnu.
+ */
+function phraseEcarte(ecarte, mot, contexteTexte) {
+  const nom = qui(ecarte?.profilId, contexteTexte);
+  if (!nom) return null;
+  const suite = '\u00A0: c’est écrit sur sa carte.';
+  if (ecarte.raison === 'version') return `Un ${mot} n’a pas encore de version pour ${nom}${suite}`;
+  if (ecarte.raison === 'age') return `Un ${mot} n’est pas encore pour ${nom}${suite}`;
+  const aDit = nom === 'vous' ? 'Vous avez dit' : `${nom} a dit`;
+  return `${aDit} «\u00A0Jamais\u00A0» à un ${mot}${suite}`;
+}
+
+/** Phrase de la cause (moins de plats que voulu) : « Les autres plats n’ont pas encore de version pour Adulte B. »… */
+function phraseCause(cause, profilCause, contexteTexte) {
+  const pour = pourQui(profilCause, contexteTexte);
+  if (cause === 'versions' && pour) return `Les autres plats n’ont pas encore de version ${pour}.`;
+  if (cause === 'age' && pour) return `Les autres plats ne sont pas encore ${pour}.`;
+  if (cause === 'recettes' || cause === 'recents') return TEXTES_PROPOSER.causes[cause];
+  return TEXTES_PROPOSER.causes.catalogue;
+}
+
+/**
+ * Annonce d'une proposition (plats ou desserts), deux phrases au plus. `resultat` : proposerPlats ou proposerDesserts,
+ * dont `choisis` ne garde que les plats vraiment ajoutés (le nombre annoncé est le leur) ; `restes` : nombre (ou liste)
+ * d'articles pas pris partis avec le lot.
+ * Phrase 1 : « 4 plats proposés pour cette semaine : 2 que vous aimez, 2 à découvrir. », « Un plat proposé pour la
+ * semaine du 17 au 23 octobre. », « 2 desserts proposés… » ; « que vous aimez » seulement pour les plats que `moi` a
+ * notés 4 ou 5, les autres aimés (et tous, sans `moi`) : « 1 aimé à la maison » ;
+ * composition omise si un seul groupe montré (aimé, à découvrir) y figure.
+ * Phrase 2, la première qui s'applique : moins que voulu (plats : la cause ; desserts : « Il n’y avait pas d’autre
+ * dessert à proposer. ») ; un plat du palier 3 (« Un plat n’a pas encore de version pour Adulte B : c’est écrit sur sa
+ * carte. ») ; les restes ; sinon « Touchez un plat pour le changer. ».
+ */
+export function annonceProposition(resultat, { cible = null, aujourdhui = null, moi = null, profils = [], restes = 0 } = {}) {
+  const dessert = resultat?.type === 'dessert';
+  const mot = dessert ? 'dessert' : 'plat';
+  const choisis = listeDe(resultat?.choisis).length ? listeDe(resultat.choisis)
+    : listeDe(resultat?.ids).map((platId) => ({ platId, groupe: 'autre', palier: 1, ecartes: [] }));
+  const n = choisis.length;
+  const pour = plusTard(cible, aujourdhui) ? `pour la semaine ${texteDates(cible.debut, cible.fin)}` : 'pour cette semaine';
+  const combien = n === 1 ? `Un ${mot} proposé` : `${n}\u00A0${mot}s proposés`;
+  const aimes = choisis.filter((c) => c.groupe === 'aime');
+  // « que vous aimez » : seulement les plats que la personne connectée a notés 4 ou 5 ; les autres aimés le sont « à
+  // la maison » (jamais lui faire dire qu'elle aime un plat qu'un autre a noté).
+  const vous = aimes.filter((c) => listeDe(c.raison?.profils).some((id) => estMoi(id, moi))).length;
+  const maison = aimes.length - vous;
+  const decouvrir = choisis.filter((c) => c.groupe === 'decouvrir').length;
+  const parties = [];
+  if (vous) parties.push(`${vous}\u00A0que vous aimez`);
+  if (maison) parties.push(`${maison}\u00A0${maison > 1 ? 'aimés' : 'aimé'} à la maison`);
+  if (decouvrir) parties.push(`${decouvrir}\u00A0à découvrir`);
+  const phrase1 = parties.length > 1 ? `${combien} ${pour}\u00A0: ${parties.join(', ')}.` : `${combien} ${pour}.`;
+  const contexteTexte = { moi, profils };
+  let phrase2 = null;
+  if (resultat?.code === 'peu') {
+    phrase2 = dessert ? TEXTES_PROPOSER.pasDAutreDessert : phraseCause(resultat.cause, resultat.profilCause, contexteTexte);
+  }
+  if (!phrase2) {
+    const ecarte = choisis.find((c) => c.palier === 3 && listeDe(c.ecartes).length);
+    if (ecarte) phrase2 = phraseEcarte(ecarte.ecartes[0], mot, contexteTexte);
+  }
+  const nbRestes = Array.isArray(restes) ? restes.length : Number.isInteger(restes) && restes > 0 ? restes : 0;
+  if (!phrase2 && nbRestes) {
+    phrase2 = nbRestes === 1
+      ? 'L’article pas pris de la semaine qui finit passe sur la nouvelle liste.'
+      : `Les ${nbRestes}\u00A0articles pas pris de la semaine qui finit passent sur la nouvelle liste.`;
+  }
+  if (!phrase2) phrase2 = dessert ? TEXTES_PROPOSER.toucherDessert : TEXTES_PROPOSER.toucherPlat;
+  return `${phrase1} ${phrase2}`;
+}
+
+/**
+ * Ligne sous le texte de la carte (et à la place du bouton ✨ dans la feuille) quand moins de PROPOSITION_MIN plats
+ * sont proposables → texte ou null : « L’app proposera des plats quand ils auront leur recette. », « … quand ils
+ * auront une version pour Adulte B. » (« pour vous »), « Vos plats ont tous été mangés ces deux dernières semaines :
+ * choisissez-les vous-même. » ; null pour un catalogue vide, « Jamais » (voulu par la personne) ou l'âge.
+ */
+export function texteSansProposition(cause, { moi = null, profils = [], profilCause = null } = {}) {
+  if (cause === 'recettes' || cause === 'recents') return TEXTES_PROPOSER.sansProposition[cause];
+  if (cause === 'versions') {
+    const pour = pourQui(profilCause, { moi, profils });
+    return pour ? `L’app proposera des plats quand ils auront une version ${pour}.` : null;
+  }
+  return null;
+}

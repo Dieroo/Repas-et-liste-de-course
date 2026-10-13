@@ -9,10 +9,10 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = '62e91ae61f5c';
+const VERSION = '18f79bfd94c9';
 const VERSION_SDK = '12.19.0';
 // Date de publication affichée dans le panneau du profil (« Version du … ») : à changer à chaque mise en ligne.
-const PUBLIEE = '2026-10-12';
+const PUBLIEE = '2026-10-13';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
 const CACHE_EXTERNE = `${PREFIXE}externe-${VERSION_SDK}`;
@@ -49,6 +49,9 @@ const FICHIERS_APP = [
   './js/coeur/semaine.js',
   './js/coeur/liste.js',
   './js/coeur/drive.js',
+  './js/coeur/proposition.js',
+  './js/coeur/serie.js',
+  './js/coeur/accueil.js',
   './js/ui/dom.js',
   './js/ui/feuille.js',
   './js/ui/fichier.js',
@@ -77,6 +80,7 @@ const FICHIERS_APP = [
   './js/ui/regime.js',
   './js/ui/envoyes.js',
   './js/ui/demandes.js',
+  './js/ui/accueil.js',
   './docs/projet-claude.md',
   './icons/icone.svg',
   './icons/icone-192.png',

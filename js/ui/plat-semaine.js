@@ -7,6 +7,8 @@
 // (`plats.<id>.mange.<p>`, `.invites.adultes`, `.invites.enfants`, `.repas` ; touchers regroupés 0,8 s, affichage
 // immédiat), un choix de version écrit `plats.<id>.styles.<profilId>`. Une demande ne part jamais seule : « 📬 Demander
 // ma version » est un geste (vue « Repas et courses », gestionnaire en aperçu compris, règles de T2e).
+// T4-0 : en tête de la feuille, « ✨ Proposé : … » (raison gardée sur le téléphone qui a proposé) et « 🔄 Une autre
+// idée » (un autre plat du même type prend sa place, en un lot ; « Annuler » rend l'ancien avec ses réglages).
 import { el, annoncer, ecrireTexte, reconcilier, vibrer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import {
@@ -17,6 +19,7 @@ import {
 import { listeDeCourses, restes } from '../coeur/liste.js';
 import { dateDemande, etatDemande, texteDemandee } from '../coeur/demandes.js';
 import { STYLES } from '../coeur/vocabulaire.js';
+import { TEXTES_PROPOSER, nomAutreIdee, texteRaison } from '../coeur/proposition.js';
 
 /** Touchers rapides sur les cases et les compteurs : une seule écriture, 0,8 s après le dernier. */
 const DELAI_REGROUPEMENT_MS = 800;
@@ -271,10 +274,16 @@ function creerCompteur(type, surPas) {
  * passe en arrière-plan ; ce qui est touché se voit tout de suite (appliquerChamps), et rien de ce qui est au-dessus du
  * doigt ne change de hauteur. Un invité ajoute des portions, jamais ne retire un repas. « Revenir aux réglages de
  * départ » part tout de suite (`{ depart: true }`).
- * `lireCtx()` : le contexte du moment ; `onFermer` : après la fermeture (rendre le focus).
+ * T4-0, en tête : « ✨ Proposé : vous l’aimez. » (raison retenue sur ce téléphone, ctx.proposition.raison) et
+ * « 🔄 Une autre idée » (plat ou dessert avec sa recette, avant les courses faites, s'il y a un remplaçant à
+ * l'ouverture ; il reste ensuite tant que la feuille est ouverte) : actions.autreIdee ferme la feuille juste avant
+ * d'écrire, puis `onFermer({ viser })` reçoit le nouveau plat (sa carte prend la place de l'ancienne) ; sans autre idée
+ * au toucher, « Plus d’autre idée pour l’instant. » sous le bouton, qui garde le focus.
+ * `lireCtx()` : le contexte du moment ; `onFermer(suite)` : après la fermeture (rendre le focus ; `suite` : { viser }
+ * après « 🔄 », sinon null) ; `apresAnnulation(platId)` : après « Annuler » de « 🔄 » (l'ancien plat revenu).
  * → { maj(ctx), fermer }
  */
-export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer } = {}) {
+export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer, apresAnnulation = null } = {}) {
   let courant = lireCtx();
   const semaineId = lireSemaine(courant.semaine)?.id ?? null;
   numeroFeuille += 1;
@@ -289,6 +298,18 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer } = {}) {
   let parti = false; // fermée par « Retirer de la semaine » : pas d'annonce « retiré ailleurs »
   let premierDessin = true;
   let titre = '';
+  let suite = null; // transmis à onFermer : { viser } après « 🔄 Une autre idée »
+
+  // « ✨ Proposé : … » et « 🔄 Une autre idée » (présence figée à l'ouverture : rien ne disparaît sous le doigt).
+  const texteRaisonNoeud = el('span', {});
+  const raison = el('p', { class: 'raison-proposee', hidden: true },
+    el('span', { 'aria-hidden': 'true' }, `${TEXTES_PROPOSER.emoji}\u00A0`), texteRaisonNoeud);
+  const libelleAutre = el('span', {}, TEXTES_PROPOSER.autreIdee.libelle);
+  const boutonAutreIdee = el('button', {
+    class: 'bouton bouton-secondaire bouton-plein bouton-autre-idee', type: 'button', onclick: toucherAutreIdee,
+  }, el('span', { 'aria-hidden': 'true' }, TEXTES_PROPOSER.autreIdee.emoji), libelleAutre);
+  boutonAutreIdee.hidden = !courant.proposition?.autreIdee?.(semaineId, platId);
+  const statutAutreIdee = el('p', { class: 'message-proposer', role: 'status', hidden: true });
 
   const sansRecette = el('p', { class: 'bandeau bandeau-alerte', hidden: true }, el('span', {}, TEXTE_SANS_RECETTE));
 
@@ -332,6 +353,7 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer } = {}) {
   const boutonRetirer = el('button', { class: 'bouton bouton-texte', type: 'button', onclick: retirer }, 'Retirer de la semaine');
 
   const feuille = ouvrirFeuille(nomDuPlat(platCourant()), () => el('div', { class: 'feuille-plat-semaine' },
+    raison, boutonAutreIdee, statutAutreIdee,
     sansRecette, blocQui, blocInvites, blocRepas, annonceCompteur, versions.noeud, conservation.noeud,
     el('div', { class: 'actions-feuille' }, boutonDepart, lienRecette, boutonRetirer)), {
     onFermer: () => {
@@ -339,7 +361,7 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer } = {}) {
       envoyer();
       feuillesOuvertes.delete(handle);
       document.removeEventListener('visibilitychange', surVisibilite);
-      onFermer?.();
+      onFermer?.(suite);
     },
   });
 
@@ -454,6 +476,38 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer } = {}) {
     if (ouverte) feuille.fermer();
   }
 
+  /**
+   * « 🔄 Une autre idée » : ce qui a été touché part d'abord, puis l'action écrit l'échange ; la feuille se ferme juste
+   * avant (le focus ira à la carte du nouveau plat). Sans autre idée : la phrase sous le bouton, le focus y reste.
+   */
+  function toucherAutreIdee() {
+    if (typeof courant.actions?.autreIdee !== 'function') return;
+    ecrireTexte(statutAutreIdee, '');
+    statutAutreIdee.hidden = true;
+    envoyer();
+    const resultat = courant.actions.autreIdee(platId, {
+      semaineId,
+      apresAnnulation,
+      avant: (nouveau) => {
+        parti = true;
+        suite = { viser: nouveau };
+        fermer();
+      },
+    });
+    if (resultat?.code === 'ok') {
+      vibrer();
+      return;
+    }
+    if (!ouverte || !feuille.dialogue.open) return;
+    parti = false;
+    suite = null;
+    if (resultat?.code === 'aucune') {
+      ecrireTexte(statutAutreIdee, TEXTES_PROPOSER.autreIdee.aucune);
+      statutAutreIdee.hidden = false;
+      boutonAutreIdee.focus();
+    }
+  }
+
   // ——— « 📬 Demander ma version » (vue « Repas et courses ») ———
 
   /** Bloc d'une demande de version : le bouton, ou à sa place la phrase « 📬 Demandée… » ; gardé par profil. */
@@ -555,7 +609,16 @@ export function ouvrirPlatDeLaSemaine(lireCtx, platId, { onFermer } = {}) {
     if (nom !== titre) {
       titre = nom;
       feuille.definirTitre(nom);
+      boutonAutreIdee.setAttribute('aria-label', nomAutreIdee(nom));
     }
+    const texteProposee = texteRaison(courant.proposition?.raison?.(semaineId, platId) ?? null, {
+      moi: courant.moi ?? null, profils: courant.profils ?? [],
+    });
+    // L'emoji est à part (span aria-hidden) : « Proposé : vous l’aimez. » pour les lecteurs d'écran.
+    const debutRaison = `${TEXTES_PROPOSER.emoji} `;
+    const sansEmoji = texteProposee?.startsWith(debutRaison) ? texteProposee.slice(debutRaison.length) : texteProposee;
+    ecrireTexte(texteRaisonNoeud, sansEmoji ?? '');
+    raison.hidden = !sansEmoji;
     const modele = feuillePlat(element, { moi: courant.moi ?? null, role: courant.role ?? null });
     sansRecette.hidden = element.etat !== 'sansRecette';
 

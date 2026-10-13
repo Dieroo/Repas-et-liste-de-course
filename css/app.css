@@ -1800,6 +1800,39 @@ body.sans-onglets:has(.lien-erreurs:not([hidden])) .annonce {
 
 .resultat-erreur { border-color: var(--accent); }
 
+/* « Coller la suite » (T5-0a) : la carte de série remplace l'aperçu ; noms ajoutés, puis les boutons. */
+.resultat-serie { border-color: var(--olive); }
+
+.serie-bilan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.liste-serie {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+.zone-suite {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* « Terminé » et « Voir les plats › » côte à côte, l'un sous l'autre en police agrandie. */
+.actions-serie {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions-serie .bouton { flex: 1 1 140px; }
+
 .liste-erreurs,
 .liste-avertissements,
 .liste-apercu {
@@ -2300,6 +2333,66 @@ select.champ {
   box-shadow: none;
 }
 
+/* Dans la présentation : l'écran porte le titre et la phrase, la carte n'a pas de cadre. */
+.carte-relier.dans-accueil {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ——— Présentation (T6-0, `#/accueil`) ——— */
+
+/* Chaque écran entre en glissant (coupé par prefers-reduced-motion) ; la barre « C’est parti » reprend celle de
+   « Modifier ». */
+.accueil-ecran {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 4px;
+  animation: entree 0.18s ease-out;
+}
+
+.accueil-ecran > .pastille { align-self: flex-start; }
+
+/* Le titre reçoit le focus à chaque écran (lecteurs d'écran) : pas de cadre, comme le titre des autres écrans. */
+.accueil-ecran h1:focus { outline: none; }
+
+.accueil-phrase { font-size: 1.125rem; }
+
+.accueil-liste {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.accueil-liste li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.accueil-liste .pastille {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 1.25rem;
+}
+
+.accueil-liste strong { font-size: 1.0625rem; }
+
+.accueil-decouvrir {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accueil-reconnue {
+  color: var(--olive);
+  font-weight: 600;
+}
+
 /* ——— Réglages › Sauvegarde ——— */
 
 .badge-identique { background: var(--olive-doux); }
@@ -2783,9 +2876,25 @@ select.champ {
   padding-top: 2px;
   padding-bottom: 2px;
   padding-right: 6px;
+  /* Texte et « Annuler » côte à côte, ou l'un sous l'autre quand le texte est long : seul le texte se coupe, jamais le
+     bouton (police agrandie, annonce de deux phrases). */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  max-height: 60vh;
+}
+
+.annonce.avec-action .annonce-texte {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: calc(60vh - 52px);
+  overflow: hidden;
+  padding: 10px 0;
 }
 
 .annonce-action {
+  flex: none;
   display: inline-flex;
   align-items: center;
   min-height: 48px;
@@ -4509,3 +4618,42 @@ body:has(.barre-courses) .annonce {
 /* Réglages : « Ordre des rayons » et « 🏠 Placard ». */
 .carte-rayons p,
 .carte-placard p { overflow-wrap: anywhere; }
+
+/* ——— Proposer les plats de la semaine (T4-0) ——— */
+
+/* Carte « prochaine action » sans proposition : « L’app proposera des plats quand ils auront leur recette. ». */
+.ligne-sans-proposition {
+  color: var(--texte-doux);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+/* Feuille « Ajouter à la semaine » : « ✨ » puis « 🍰 », pleine largeur, avant les restes et la recherche. */
+.feuille-choix > .bouton-proposer,
+.feuille-choix > .bouton-desserts { width: 100%; }
+
+/* Phrase après un toucher sur « ✨ », « 🍰 » ou « 🔄 » (dates changées, plus d'autre idée) : texte normal. */
+.message-proposer {
+  color: var(--texte);
+  overflow-wrap: anywhere;
+}
+
+/* Feuille du plat : « ✨ Proposé : vous l’aimez. » (olive, AA en clair et en sombre), puis « 🔄 Une autre idée ». */
+.raison-proposee {
+  color: var(--olive);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.feuille-plat-semaine > .bouton-autre-idee { width: 100%; }
+
+/* « Combien de desserts ? » : jusqu'à quatre choix sur une ligne (1 · 2 · 3 · 4). */
+.choix-ligne.choix-quatre { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.feuille-desserts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feuille-desserts .actions-feuille { margin-top: 0; }

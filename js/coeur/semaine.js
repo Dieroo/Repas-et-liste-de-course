@@ -135,6 +135,25 @@ export function texteDates(debut, fin) {
   return `du ${texteJour(debut, { mois: false })} au ${texteJour(fin)}`;
 }
 
+/**
+ * Date « AAAA-MM-JJ » d'une `derniereFois` lue (texte, ou horodatage à sa date locale) ; null sinon. Déplacée de
+ * liste.js (T4-0) : la proposition s'en sert aussi (proposition.js › historiqueDesPlats).
+ */
+export function jourDeDerniereFois(valeur) {
+  if (typeof valeur === 'string') return jourValide(valeur) ? valeur : null;
+  let date = null;
+  if (valeur instanceof Date) date = valeur;
+  else if (estObjet(valeur) && typeof valeur.toDate === 'function') {
+    try {
+      date = valeur.toDate();
+    } catch {
+      date = null;
+    }
+  } else if (estObjet(valeur) && estNombre(valeur.seconds)) date = new Date(valeur.seconds * 1000);
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${deux(date.getMonth() + 1)}-${deux(date.getDate())}`;
+}
+
 // ——— Lire les semaines ———
 
 /** Statut lu : celui du document s'il est connu, sinon 'brouillon' (statut absent). */
@@ -746,6 +765,126 @@ export function ecrituresRemise(semaine, platId, { maintenant = null, remettre =
     .filter((a) => typeof a.libelle === 'string' && a.libelle.trim() !== '' && estNombre(a.creeLe));
   if (articles.length) resultat.articles = articles;
   return resultat;
+}
+
+// ——— Écritures groupées (T4-0 « Proposer les plats de la semaine ») ———
+
+/**
+ * Plusieurs plats en UN lot (« ✨ Proposer 4 plats », « 🍰 Proposer des desserts ») → { creation?, id, champs,
+ * articles?, ajoutes: [{ platId, ajouteLe }], deja: [platId] }, ou { code } : ecrituresAjout appliqué plat par plat sur
+ * une copie des semaines (appliquerChamps), donc une seule `creation` et les restes avec le premier plat seulement,
+ * si la cible n'avait encore aucun plat (comme une case cochée). `ajouteLe` = maintenant + rang : l'ordre de la
+ * proposition est gardé (ordre des cartes). Mêmes chemins qu'une case cochée (`plats.<id>.ajouteLe`, `plats.<id>.retire`
+ * effacé), jamais un réglage ni un statut. Un plat déjà dans la cible (ajouté entre-temps sur l'autre téléphone) va
+ * dans `deja` ; un plat introuvable dans `tousLesPlats` (quand la liste est donnée) ou qui ne peut plus aller dans la
+ * semaine (peutAllerDansLaSemaine) est sauté. Les codes 'chargement', 'invalide' (cible ou heure illisible) et
+ * 'chevauche' du premier plat écrit arrêtent tout : rien n'est écrit. { code: 'vide', deja } si aucun plat n'entre.
+ */
+export function ecrituresAjoutGroupe(semaines, platIds, {
+  cible = null, semainesChargees = false, aujourdhui = null, auteur = null, maintenant = null, restes = [],
+  tousLesPlats = null,
+} = {}) {
+  if (!semainesChargees) return { code: 'chargement' };
+  if (!estNombre(maintenant)) return { code: 'invalide' };
+  const parIdentifiant = Array.isArray(tousLesPlats)
+    ? new Map(tousLesPlats.filter((p) => estObjet(p) && typeof p.id === 'string').map((p) => [p.id, p])) : null;
+  let copie = listeDe(semaines).filter(estObjet);
+  const resultat = { id: null, champs: {}, ajoutes: [], deja: [] };
+  const vus = new Set();
+  for (const platId of listeDe(platIds)) {
+    if (typeof platId !== 'string' || vus.has(platId) || !cheminSur('plats', platId)) continue;
+    vus.add(platId);
+    const plat = parIdentifiant ? parIdentifiant.get(platId) ?? null : null;
+    if (parIdentifiant && (!plat || !peutAllerDansLaSemaine(plat))) continue;
+    const ajouteLe = maintenant + resultat.ajoutes.length;
+    const un = ecrituresAjout(copie, platId, {
+      cible, semainesChargees: true, aujourdhui, auteur, maintenant: ajouteLe, restes, plat,
+    });
+    if (un.code === 'deja') {
+      resultat.deja.push(platId);
+      resultat.id = un.id;
+      continue;
+    }
+    if (un.code) {
+      if (!resultat.ajoutes.length) return { code: un.code };
+      continue;
+    }
+    resultat.id = un.id;
+    Object.assign(resultat.champs, un.champs);
+    if (un.creation && !resultat.creation) resultat.creation = un.creation;
+    if (un.articles && !resultat.articles) resultat.articles = un.articles;
+    resultat.ajoutes.push({ platId, ajouteLe });
+    // La copie suit le lot : le plat suivant voit la semaine créée (ou reprise) et son premier plat.
+    const avant = copie.find((s) => s.id === un.id);
+    const base = { ...(avant ?? { id: un.id, plats: {} }), ...(un.creation?.donnees ?? {}) };
+    copie = [...copie.filter((s) => s.id !== un.id), appliquerChamps(base, un.champs)];
+  }
+  if (!resultat.ajoutes.length) return { code: 'vide', deja: resultat.deja };
+  return resultat;
+}
+
+/**
+ * « Annuler » d'une proposition → { id, champs: { plats.<id>.retire: true… }, supprimer?, vide }, ou { code } : ne
+ * retire que les plats dont l'entrée garde l'`ajouteLe` écrit par le geste et n'est pas retirée (un plat repris ou
+ * réglé entre-temps sur l'autre téléphone reste) ; { code: 'inutile' } si aucun. Une semaine qui commence plus tard
+ * (`aujourdhui`) et que ce retrait vide emporte ses articles des restes pas cochés (`supprimer`, comme
+ * ecrituresRetrait). `vide` : la semaine n'a plus de plat. Rien n'est écarté pour la suite. { code: 'invalide' } pour
+ * une semaine illisible.
+ */
+export function ecrituresRetraitGroupe(semaine, ajoutes, { articles = [], aujourdhui = null } = {}) {
+  const lue = lireSemaine(semaine);
+  if (!lue) return { code: 'invalide' };
+  const champs = {};
+  for (const ajout of listeDe(ajoutes)) {
+    const chemin = cheminSur('plats', ajout?.platId);
+    const entree = chemin ? lue.plats[ajout.platId] : null;
+    if (estDansLaSemaine(entree) && entree.ajouteLe === ajout.ajouteLe) champs[`${chemin}.retire`] = true;
+  }
+  if (!Object.keys(champs).length) return { code: 'inutile' };
+  const vide = !aDesPlats(appliquerChamps(lue, champs));
+  const resultat = { id: lue.id, champs, vide };
+  if (vide && jourValide(aujourdhui) && lue.debut > aujourdhui) {
+    const supprimer = restesDeLaSemaine(lue, articles);
+    if (supprimer.length) resultat.supprimer = supprimer;
+  }
+  return resultat;
+}
+
+/**
+ * « 🔄 Une autre idée », en un lot → { id, champs }, ou { code } : le nouveau plat entre à la place de l'ancien (même
+ * `ajouteLe` : même place ; `retire` effacé ; un plat retiré plus tôt repart de ses réglages de départ : ceux qu'il
+ * avait gardés sont effacés chemin par chemin, comme ecrituresDepart) et l'ancien passe `retire: true` (ses réglages
+ * restent dans son entrée) ; la semaine n'est jamais vide entre les deux, aucun reste ne bouge.
+ * `inverse` (« Annuler ») : l'ancien revient (`retire` effacé, son `ajouteLe` gardé) et le nouveau passe `retire:
+ * true`, seulement si le nouveau est toujours à la place de l'ancien (même `ajouteLe`). Codes : 'invalide'
+ * (semaine ou identifiants illisibles, ou identiques), 'faites' (courses faites ou au-delà : les ingrédients sont
+ * achetés), 'inutile' (l'ancien n'est plus dans la semaine ou le nouveau y est déjà ; en sens inverse, l'échange a
+ * changé sur l'autre téléphone).
+ */
+export function ecrituresRemplacement(semaine, ancienId, nouveauId, { inverse = false } = {}) {
+  const lue = lireSemaine(semaine);
+  const ancien = cheminSur('plats', ancienId);
+  const nouveau = cheminSur('plats', nouveauId);
+  if (!lue || !ancien || !nouveau || ancienId === nouveauId) return { code: 'invalide' };
+  if (RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites) return { code: 'faites' };
+  const entreeAncien = lue.plats[ancienId];
+  const entreeNouveau = lue.plats[nouveauId];
+  if (!inverse) {
+    if (!estDansLaSemaine(entreeAncien) || estDansLaSemaine(entreeNouveau)) return { code: 'inutile' };
+    const depart = estObjet(entreeNouveau) ? ecrituresDepart(lue, nouveauId) : null;
+    return {
+      id: lue.id,
+      champs: {
+        ...(depart?.champs ?? {}),
+        [`${nouveau}.ajouteLe`]: entreeAncien.ajouteLe, [`${nouveau}.retire`]: EFFACER, [`${ancien}.retire`]: true,
+      },
+    };
+  }
+  if (!estDansLaSemaine(entreeNouveau) || !estObjet(entreeAncien) || !estNombre(entreeAncien.ajouteLe)
+    || estDansLaSemaine(entreeAncien) || entreeNouveau.ajouteLe !== entreeAncien.ajouteLe) {
+    return { code: 'inutile' };
+  }
+  return { id: lue.id, champs: { [`${ancien}.retire`]: EFFACER, [`${nouveau}.retire`]: true } };
 }
 
 /**

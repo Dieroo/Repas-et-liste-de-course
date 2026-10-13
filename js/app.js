@@ -48,6 +48,8 @@ import * as importRecettes from './ui/import.js';
 import * as restaurer from './ui/restaurer.js';
 import * as regime from './ui/regime.js';
 import * as ecranDemandes from './ui/demandes.js';
+import * as accueil from './ui/accueil.js';
+import { cleAccueil, lireMarque, valeurVu, valeurOuverture, accueilAuto } from './coeur/accueil.js';
 import { telecharger } from './ui/fichier.js';
 import { effacerBrouillons } from './ui/brouillon.js';
 import {
@@ -58,8 +60,13 @@ import { annonceRelecture, bilanRelecture, platsARelire } from './coeur/relectur
 import {
   lireSemaine, semaineAPreparer, semaineEnCours, appliquerChamps, estDansLaSemaine, texteDates, aDesPlats,
   ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage, EFFACER, statutSemaine,
-  validerDates, texteErreurDates, cheminSur,
+  validerDates, texteErreurDates, cheminSur, semaineVisee, ecrituresAjoutGroupe, ecrituresRetraitGroupe,
+  ecrituresRemplacement, aDesReglagesEcrits,
 } from './coeur/semaine.js';
+import {
+  proposerPlats, proposerDesserts, nombreAProposer, apercuProposition, nombreDeDessertsParDefaut,
+  autreIdee as autreIdeeDe, peutChangerDIdee, annonceProposition, texteAutreIdee, TEXTES_PROPOSER,
+} from './coeur/proposition.js';
 import {
   listeDeCourses, ecrituresCoche, ecrituresCocheArticle, ecrituresRachat, preparerAjout, texteAjoutArticle,
   ERREURS_ARTICLE, phraseRestesAjoutes, ecrituresRecherche, preparerFinDesCourses, ecrituresDernieresFois,
@@ -89,6 +96,8 @@ const ECRANS = {
   restaurer: { titre: 'Restaurer une sauvegarde', module: restaurer, onglet: null },
   regime: { titre: 'Ce que mange', module: regime, onglet: null, sansOnglets: true },
   demandes: { titre: 'Demandes', module: ecranDemandes, onglet: null },
+  // Présentation de première ouverture (T6-0) : sans onglets, la barre « C’est parti » en bas.
+  accueil: { titre: 'Bienvenue', module: accueil, onglet: null, sansOnglets: true },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -148,6 +157,22 @@ const etat = {
   produitsCharges: false,
   produitsDepuisCache: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
+  // « Proposer les plats de la semaine » (T4-0), en mémoire seulement (ni Firestore, ni stockage du téléphone),
+  // oubliés à la fermeture de l'app :
+  // `proposes` : `<semaineId>|<platId>` → raison du choix (coeur/proposition.js), pour la ligne « ✨ Proposé : … » de
+  // la feuille du plat, sur ce téléphone seulement ; `refuses` : semaineId → Set des plats remplacés par « 🔄 Une autre
+  // idée », pour qu'une autre idée ne les rende pas aussitôt (remplacée, jamais modifiée sur place : mémos par objet).
+  proposes: new Map(),
+  refuses: new Map(),
+  // Présentation (T6-0) : `accueilDecide`, l'ouverture automatique n'est décidée qu'une fois par session et par compte
+  // (remis à faux par oublierDonnees) ; `apresMontage`, arrivée sur Semaine par « C’est parti » : focus sur le titre de
+  // la carte « prochaine action » et anneau sur son bouton principal ({ depuis, focalise, signale, animation,
+  // minuteur }), consommée une fois.
+  accueilDecide: false,
+  apresMontage: null,
+  // Présentation ouverte par « Revoir la présentation » (entrée d'historique ajoutée) : la quitter vers l'écran d'où
+  // elle a été ouverte revient à cette entrée au lieu d'en écrire une seconde.
+  accueilParRevoir: false,
 };
 
 let cleAffichee = '';
@@ -514,6 +539,81 @@ function semaineParId(semaineId) {
   return lireSemaine(etat.semaines.find((semaine) => semaine?.id === semaineId) ?? null);
 }
 
+// ——— Proposer les plats de la semaine (T4-0) ———
+
+/** Plats remplacés par « 🔄 Une autre idée » pendant cette visite, pour la semaine `semaineId` → [platId]. */
+function refusesDe(semaineId) {
+  return [...(etat.refuses.get(semaineId) ?? [])];
+}
+
+/**
+ * Semaine visée réduite à { id, debut, fin } (coeur/semaine.js › semaineVisee, ou une semaine lue) : ses plats se
+ * lisent toujours dans `etat.semaines`, jamais dans une copie figée à l'ouverture d'une feuille. null si illisible.
+ */
+function cibleProposition(cible) {
+  if (!cible || typeof cible.id !== 'string' || typeof cible.debut !== 'string' || typeof cible.fin !== 'string') return null;
+  return { id: cible.id, debut: cible.debut, fin: cible.fin };
+}
+
+/** Options communes de coeur/proposition.js pour une cible (plats de la corbeille compris : le cœur les écarte). */
+function optionsProposition(cible) {
+  return { cible, semaines: etat.semaines, profils: etat.profils, evaluer: compat, refuses: refusesDe(cible.id) };
+}
+
+// Aperçus (coeur/proposition.js › apercuProposition) par semaine visée, gardés tant que semaines, plats, profils et
+// refusés sont les mêmes objets : la carte et la feuille ne recalculent rien d'un rendu à l'autre.
+let memoApercus = { semaines: null, plats: null, profils: null, refuses: null, resultats: new Map() };
+
+/**
+ * Ce que la carte « prochaine action » et la feuille de choix montrent pour une semaine visée : { plats, …, cause,
+ * profilCause, desserts } (coeur/proposition.js › apercuProposition) ; null tant que tout n'est pas lu.
+ */
+function apercuPour(cible) {
+  const visee = cibleProposition(cible);
+  if (!visee || !semainesLues()) return null;
+  const m = memoApercus;
+  if (m.semaines !== etat.semaines || m.plats !== etat.plats || m.profils !== etat.profils || m.refuses !== etat.refuses) {
+    memoApercus = { semaines: etat.semaines, plats: etat.plats, profils: etat.profils, refuses: etat.refuses, resultats: new Map() };
+  }
+  const cle = `${visee.id}|${visee.debut}|${visee.fin}`;
+  if (!memoApercus.resultats.has(cle)) {
+    memoApercus.resultats.set(cle, apercuProposition(etat.plats, optionsProposition(visee)));
+  }
+  return memoApercus.resultats.get(cle);
+}
+
+/** Nombre de desserts prérempli dans « Combien de desserts ? » (coeur/proposition.js › nombreDeDessertsParDefaut). */
+function dessertsParDefautPour(cible) {
+  const visee = cibleProposition(cible);
+  if (!visee || !semainesLues()) return 1;
+  const options = optionsProposition(visee);
+  return nombreDeDessertsParDefaut(etat.semaines, visee, { ...options, tousLesPlats: etat.plats });
+}
+
+/** Raison retenue sur ce téléphone pour un plat proposé dans une semaine (« ✨ Proposé : … »), sinon null. */
+function raisonProposee(semaineId, platId) {
+  return etat.proposes.get(`${semaineId}|${platId}`) ?? null;
+}
+
+/**
+ * Remplaçant de « 🔄 Une autre idée » pour un plat d'une semaine (coeur/proposition.js › autreIdee), seulement si le
+ * bouton a sa place (peutChangerDIdee : plat ou dessert avec sa recette, avant les courses faites) → { platId, groupe,
+ * palier, raison } | null.
+ */
+function autreIdeePour(semaineId, platId) {
+  if (!semainesLues()) return null;
+  const semaine = semaineParId(semaineId);
+  const plat = platsSepares().actifs.find((p) => p.id === platId);
+  if (!semaine || !plat || !estDansLaSemaine(semaine.plats[platId]) || !peutChangerDIdee(semaine, plat)) return null;
+  const visee = cibleProposition(semaine);
+  return visee ? autreIdeeDe(etat.plats, platId, optionsProposition(visee)) : null;
+}
+
+/** Nom brut d'un plat (annonce de « 🔄 Une autre idée », qui met ses propres guillemets). */
+function nomBrut(platId) {
+  return String(etat.plats.find((plat) => plat?.id === platId)?.nom ?? '').replace(/\s+/g, ' ').trim() || 'Ce plat';
+}
+
 // Instructions du projet Claude copiées pendant cette visite ({ uid, version }) : repli si le stockage du téléphone
 // est plein ou bloqué, pour que le rappel ne revienne pas avant la prochaine ouverture.
 let instructionsCopieesIci = null;
@@ -568,6 +668,11 @@ function instructionsAJour() {
  * deDepart, texte }], produits que le foyer a mis de côté ou éteints, triés par nom ; même objet tant que produits et
  * plats ne changent pas). Habituels et préparations de chaque semaine se lisent dans `liste` (`liste.habituels`,
  * `liste.preparations`, sautés compris) ; les récents de « Ajouter à la liste » par actions.lireRecents.
+ * Proposer les plats de la semaine (T4-0) : `proposition.apercu(cible)` (coeur/proposition.js › apercuProposition pour
+ * une semaine visée : bouton « ✨ Proposer 4 plats », ligne sans proposition, bouton « 🍰 Proposer des desserts » ;
+ * null tant que tout n'est pas lu ; gardé tant que rien ne change), `proposition.dessertsParDefaut(cible)` (nombre
+ * prérempli de « Combien de desserts ? »), `proposition.raison(semaineId, platId)` (raison retenue sur ce téléphone,
+ * ou null) et `proposition.autreIdee(semaineId, platId)` (remplaçant de « 🔄 Une autre idée », ou null).
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -585,6 +690,7 @@ function contexteCourant() {
     reglages: etat.donnees.reglages,
     profils: etat.profils,
     profilsCharges: etat.profilsCharges,
+    profilsDepuisCache: etat.profilsDepuisCache,
     moi: profilDeLEmail(etat.profils, utilisateur.email),
     plats: ECRANS[route]?.avecCorbeille ? etat.plats : actifs,
     platsCorbeille: corbeille,
@@ -618,6 +724,12 @@ function contexteCourant() {
     produitsDepuisCache: etat.produitsDepuisCache,
     rayons: rayonsCourants(),
     placardFoyer: placardCourant(),
+    proposition: {
+      apercu: apercuPour,
+      dessertsParDefaut: dessertsParDefautPour,
+      raison: raisonProposee,
+      autreIdee: autreIdeePour,
+    },
     actions,
   };
 }
@@ -626,6 +738,7 @@ function rendreApp() {
   appRendue = true;
   const { utilisateur } = etat;
   if (roleDe(utilisateur.email, etat.donnees.reglages) !== 'gestionnaire') etat.apercu = false;
+  deciderAccueil();
   const { role, roleReel, route, parametre } = routeCourante();
   const hashAttendu = parametre ? `#/${route}/${encodeURIComponent(parametre)}` : `#/${route}`;
   if (location.hash !== hashAttendu) history.replaceState(history.state, '', hashAttendu);
@@ -670,6 +783,145 @@ function rendreApp() {
     titre: `${titrePage} · ${NOM_APP}`,
     ctx,
   });
+  signalerCarte(route, ctx);
+}
+
+// ——— Présentation (T6-0) ———
+
+// Arrivée sur Semaine par « C’est parti » : la carte « prochaine action » est attendue au plus ce délai.
+const ATTENTE_CARTE_MS = 3000;
+
+/** Marque « déjà vu » de ce compte sur ce téléphone ({ vu, ouvertures }), ou null si le stockage ne se lit pas. */
+function lireMarqueAccueil(uid) {
+  const cle = cleAccueil(uid);
+  if (!cle) return null;
+  try {
+    return lireMarque(localStorage.getItem(cle));
+  } catch {
+    return null;
+  }
+}
+
+/** Écrit la marque puis la relit : vrai seulement si la valeur relue est la bonne (stockage plein ou bloqué : faux). */
+function ecrireMarqueAccueil(uid, valeur) {
+  const cle = cleAccueil(uid);
+  if (!cle) return false;
+  try {
+    localStorage.setItem(cle, valeur);
+    return localStorage.getItem(cle) === valeur;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ouverture automatique de la présentation, décidée une fois par session et par compte, avant le premier écran de
+ * l'app : rôle réel « Repas et courses », pas encore vue, ouverture ordinaire (coeur/accueil.js › accueilAuto). La
+ * marque compte l'ouverture avant de l'afficher ; si elle ne s'écrit pas, la présentation ne s'ouvre pas (mieux vaut
+ * la manquer que la remontrer à chaque ouverture). Rien n'est écrit dans Firestore.
+ */
+function deciderAccueil() {
+  if (etat.accueilDecide) return;
+  etat.accueilDecide = true;
+  const { uid, email } = etat.utilisateur;
+  const roleReel = roleDe(email, etat.donnees.reglages);
+  const marqueLue = lireMarqueAccueil(uid);
+  if (accueilAuto({ roleReel, marque: marqueLue, hash: location.hash })
+    && ecrireMarqueAccueil(uid, valeurOuverture(marqueLue))) {
+    history.replaceState(history.state, '', '#/accueil');
+  } else if (location.hash === '#/accueil') {
+    // Page rouverte sur la présentation (rechargée par Chrome, ou compte suivant après une déconnexion faite sur elle)
+    // sans qu'elle doive s'ouvrir : Semaine, comme une ouverture ordinaire. « Revoir la présentation » reste possible.
+    history.replaceState(history.state, '', '#/semaine');
+  }
+}
+
+// Après « C’est parti » ou « Dire ce qui me plaît », l'écran suivant se monte sous le doigt (la barre « C’est parti »
+// est à la place des onglets de Semaine, « Dire ce qui me plaît » à celle des gestes de Découvrir) : un second toucher
+// impatient, pendant ce délai, est ignoré, pour qu'il ne change ni d'écran ni de note.
+const GARDE_TOUCHER_MS = 500;
+
+/**
+ * Ignore tout toucher pendant GARDE_TOUCHER_MS, en phase de capture : ni le clic (rien n'est atteint, ni lien, ni
+ * bouton, ni case) ni l'appui qui le précède (le focus, posé sur le titre de la carte, ne part pas sur un onglet).
+ */
+function ignorerToucherFantome() {
+  const bloquer = (evenement) => {
+    evenement.preventDefault();
+    evenement.stopImmediatePropagation();
+  };
+  const types = ['mousedown', 'click'];
+  for (const type of types) window.addEventListener(type, bloquer, true);
+  setTimeout(() => { for (const type of types) window.removeEventListener(type, bloquer, true); }, GARDE_TOUCHER_MS);
+}
+
+/** Fin de l'attente de la carte : sans carte prête, le focus va au titre de l'écran, sans anneau. */
+function finirSignal() {
+  const attente = etat.apresMontage;
+  if (!attente) return;
+  etat.apresMontage = null;
+  clearTimeout(attente.minuteur);
+  if (attente.focalise || routeAffichee !== 'semaine') return;
+  const titre = zone.querySelector('h1');
+  if (!titre) return;
+  if (!titre.hasAttribute('tabindex')) titre.setAttribute('tabindex', '-1');
+  titre.focus();
+}
+
+/**
+ * Fait défiler la page juste assez pour que `noeud` soit entièrement visible au-dessus de la barre d'onglets (police
+ * agrandie, petit écran : le bouton qui s'allume serait sinon caché dessous ou plus bas que l'écran). Le focus ne bouge
+ * pas ; le titre de la carte reste en vue tant que le bouton tient avec lui.
+ */
+function montrerAuDessusDesOnglets(noeud) {
+  const MARGE = 8;
+  const limite = onglets.hidden ? window.innerHeight : Math.min(window.innerHeight, onglets.getBoundingClientRect().top);
+  const boite = noeud.getBoundingClientRect();
+  const depassement = boite.bottom + MARGE - limite;
+  if (depassement > 0) window.scrollBy(0, depassement);
+}
+
+/**
+ * Arrivée sur Semaine par « C’est parti » (`etat.apresMontage`), à chaque rendu pendant ATTENTE_CARTE_MS : une fois la
+ * carte « prochaine action » prête (un bouton, ou toutes les données lues), focus sur son titre, jamais sur un bouton
+ * qui écrit ; son bouton principal, quel qu'il soit, s'allume deux fois d'un anneau terracotta (sauf mouvement
+ * réduit). S'il change pendant l'attente (la proposition arrive), le nouveau s'allume à son tour. Semaine n'est pas
+ * modifiée : aucune classe n'est posée (la carte réécrit les siennes), ni opacité ni échelle (contraste gardé).
+ */
+function signalerCarte(route, ctx) {
+  const attente = etat.apresMontage;
+  if (!attente) return;
+  if (route === 'accueil') return; // « C’est parti » vient d'être touché : Semaine arrive au prochain rendu
+  if (route !== 'semaine') {
+    attente.animation?.cancel();
+    clearTimeout(attente.minuteur);
+    etat.apresMontage = null;
+    return;
+  }
+  if (!attente.minuteur) attente.minuteur = setTimeout(finirSignal, Math.max(0, attente.depuis + ATTENTE_CARTE_MS - Date.now()));
+  const carte = zone.querySelector('.carte-action');
+  const titre = carte?.querySelector('#titre-prochaine-action');
+  if (!carte || !titre) return;
+  const pret = Boolean(carte.querySelector('.actions-carte a, .actions-carte button'))
+    || Boolean(ctx.semainesChargees && ctx.platsCharges && ctx.profilsCharges);
+  if (!pret) return;
+  if (!attente.focalise) {
+    attente.focalise = true;
+    if (!titre.hasAttribute('tabindex')) titre.setAttribute('tabindex', '-1');
+    titre.focus();
+  }
+  const principal = carte.querySelector('.actions-carte .bouton-principal');
+  if (!principal || principal === attente.signale || typeof principal.animate !== 'function') return;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  attente.animation?.cancel();
+  attente.signale = principal;
+  montrerAuDessusDesOnglets(principal);
+  const couleur = getComputedStyle(principal).getPropertyValue('--accent').trim() || 'currentColor';
+  attente.animation = principal.animate([
+    { boxShadow: `0 0 0 0 ${couleur}` },
+    { boxShadow: `0 0 0 6px ${couleur}` },
+    { boxShadow: `0 0 0 0 ${couleur}` },
+  ], { duration: 600, iterations: 2 });
 }
 
 // ——— Actions des écrans ———
@@ -683,6 +935,31 @@ function ecrire(promesse, messageEchec) {
 let instructionsClaude = null;
 
 const actions = {
+  /**
+   * Quitte la présentation par un de ses boutons (T6-0) : marque « vue » sur ce téléphone (sans effet si elle l'était
+   * déjà), puis l'écran demandé, à la place de la présentation dans l'historique (le retour ne la rouvre pas).
+   * `signaler` : à l'arrivée sur Semaine, focus sur le titre de la carte « prochaine action » et anneau sur son bouton
+   * principal. Rien n'est écrit dans Firestore.
+   */
+  quitterAccueil({ route = 'semaine', signaler = false } = {}) {
+    const uid = etat.utilisateur?.uid;
+    if (!uid) return;
+    if (!lireMarqueAccueil(uid)?.vu) ecrireMarqueAccueil(uid, valeurVu());
+    if (etat.apresMontage) {
+      etat.apresMontage.animation?.cancel();
+      clearTimeout(etat.apresMontage.minuteur);
+    }
+    etat.apresMontage = signaler && route === 'semaine'
+      ? { depuis: Date.now(), focalise: false, signale: null, animation: null, minuteur: null }
+      : null;
+    ignorerToucherFantome();
+    const parRevoir = etat.accueilParRevoir;
+    etat.accueilParRevoir = false;
+    // Revue depuis l'écran visé (« Revoir la présentation » sur Semaine, puis « C’est parti ») : retour à son entrée
+    // d'historique, pour ne pas laisser deux « Semaine » de suite (le retour d'Android semblerait ne rien faire).
+    if (parRevoir && history.length > 1 && history.state?.precedente === route) history.back();
+    else location.replace(`#/${route}`);
+  },
   /**
    * Ajoute un plat par son nom (⏳). Rôle effectif « Repas et courses » (aperçu compris, T2e) : la demande de recette
    * part dans le même lot, s'affiche tout de suite (la fiche, ouverte aussitôt, dit « 📬 Demandée… ») et le
@@ -1436,6 +1713,119 @@ const actions = {
     return { code: 'ok', vide: !aDesPlats(semaineParId(semaine.id)) };
   },
   /**
+   * « ✨ Proposer 4 plats » (T4-0, les deux membres, aperçu compris ; carte « prochaine action » de Semaine, et premier
+   * bouton de la feuille « Ajouter à la semaine » quand la semaine visée n'a aucun plat) : des plats du foyer qui ont
+   * leur recette entrent d'un coup dans la semaine `cible` ({ id, debut, fin }, figée par la feuille ; sans elle,
+   * semaineVisee au toucher), en UN lot (coeur/semaine.js › ecrituresAjoutGroupe : mêmes écritures qu'une case cochée,
+   * création de la semaine et articles des `restes` avec le premier plat, seulement si la cible n'avait aucun plat).
+   * `nombreAnnonce` : le nombre dit par le libellé du bouton, ramené à ce qui manque (coeur/proposition.js ›
+   * nombreAProposer : des cases cochées entre-temps comptent) et à ce qui est disponible ; l'annonce dit le vrai
+   * nombre. Annonce (coeur/proposition.js › annonceProposition) avec « Annuler » pendant 30 s (annulerProposition :
+   * remet tout comme avant, puis `apresAnnulation()`). Les raisons des choix sont gardées sur ce téléphone (ligne
+   * « ✨ Proposé : … » de la feuille du plat). `feuille: true` (feuille de choix) : un `chevauche` est rendu tel quel
+   * (la feuille recalcule sa semaine visée et le dit) ; sinon, un essai de plus sur la semaine visée du moment, puis la
+   * phrase d'erreur. `avant(premierPlatId)` : appelé une fois le lot prêt, juste avant de l'écrire (une feuille se ferme
+   * là : l'annonce et son « Annuler » ne doivent pas naître derrière une feuille modale).
+   * → { code: 'ok' | 'peu', id, ajoutes: [{ platId, ajouteLe }], deja, restes, choisis } | { code } : aucun (rien à
+   *   proposer), complet (plats seulement : la semaine a déjà son nombre de plats), vide (déjà tous dans la semaine),
+   *   chargement, chevauche, invalide, echec (annoncé), refuse.
+   */
+  proposerALaSemaine({
+    cible = null, restes = [], nombreAnnonce = null, feuille = false, apresAnnulation = null, avant = null,
+  } = {}) {
+    return proposerDansLaSemaine('plat', { cible, restes, nombre: nombreAnnonce, feuille, apresAnnulation, avant });
+  },
+  /**
+   * « 🍰 Proposer 2 desserts » (D6, feuille « Combien de desserts ? », ouverte depuis Semaine ou la feuille de choix) :
+   * `nombre` desserts (1 à 4) entrent d'un coup dans la semaine `cible`, comme proposerALaSemaine (même lot, mêmes
+   * restes, même « Annuler » 30 s, même `chevauche` : la feuille reste ouverte et recalcule sa semaine visée).
+   * → mêmes retours que proposerALaSemaine.
+   */
+  proposerDessertsALaSemaine({
+    cible = null, restes = [], nombre = 1, feuille = true, apresAnnulation = null, avant = null,
+  } = {}) {
+    return proposerDansLaSemaine('dessert', { cible, restes, nombre, feuille, apresAnnulation, avant });
+  },
+  /**
+   * « Annuler » d'une proposition (✨ ou 🍰) : les plats ajoutés par le geste repartent (`retire: true`), seulement ceux
+   * dont l'entrée garde l'`ajouteLe` écrit (coeur/semaine.js › ecrituresRetraitGroupe) ; vidée, une semaine qui commence
+   * plus tard emporte ses restes pas cochés. Rien n'est écarté pour la suite. Plus rien à retirer : « Ces plats ont été
+   * réglés sur l’autre téléphone. ». Puis `apresAnnulation()` (l'écran rend le focus).
+   * → { code } : ok, inutile, invalide, chargement, echec, refuse.
+   */
+  annulerProposition(semaineId, ajoutes, { apresAnnulation = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine) return { code: 'invalide' };
+    const ecritures = ecrituresRetraitGroupe(semaine, ajoutes, { articles: etat.articles, aujourdhui: dateDuJour() });
+    if (ecritures.code === 'inutile') {
+      annoncer(TEXTES_PROPOSER.erreurs.inutile);
+      return ecritures;
+    }
+    if (ecritures.code) return ecritures;
+    if (!ecrireDansLaSemaine(ecritures, 'Les plats n’ont pas pu être retirés de la semaine. Réessayez.')) return { code: 'echec' };
+    for (const { platId } of Array.isArray(ajoutes) ? ajoutes : []) etat.proposes.delete(`${semaine.id}|${platId}`);
+    rendre();
+    if (typeof apresAnnulation === 'function') apresAnnulation();
+    return { code: 'ok' };
+  },
+  /**
+   * « 🔄 Une autre idée » (feuille du plat de la semaine) : un autre plat du même type prend sa place, en un lot
+   * (coeur/semaine.js › ecrituresRemplacement : même `ajouteLe`, l'ancien passe `retire: true` avec ses réglages).
+   * L'ancien n'est plus proposé pendant cette visite (sauf après « Annuler »). Annonce « « Curry » à la place de « Gratin ». » (« Invités et
+   * repas sont à régler de nouveau. » s'il avait des réglages) avec « Annuler » (l'ancien revient avec ses réglages, puis
+   * `apresAnnulation(ancienId)`). `semaineId` : sans lui, la semaine montrée. `avant(nouveauId)` : appelé une fois le
+   * lot prêt, juste avant de l'écrire (la feuille du plat se ferme là, avant l'annonce).
+   * → { code: 'ok', nouveau } | { code } : aucune (plus d'autre idée : rien n'est écrit, rien n'est annoncé), faites,
+   *   inutile, invalide, chargement, echec, refuse.
+   */
+  autreIdee(platId, { semaineId = null, apresAnnulation = null, avant = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine || !estDansLaSemaine(semaine.plats[platId])) return { code: 'invalide' };
+    const idee = autreIdeePour(semaine.id, platId);
+    if (!idee) return { code: 'aucune' };
+    const ecritures = ecrituresRemplacement(semaine, platId, idee.platId);
+    if (ecritures.code) return ecritures;
+    const reglages = aDesReglagesEcrits(semaine.plats[platId]);
+    if (typeof avant === 'function') avant(idee.platId);
+    if (!ecrireDansLaSemaine(ecritures, 'Ce plat n’a pas pu être changé. Réessayez.')) return { code: 'echec' };
+    const refuses = new Map(etat.refuses);
+    refuses.set(semaine.id, new Set([...(refuses.get(semaine.id) ?? []), platId]));
+    etat.refuses = refuses;
+    etat.proposes.set(`${semaine.id}|${idee.platId}`, idee.raison);
+    rendre();
+    const ancienId = platId;
+    const nouveauId = idee.platId;
+    annoncer(texteAutreIdee({ nouveau: nomBrut(nouveauId), ancien: nomBrut(ancienId), reglages }), {
+      action: {
+        libelle: 'Annuler',
+        faire: () => {
+          const actuelle = semaineParId(semaine.id);
+          const inverse = actuelle ? ecrituresRemplacement(actuelle, ancienId, nouveauId, { inverse: true }) : { code: 'invalide' };
+          if (inverse.code === 'inutile') {
+            annoncer(TEXTES_PROPOSER.erreurs.inutile);
+            return;
+          }
+          if (inverse.code || !ecrireDansLaSemaine(inverse, 'Ce plat n’a pas pu être remis. Réessayez.')) return;
+          etat.proposes.delete(`${semaine.id}|${nouveauId}`);
+          // L'ancien plat, gardé exprès, redevient proposable (nouvelle Map : les aperçus mémorisés sont recalculés).
+          const refusesApres = new Map(etat.refuses);
+          const reste = new Set(refusesApres.get(semaine.id) ?? []);
+          reste.delete(ancienId);
+          if (reste.size) refusesApres.set(semaine.id, reste);
+          else refusesApres.delete(semaine.id);
+          etat.refuses = refusesApres;
+          rendre();
+          if (typeof apresAnnulation === 'function') apresAnnulation(ancienId);
+        },
+      },
+    });
+    return { code: 'ok', nouveau: nouveauId };
+  },
+  /**
    * Mer / Végétale pour un profil (carte du plat, feuille du plat) : `plats.<id>.styles.<profilId>` ; le style par
    * défaut (la mer si elle convient) efface le chemin. Aucune annonce : la carte change aussitôt. `semaineId` : sans
    * lui, la semaine montrée.
@@ -2110,6 +2500,90 @@ function remettreDans(semaineId, platId, remettre = []) {
   if (ecrireDansLaSemaine(ecritures, `${citerPlat(platId)} n’a pas pu être remis dans la semaine. Réessayez.`)) rendre();
 }
 
+// ——— Proposer les plats de la semaine (T4-0) ———
+
+/** Durée de l'annonce d'une proposition et de son « Annuler » (D2). */
+const DUREE_ANNONCE_PROPOSITION_MS = 30000;
+
+/**
+ * Proposition de plats (`type` 'plat', « ✨ ») ou de desserts ('dessert', « 🍰 ») pour une semaine visée, écrite en un
+ * lot puis annoncée (actions.proposerALaSemaine, actions.proposerDessertsALaSemaine). `nombre` : plats voulus par le
+ * bouton touché (plats : ramené à ce qui manque à la semaine).
+ */
+function proposerDansLaSemaine(type, {
+  cible = null, restes = [], nombre = null, feuille = false, apresAnnulation = null, avant = null,
+} = {}) {
+  if (!etat.utilisateur) return { code: 'refuse' };
+  if (!semainesLues()) return { code: 'chargement' };
+  const aujourdhui = dateDuJour();
+  const essayer = (choisie) => {
+    const visee = cibleProposition(choisie ?? semaineVisee(etat.semaines, aujourdhui));
+    if (!visee) return { code: 'invalide' };
+    const options = optionsProposition(visee);
+    let proposition;
+    if (type === 'dessert') {
+      const voulu = Number.isInteger(nombre) && nombre > 0 ? nombre : 1;
+      proposition = proposerDesserts(etat.plats, { ...options, nombre: voulu });
+    } else {
+      const { aProposer } = nombreAProposer(etat.semaines, visee, { tousLesPlats: etat.plats, profils: etat.profils, evaluer: compat });
+      // Semaine déjà remplie (cases cochées ou lot de l'autre téléphone arrivés depuis l'affichage).
+      if (aProposer <= 0) return { code: 'complet' };
+      // Visée : ce qui manque à la semaine (le code 'peu' et sa cause disent pourquoi il y en a moins) ; jamais plus
+      // que le libellé du bouton.
+      const plafond = Number.isInteger(nombre) && nombre > 0 ? Math.min(nombre, aProposer) : null;
+      proposition = proposerPlats(etat.plats, { ...options, nombre: aProposer, plafond });
+    }
+    if (!proposition.ids.length) return { code: 'aucun' };
+    const ecritures = ecrituresAjoutGroupe(etat.semaines, proposition.ids, {
+      cible: visee,
+      semainesChargees: etat.semainesChargees,
+      aujourdhui,
+      auteur: etat.utilisateur.email,
+      maintenant: Date.now(),
+      restes,
+      tousLesPlats: platsSepares().actifs,
+    });
+    return { visee, proposition, ecritures };
+  };
+  let essai = essayer(cible);
+  // Cible devenue impossible (dates changées sur l'autre téléphone) : la feuille recalcule elle-même la sienne et le
+  // dit ; ailleurs, un essai de plus sur la semaine visée du moment.
+  if (essai.ecritures?.code === 'chevauche' && cible && !feuille) essai = essayer(null);
+  if (essai.code) return essai;
+  const { visee, proposition, ecritures } = essai;
+  if (ecritures.code === 'chevauche' && !feuille) annoncer(TEXTES_PROPOSER.erreurs.chevauche);
+  if (ecritures.code) return ecritures;
+  if (typeof avant === 'function') avant(ecritures.ajoutes[0]?.platId ?? null);
+  if (!ecrireDansLaSemaine(ecritures, TEXTES_PROPOSER.erreurs.echec)) return { code: 'echec' };
+  const ajoutes = ecritures.ajoutes;
+  const entres = new Set(ajoutes.map((a) => a.platId));
+  const choisis = proposition.choisis.filter((c) => entres.has(c.platId));
+  for (const c of choisis) etat.proposes.set(`${ecritures.id}|${c.platId}`, c.raison);
+  rendre();
+  const nbRestes = ecritures.articles?.length ?? 0;
+  const semaine = semaineParId(ecritures.id);
+  const texte = annonceProposition({ ...proposition, choisis, ids: choisis.map((c) => c.platId) }, {
+    cible: semaine ?? visee,
+    aujourdhui,
+    moi: profilDeLEmail(etat.profils, etat.utilisateur.email),
+    profils: etat.profils,
+    restes: nbRestes,
+  });
+  const semaineId = ecritures.id;
+  annoncer(texte, {
+    action: { libelle: 'Annuler', faire: () => actions.annulerProposition(semaineId, ajoutes, { apresAnnulation }) },
+    duree: DUREE_ANNONCE_PROPOSITION_MS,
+  });
+  return {
+    code: proposition.code === 'peu' ? 'peu' : 'ok',
+    id: semaineId,
+    ajoutes,
+    deja: ecritures.deja,
+    restes: nbRestes,
+    choisis,
+  };
+}
+
 // ——— Au drive et fin des courses (T3b) ———
 
 /** Ligne ou article de la liste montrée par sa clé (`ligne.cle`, placard compris ; `article:<id>` ou `<id>`), ou null. */
@@ -2639,6 +3113,11 @@ function ouvrirPanneauProfil() {
     onAjouterRecettes: () => { location.hash = '#/import'; },
     onApercu: changerApercu,
     onDeconnecter: seDeconnecter,
+    // « 👋 Revoir la présentation » (T6-0), les deux rôles ; absent sur la présentation elle-même.
+    onAccueil: routeCourante().route === 'accueil' ? null : () => {
+      etat.accueilParRevoir = true;
+      location.hash = '#/accueil';
+    },
     onQuiEtesVous: () => {
       if (panneauProfil.open) panneauProfil.close();
       actions.ouvrirQuiEtesVous();
@@ -2721,7 +3200,14 @@ function oublierDonnees() {
     produitsCharges: false,
     produitsDepuisCache: false,
     apercu: false,
+    accueilDecide: false,
+    accueilParRevoir: false,
   });
+  if (etat.apresMontage) {
+    etat.apresMontage.animation?.cancel();
+    clearTimeout(etat.apresMontage.minuteur);
+    etat.apresMontage = null;
+  }
   memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
   memoListe = { cles: null, liste: null };
   memoProduits = { produits: null, parId: Object.freeze({}) };

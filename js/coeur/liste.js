@@ -22,12 +22,14 @@ import { aSaRecette, quantiteLisible, typeDe } from './plats.js';
 import { estDansCorbeille } from './corbeille.js';
 import { deNom } from './notes.js';
 import {
-  EFFACER, RANGS_STATUT, articlesDesRestes, cheminSur, coefDe, ecrituresRouvrir, idGarde, jourValide, lireSemaine,
-  peutPreparerLaSuivante, platsDeLaSemaine, semaineSuivante, semaineVisee, statutSemaine, texteDates, texteJour,
+  EFFACER, RANGS_STATUT, articlesDesRestes, cheminSur, coefDe, ecrituresRouvrir, idGarde, jourDeDerniereFois, jourValide,
+  lireSemaine, peutPreparerLaSuivante, platsDeLaSemaine, semaineSuivante, semaineVisee, statutSemaine, texteDates,
+  texteJour,
 } from './semaine.js';
 import { LIBELLES_RAYON, UNITES_EDITION } from './edition.js';
 import { LIBELLES_STYLE } from './vocabulaire.js';
 import { RECHERCHE_MAX, lireDrive } from './drive.js';
+import { PROPOSITION_MIN, TEXTES_PROPOSER, libelleProposer } from './proposition.js';
 
 /** Unité → [famille, facteur vers l'unité de base] : masse (g), volume (ml), puis une famille par autre unité. */
 export const FAMILLES = Object.freeze({
@@ -1420,23 +1422,6 @@ export function phraseRestesFin(liste) {
   return `Il reste ${pluriel(noms.length, 'article')}\u00A0: ${quoi}.`;
 }
 
-/** Date « AAAA-MM-JJ » d'une `derniereFois` lue (texte, ou horodatage à sa date locale) ; null sinon. */
-function jourDeDerniereFois(valeur) {
-  if (typeof valeur === 'string') return jourValide(valeur) ? valeur : null;
-  let date = null;
-  if (valeur instanceof Date) date = valeur;
-  else if (estObjet(valeur) && typeof valeur.toDate === 'function') {
-    try {
-      date = valeur.toDate();
-    } catch {
-      date = null;
-    }
-  } else if (estObjet(valeur) && estNombre(valeur.seconds)) date = new Date(valeur.seconds * 1000);
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
-  const deux = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${deux(date.getMonth() + 1)}-${deux(date.getDate())}`;
-}
-
 /** Copie d'un article tel qu'il est (`{ id, ...champs }`), pour le remettre par « Annuler » ; aucune valeur undefined. */
 function copieArticle(valeur) {
   if (Array.isArray(valeur)) return valeur.map(copieArticle);
@@ -1616,12 +1601,17 @@ export function texteCoursesFaites(semaine) {
 }
 
 /**
- * Carte « prochaine action » de Semaine (le seul bouton principal de l'écran) → { cas, titre, texte, fin, boutons,
- * suivante } ; `boutons` : [{ action: 'choisir' | 'courses' | 'preparer', libelle, principal }] ; `suivante` : la
- * semaine que « Préparer la semaine du … » ouvrira (rien n'est écrit), sinon null. Cas :
+ * Carte « prochaine action » de Semaine (le seul bouton principal de l'écran) → { cas, titre, texte, ligne, fin,
+ * boutons, suivante } ; `boutons` : [{ action: 'proposer' | 'choisir' | 'courses' | 'preparer', emoji?, libelle,
+ * principal, nombre? }] (`emoji` à part, dans un span aria-hidden : « ✨ », « ＋ ») ; `suivante` : la semaine que
+ * « Préparer la semaine du … » ouvrira (rien n'est écrit), sinon null ; `ligne` : phrase sous le texte (T4-0, sans
+ * proposition : proposition.js › texteSansProposition), sinon null. Cas :
  * - 'chargement' : semaines pas encore lues ;
  * - 'choisir' : aucune semaine ou aucun plat (« Que mange-t-on cette semaine ? », ou les dates de la semaine visée
- *   quand elle commence plus tard : « Que mange-t-on du 17 au 23 octobre ? ») ;
+ *   quand elle commence plus tard : « Que mange-t-on du 17 au 23 octobre ? ») ; T4-0 : avec `proposition`
+ *   ({ plats } d'apercuProposition, PROPOSITION_MIN au moins), « ✨ Proposer 4 plats » principal (`nombre` : les plats
+ *   annoncés) et « ＋ Choisir les plats » secondaire, texte « Laissez l’app proposer, ou choisissez vous-même : … » ;
+ *   sans elle, « ＋ Choisir les plats » principal et `ligne` = `sansProposition` ;
  * - 'liste' : « Courses : 32 articles », puis « Courses : encore 12 articles » ;
  * - 'sansRecette' : rien à acheter et des plats ⏳ ; 'rien' : rien à acheter (personne n'en mange) ;
  * - 'panier' : tout est coché (au moins une ligne ou un article) : « Tout est dans le panier 🎉 », « Dites-le dans
@@ -1631,12 +1621,16 @@ export function texteCoursesFaites(semaine) {
  * En plus, si la semaine a des plats et finit dans 2 jours au plus : `fin` (« Cette semaine se termine vendredi 16
  * octobre. ») et « Préparer la semaine du 17 au 23 octobre » (principal quand tout est dans le panier ou les courses
  * faites, ou sans autre bouton principal).
- * `plats` : platsDeLaSemaine ; `liste` : listeDeCourses ; `groupes` : grouperParRayon.
+ * `plats` : platsDeLaSemaine ; `liste` : listeDeCourses ; `groupes` : grouperParRayon ; `proposition` : { plats } ou
+ * null ; `sansProposition` : la ligne à montrer sans proposition, ou null.
  */
 export function carteProchaineAction(semaine, {
   semainesChargees = false, semaines = [], aujourdhui = null, plats = [], liste = null, groupes = null,
+  proposition = null, sansProposition = null,
 } = {}) {
-  const carte = { cas: 'chargement', titre: 'Chargement de la semaine…', texte: null, fin: null, boutons: [], suivante: null };
+  const carte = {
+    cas: 'chargement', titre: 'Chargement de la semaine…', texte: null, ligne: null, fin: null, boutons: [], suivante: null,
+  };
   if (!semainesChargees) return carte;
   const lue = lireSemaine(semaine);
   const actifs = listeDe(plats).filter((e) => e?.etat === 'ok' || e?.etat === 'sansRecette');
@@ -1646,12 +1640,24 @@ export function carteProchaineAction(semaine, {
     const toutes = lue && !connues.some((s) => s?.id === lue.id) ? [...connues, lue] : connues;
     const visee = semaineVisee(toutes, aujourdhui);
     const plusTard = visee && visee.debut > aujourdhui;
+    const titre = plusTard ? `Que mange-t-on ${texteDates(visee.debut, visee.fin)}\u00A0?` : 'Que mange-t-on cette semaine\u00A0?';
+    const nombre = Number.isInteger(proposition?.plats) ? proposition.plats : 0;
+    if (nombre >= PROPOSITION_MIN) {
+      return {
+        ...carte, cas: 'choisir', titre, texte: TEXTES_PROPOSER.texteCarte,
+        boutons: [
+          { action: 'proposer', ...libelleProposer({ plats: nombre }), principal: true, nombre },
+          { action: 'choisir', emoji: '＋', libelle: 'Choisir les plats', principal: false },
+        ],
+      };
+    }
     return {
       ...carte,
       cas: 'choisir',
-      titre: plusTard ? `Que mange-t-on ${texteDates(visee.debut, visee.fin)}\u00A0?` : 'Que mange-t-on cette semaine\u00A0?',
+      titre,
       texte: 'Choisissez quelques plats\u00A0: la liste de courses se fait toute seule.',
-      boutons: [{ action: 'choisir', libelle: '＋ Choisir les plats', principal: true }],
+      ligne: typeof sansProposition === 'string' && sansProposition ? sansProposition : null,
+      boutons: [{ action: 'choisir', emoji: '＋', libelle: 'Choisir les plats', principal: true }],
     };
   }
   const total = groupes?.total ?? 0;
