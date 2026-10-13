@@ -5,6 +5,7 @@ process.env.TZ = 'Europe/Paris';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   CHAMPS_ECRITS_PAR_ETAPES, FORMAT, VERSION_REALISATION, champsEcritureEtapes, controlerInstructions, ecrituresEtapes,
   entreesPourImport, filtrerPreparation, preparerImport, recetteValidee, validerPaquet, verifierEcritureEtapes,
@@ -463,6 +464,34 @@ test('« Modifier » : « Cuit surtout au » changé, la plus longue étape de l
   assert.equal(meme.relire, null);
   // Sans étapes détaillées : la cuisson seule.
   assert.equal(changerCuissonEtEtapes(normaliserPourEdition(GRATIN), { appareil: 'four', dureeMin: 30 }).realisation, null);
+});
+
+test('« Modifier » : portions changées ailleurs pendant qu’une quantité change ici → conflit, avec ou sans étapes détaillées', () => {
+  for (const plat of [structuredClone(GRATIN), detaille(GRATIN, REALISATION_GRATIN)]) {
+    const base = normaliserPourEdition(plat);
+    const saisie = structuredClone(base);
+    saisie.ingredients[0].qte = 500;
+    const r = preparerModification(base, saisie, { ...structuredClone(plat), portionsBase: 8 });
+    assert.deepEqual(r.conflits, ['portionsBase']);
+    assert.equal(r.champs.portionsBase, 4);
+    assert.equal(r.champs.ingredients[0].qte, 500);
+  }
+});
+
+test('« Modifier » : le bandeau « Relisez l’étape » n’est dans le document que lorsqu’il parle', async () => {
+  // Régression de T5-0b : ce bandeau, caché mais toujours présent, portait `bandeau bandeau-alerte` ; l’écran avait
+  // alors deux bandeaux d’alerte et deux bandeaux tout court, et celui du conflit (« … vient d’être changé sur l’autre
+  // téléphone ») ou celui de la reprise ne se trouvaient plus seuls. Les bandeaux de l’écran créés cachés sont ceux
+  // des messages sous le titre ; « Relisez l’étape » est créé visible et posé seulement quand il a un texte.
+  const source = await readFile(new URL('../js/ui/modifier.js', import.meta.url), 'utf8');
+  const caches = source.match(/el\('p', \{ class: 'bandeau[^']*', hidden: true \}/g) ?? [];
+  assert.equal(caches.length, 2, caches.join(' | '));
+  assert.match(source, /const bandeauRepris = el\('p', \{ class: 'bandeau', hidden: true \}/);
+  assert.match(source, /const bandeauConflit = el\('p', \{ class: 'bandeau bandeau-alerte', hidden: true \}/);
+  assert.match(source, /bandeauRelire = el\('p', \{ class: 'bandeau bandeau-alerte' \}/);
+  assert.match(source, /if \(!relire\) bandeauRelire\.remove\(\);\n\s+else if \(!bandeauRelire\.isConnected\) zoneRelire\?\.append\(bandeauRelire\);/);
+  assert.doesNotMatch(source, /bandeauRelire\.hidden/);
+  assert.match(source, /zoneRelire = el\('div', \{ role: 'status' \}, aideCuisson\)\)/);
 });
 
 // ——— Sauvegarde ———

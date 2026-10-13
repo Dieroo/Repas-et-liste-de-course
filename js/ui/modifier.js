@@ -1338,6 +1338,7 @@ export function creer(ctx) {
   let aideCuisson;
   let ligneDuree;
   let bandeauRelire; // étapes détaillées : « Relisez l’étape « … » : … » (T5-0b)
+  let zoneRelire; // sa région vivante, sous la cuisson
 
   function majAideCuisson() {
     if (!aideCuisson) return;
@@ -1356,7 +1357,8 @@ export function creer(ctx) {
       ? TEXTES_ETAPES.relireEtape(String(suivie.titre ?? ''))
       : '';
     if (bandeauRelire.lastChild.textContent !== relire) bandeauRelire.lastChild.textContent = relire;
-    bandeauRelire.hidden = !relire;
+    if (!relire) bandeauRelire.remove();
+    else if (!bandeauRelire.isConnected) zoneRelire?.append(bandeauRelire);
   }
 
   // ——— Construction du formulaire (une seule fois) ———
@@ -1479,7 +1481,9 @@ export function creer(ctx) {
         'Durée', el('span', { class: 'visuellement-masque' }, ', en minutes')),
       el('div', { class: 'champ-avec-unite' }, champs.cuisson, el('span', { 'aria-hidden': 'true' }, 'min')));
     aideCuisson = el('p', { class: 'aide', id: descriptions.cuisson, hidden: true });
-    bandeauRelire = el('p', { class: 'bandeau bandeau-alerte', hidden: true }, el('span', { 'aria-hidden': 'true' }, '⚠️'), el('span', {}));
+    // Hors du document tant qu'il est vide : un bandeau caché de plus ne doit jamais côtoyer ceux de l'écran (le
+    // bandeau « repris » et celui du conflit, sous le titre).
+    bandeauRelire = el('p', { class: 'bandeau bandeau-alerte' }, el('span', { 'aria-hidden': 'true' }, '⚠️'), el('span', {}));
 
     // Bon à savoir
     const frigo = compteur({
@@ -1555,7 +1559,7 @@ export function creer(ctx) {
           el('div', { class: 'choix-appareils' }, tuiles)),
         ligneDuree,
         zoneErreur('cuisson'),
-        el('div', { role: 'status' }, aideCuisson, bandeauRelire)),
+        zoneRelire = el('div', { role: 'status' }, aideCuisson)),
 
       carte('Bon à savoir',
         frigo.noeud,
