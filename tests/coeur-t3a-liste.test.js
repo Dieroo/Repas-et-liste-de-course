@@ -251,6 +251,9 @@ test('liste : forme d’une ligne (clé = produit, recherche = nom, ni coche ni 
     type: 'ligne', cle: 'pate', produitId: 'pate', repli: null, replis: [], nom: 'Pâtes', libelle: 'pâtes', rayon: 'epicerie_salee',
     totaux: { masse: 750 }, quantite: '750\u00A0g', sources: pates.sources, placard: false, rachetee: false,
     cochee: false, dejaPris: null, reste: null, recherche: 'pâtes', rechercheFoyer: null, // T3b : aucun mot du foyer
+    // T3d : une ligne des plats ; réglages du produit pour la feuille ⋮ (aucun du foyer ici).
+    chaqueSemaine: false, rayonDeDepart: 'epicerie_salee', rayonDuFoyer: false, placardProduit: null, placardDuFoyer: false,
+    habituel: null, habituelSaute: false,
   });
 });
 
@@ -534,7 +537,10 @@ test('liste : sans semaine, seuls les articles cochés depuis 2 jours au plus re
   assert.deepEqual(listeDeCourses(null, { articles, maintenant }).articles.map((a) => a.articleId).sort(), ['hier', 'libre']);
   assert.deepEqual(listeDeCourses(null, { articles }).articles.length, 3, 'sans heure : rien n’est caché');
   const vide = listeDeCourses(undefined);
-  assert.deepEqual(vide, { lignes: [], maison: [], articles: [], sansRecette: [], horsListe: [], sansPortion: [], aVerifier: [] });
+  assert.deepEqual(vide, {
+    lignes: [], maison: [], articles: [], sansRecette: [], horsListe: [], sansPortion: [], aVerifier: [],
+    habituels: [], preparations: [], // T3d : rien de chaque semaine sans semaine
+  });
 });
 
 test('liste : ordre des rayons du foyer, puis le nom ; articles rangés de même', () => {

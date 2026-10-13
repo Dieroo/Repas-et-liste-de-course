@@ -1,6 +1,7 @@
 // Ids des produits courants livrés (js/coeur/dictionnaire.js, T3-0), figés : un id livré ne disparaît jamais.
 // Un nom corrigé garde son id (l'ancien nom devient un alias) ; une entrée nouvelle ajoute ici son id (cleProduit du nom).
-// Vérifié par tests/coeur-dictionnaire.test.js (point 10). Trié par ordre alphabétique ; données génériques.
+// Vérifié par tests/coeur-dictionnaire.test.js (point 10). Trié par ordre alphabétique (les ajouts d'une livraison à la
+// suite, triés entre eux) ; données génériques.
 
 export const IDS_DICTIONNAIRE = Object.freeze([
   'abondance', 'abricot', 'abricot-sec', 'agar-agar', 'agneau', 'aiguillette-de-canard', 'ail', 'ail-en-poudre',
@@ -89,4 +90,13 @@ export const IDS_DICTIONNAIRE = Object.freeze([
   'vinaigre-balsamique', 'vinaigre-balsamique-blanc', 'vinaigre-blanc', 'vinaigre-de-cidre', 'vinaigre-de-framboise',
   'vinaigre-de-riz', 'vinaigre-de-vin', 'vinaigre-de-vin-blanc', 'vinaigre-de-vin-rouge', 'vinaigre-de-xere', 'whisky',
   'yaourt-au-soja', 'yaourt-grec', 'yaourt-nature',
+  // T3d : produits hors cuisine (`recette: false`), triés à part.
+  'adoucissant', 'allumette', 'ampoule', 'apre-shampooing', 'assiette-en-carton', 'bain-de-bouche', 'bougie', 'briquet',
+  'brosse-a-dent', 'coton', 'coton-tige', 'couche', 'cure-dent', 'dentifrice', 'deodorant', 'detachant', 'eau-de-javel',
+  'eponge', 'essuie-tout', 'ficelle-de-cuisine', 'fil-dentaire', 'film-alimentaire', 'gant-de-menage', 'gel-douche',
+  'gobelet', 'lavette', 'lessive', 'lingette', 'liquide-de-rincage', 'liquide-vaisselle', 'litiere', 'mouchoir',
+  'mousse-a-raser', 'nettoyant-multi-usage', 'nettoyant-vitre', 'nettoyant-wc', 'pansement', 'papier-aluminium',
+  'papier-cuisson', 'papier-toilette', 'pastille-lave-vaisselle', 'pile', 'pique-a-brochette', 'protege-slip', 'rasoir',
+  'ruban-adhesif', 'sac-congelation', 'sac-poubelle', 'savon', 'sel-regenerant', 'serpilliere', 'serviette-en-papier',
+  'serviette-hygienique', 'shampooing', 'tampon-hygienique', 'vinaigre-menager',
 ]);

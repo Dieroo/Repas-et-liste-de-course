@@ -3876,12 +3876,15 @@ html:has(.vue.courses) body { overflow-anchor: none; }
 
 .lignes-maison li + li { border-top: 1px solid var(--bordure); }
 
-/* Un produit du placard : toute la ligne se touche, interrupteur « À racheter » à droite. */
+/* Un produit du placard : toute la ligne se touche, interrupteur « À racheter » à droite. En police agrandie, quand le
+   nom n'a plus sa place (10em), l'interrupteur et son mot passent dessous, à droite : jamais un nom en colonne étroite
+   coupé en plein mot (relecture de T3d : « Pas cette semaine » est bien plus long que « À racheter »). */
 .ligne-maison {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 4px 14px;
   min-height: 56px;
   padding: 8px 0;
   cursor: pointer;
@@ -3889,11 +3892,11 @@ html:has(.vue.courses) body { overflow-anchor: none; }
 
 .maison-texte {
   display: flex;
-  flex: 1;
+  flex: 1 1 10em;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .maison-nom { font-weight: 600; }
@@ -3916,13 +3919,29 @@ html:has(.vue.courses) body { overflow-anchor: none; }
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
 }
 
+/* Un mot court par ligne au besoin (« Pas cette / semaine ») : l'interrupteur garde une largeur raisonnable. */
 .maison-bascule-texte {
+  max-width: 7em;
   color: var(--texte-doux);
   font-size: 0.75rem;
   font-weight: 600;
-  white-space: nowrap;
+  text-align: center;
+}
+
+/* Une ligne de « Déjà à la maison ? » avec son ⋮ (T3d) : la ligne qui se touche, puis le bouton, hors de la cible de
+   l'interrupteur. */
+.ligne-maison-details {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ligne-maison-details > .ligne-maison {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Rayons : en-tête collant sous l'en-tête de l'app (et sous le bandeau d'aperçu), sous les feuilles. */
@@ -4078,8 +4097,8 @@ body:has(.barre-courses) .annonce {
   padding: 0 18px;
 }
 
-/* Trois suggestions réservées : rien ne bouge pendant la frappe. */
-.suggestions-article { min-height: calc(3 * 48px + 2 * 6px); }
+/* Trois suggestions réservées : rien ne bouge pendant la frappe. Champ vide : les « Récents » (T3d) à leur place. */
+.zone-suggestions-article { min-height: calc(3 * 48px + 2 * 6px); }
 
 .message-ajout {
   min-height: 48px;
@@ -4323,3 +4342,203 @@ body:has(.barre-courses) .annonce {
   gap: 8px;
   margin-top: 4px;
 }
+
+/* ——— Placard, habituels et rayons (T3d) ——— */
+
+/* « Ajouter à la liste » : « Récents », une seule rangée de puces qui défile de côté (relecture de T3d : sur plusieurs
+   lignes, elles dépassaient la place des trois suggestions et le champ sautait à la première lettre) ; un nom long est
+   abrégé à l'écran, lu en entier. Contour de champ (3:1 au moins sur la feuille, en clair comme en sombre). */
+.bloc-recents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.etiquette-recents { font-weight: 600; }
+
+/* Marge intérieure : le contour du focus (3 px + 2 px) n'est pas rogné par le défilement. */
+.puces.puces-recents {
+  flex-wrap: nowrap;
+  margin: -6px;
+  padding: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 6px;
+}
+
+.puce.puce-recent {
+  flex: none;
+  max-width: 16em;
+  overflow: hidden;
+  border-color: var(--bordure-champ);
+  background: var(--fond);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Feuille d'un article : les réglages du produit, sous ce qu'il faut acheter (la liste « Pour : » finit déjà par un
+   trait). */
+.reglages-article {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bloc-rayon,
+.bloc-habituel,
+.bloc-toujours {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* « Rayon : Épicerie salée · Changer » : comme « Au drive, je cherche … · Changer ». */
+.ligne-rayon { overflow-wrap: anywhere; }
+
+.bouton.bouton-changer-rayon {
+  min-height: 48px;
+  padding: 0 8px;
+  color: var(--accent);
+}
+
+.bloc-toujours > .aide { margin-top: -6px; }
+
+/* « Quantité (facultatif) » : le nombre et l'unité côte à côte, « Enregistrer » dessous. */
+.formulaire-habituel { padding-bottom: 4px; }
+
+.ligne-quantite-habituel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+
+/* Feuille du rayon : les 14 rayons, deux par ligne (un par ligne en police agrandie) ; le rayon du produit marqué. */
+.feuille-rayon {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.choix-rayons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5em), 1fr));
+  gap: 8px;
+}
+
+.choix.choix-rayon { overflow-wrap: anywhere; }
+
+.choix.choix-rayon[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-doux);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Feuille « Ordre des rayons » (relecture de T3d) : un rayon se choisit (bouton radio, toute la ligne se touche), puis
+   « ↑ Monter » et « ↓ Descendre », collés en bas avec « Enregistrer » : toujours à la même place sous le doigt. */
+.feuille-ordre-rayons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Le rayon déplacé reste visible au-dessus des boutons collés en bas. */
+.feuille:has(.feuille-ordre-rayons) { scroll-padding-bottom: 200px; }
+
+.groupe-rayons {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.liste-rayons {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: rayon;
+}
+
+.liste-rayons li + li { border-top: 1px solid var(--bordure); }
+
+.ligne-ordre-rayon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 56px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  counter-increment: rayon;
+  cursor: pointer;
+}
+
+.ligne-ordre-rayon input {
+  flex: none;
+  order: -1;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+
+.ligne-ordre-rayon::before {
+  content: counter(rayon) / '';
+  flex: none;
+  min-width: 1.75em;
+  color: var(--texte-doux);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ligne-ordre-rayon:has(input:checked) { background: var(--accent-doux); }
+
+/* Nom entier : en police très agrandie, il passe sous le bouton et le rang plutôt que d'être coupé en plein mot. */
+.rayon-ordre-nom {
+  flex: 1 1 8em;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.boutons-deplacer {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.5em), 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bouton.bouton-deplacer {
+  min-height: 48px;
+  white-space: normal;
+}
+
+.bouton.bouton-deplacer:disabled {
+  border-style: dashed;
+  color: var(--texte-doux);
+  cursor: default;
+}
+
+/* Courses, mode Magasin : « Ordre des rayons › » sous la liste, comme « Votre drive : … › ». */
+.bouton.bouton-ordre-rayons {
+  align-self: center;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Semaine : « Chaque semaine aussi : Yaourts maison », puis une ligne par préparation et son « Pas cette semaine ». */
+.carte-chaque-semaine {
+  gap: 4px;
+  padding: 12px 16px;
+}
+
+.phrase-chaque-semaine {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Réglages : « Ordre des rayons » et « 🏠 Placard ». */
+.carte-rayons p,
+.carte-placard p { overflow-wrap: anywhere; }

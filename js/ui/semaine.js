@@ -8,6 +8,8 @@
 // âge (T2c-3), la carte « 📬 2 demandes à traiter » (T2e) en tête, et la carte « Idées de plats » en bas.
 // Les dates de la semaine (« Du 10 au 16 octobre ») ont leur « Changer » (T3c) : feuille « Les dates de la semaine »,
 // « Du » et « Au » natifs, deux semaines au plus, jamais à cheval sur une autre semaine.
+// Sous les plats (T3d) : « Chaque semaine aussi : Yaourts maison » (préparations de chaque semaine, qui vont d'elles-mêmes
+// dans la liste), avec un interrupteur « Pas cette semaine » par préparation (actions.sauterPreparation).
 // Rien n'est écrit à l'ouverture : chaque section se met à jour en place (`maj`), la liste de courses suit.
 import { el, enteteVue, pastille, ecrireTexte, reconcilier } from './dom.js';
 import { prenomDe } from './profil.js';
@@ -29,7 +31,9 @@ import {
   TEXTES_DATES, exceptionPlat, feuillePlat, lireSemaine, peutPreparerLaSuivante, resumePlat, semaineEnCours,
   texteDates, texteErreurDates, texteJour, validerDates,
 } from '../coeur/semaine.js';
-import { carteProchaineAction, grouperParRayon, ordreRayons } from '../coeur/liste.js';
+import {
+  TEXTES_T3D, carteProchaineAction, grouperParRayon, ordreRayons, texteChaqueSemaineAussi,
+} from '../coeur/liste.js';
 
 const formatDate = new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -622,6 +626,74 @@ function creerEnCeMoment() {
 }
 
 /**
+ * « Chaque semaine aussi : Yaourts maison » (T3d) : les préparations de chaque semaine (coeur/liste.js ›
+ * preparationsChaqueSemaine, par la liste de la semaine montrée), qui vont d'elles-mêmes dans la liste ; une ligne par
+ * préparation, avec l'interrupteur « Pas cette semaine » (actions.sauterPreparation(platId, oui) : `sansHebdo.<platId>`
+ * de la semaine montrée). Lignes gardées par leur clé : le focus reste sur l'interrupteur touché. → { noeud, maj(ctx) }
+ */
+function creerChaqueSemaine() {
+  let courant = null;
+  const phrase = el('p', { class: 'phrase-chaque-semaine' });
+  const lignes = el('ul', { class: 'lignes-maison lignes-chaque-semaine' });
+  const noeud = el('div', { class: 'carte carte-chaque-semaine', hidden: true }, phrase, lignes);
+  const parties = new WeakMap();
+  let numero = 0;
+  let seule = false; // une seule préparation : sa ligne dit toute la phrase
+
+  function sauter(platId, input) {
+    const oui = input.checked;
+    quand(courant?.actions?.sauterPreparation?.(platId, oui), (resultat) => {
+      if (echoue(resultat)) input.checked = !oui;
+    });
+  }
+
+  function creerLigne(preparation) {
+    numero += 1;
+    const id = `chaque-semaine-${numero}`;
+    const platId = preparation.platId;
+    const input = el('input', { class: 'interrupteur', type: 'checkbox', role: 'switch', 'aria-describedby': `${id}-detail` });
+    input.addEventListener('change', () => sauter(platId, input));
+    const nom = el('span', { class: 'maison-nom' });
+    const detail = el('span', { class: 'maison-detail', id: `${id}-detail` });
+    const li = el('li', {},
+      el('label', { class: 'ligne-maison' },
+        el('span', { class: 'maison-texte' }, nom, detail),
+        el('span', { class: 'maison-bascule' },
+          el('span', { class: 'maison-bascule-texte', 'aria-hidden': 'true' }, TEXTES_T3D.pasCetteSemaine),
+          input)));
+    parties.set(li, { input, nom, detail });
+    majLigne(li, preparation);
+    return li;
+  }
+
+  function majLigne(li, preparation) {
+    const { input, nom, detail } = parties.get(li);
+    // Une seule préparation : sa ligne porte la phrase elle-même (« Chaque semaine aussi : Yaourts maison »).
+    ecrireTexte(nom, seule ? texteChaqueSemaineAussi([preparation]) : preparation.nom);
+    // Sans recette, elle n'apporte rien à la liste : on le dit.
+    const texte = preparation.sansRecette ? '⏳ Pas encore de recette.' : '';
+    ecrireTexte(detail, texte);
+    detail.hidden = !texte;
+    if (input.checked !== preparation.saute) input.checked = preparation.saute;
+    const libelle = `${TEXTES_T3D.pasCetteSemaine}\u00A0: ${preparation.nom}`;
+    if (input.getAttribute('aria-label') !== libelle) input.setAttribute('aria-label', libelle);
+  }
+
+  function maj(ctx, montree) {
+    courant = ctx;
+    const preparations = montree ? (listeCourante(ctx)?.preparations ?? []) : [];
+    seule = preparations.length === 1;
+    // Plusieurs préparations : la phrase, puis une ligne par préparation (son nom et son interrupteur).
+    ecrireTexte(phrase, seule ? '' : texteChaqueSemaineAussi(preparations));
+    phrase.hidden = seule;
+    reconcilier(lignes, preparations, { cle: (p) => p.platId, creer: creerLigne, maj: majLigne });
+    noeud.hidden = !preparations.length;
+  }
+
+  return { noeud, maj };
+}
+
+/**
  * Section « Les plats de la semaine » : titre, dates (« Du 10 au 16 octobre ») et « Changer » (T3c : feuille « Les
  * dates de la semaine »), « En ce moment… », une carte par plat (ordre d'ajout), les plats de la corbeille, puis
  * « ＋ Choisir d'autres plats » (s'il y a déjà un plat et que la semaine ne finit pas dans 2 jours : la carte propose
@@ -649,6 +721,7 @@ function creerSectionPlats(choisir, ouvrir) {
   const enCeMoment = creerEnCeMoment();
   const listeCartes = el('div', { class: 'cartes-plats-semaine' });
   const horsSemaine = el('div', { class: 'plats-hors-semaine' });
+  const chaqueSemaine = creerChaqueSemaine();
   const boutonAutres = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button' },
     el('span', { 'aria-hidden': 'true' }, '＋'), 'Choisir d’autres plats');
   boutonAutres.addEventListener('click', () => choisir(boutonAutres));
@@ -657,6 +730,7 @@ function creerSectionPlats(choisir, ouvrir) {
     enCeMoment.noeud,
     listeCartes,
     horsSemaine,
+    chaqueSemaine.noeud,
     boutonAutres);
 
   function maj(ctx) {
@@ -677,6 +751,8 @@ function creerSectionPlats(choisir, ouvrir) {
     if (ordreAvant.some((n) => !n.isConnected)) ordrePrecedent = ordreAvant.map((n) => n.dataset.plat);
     reconcilier(horsSemaine, jetes, { cle: (e) => e.platId, creer: ligneCorbeille, maj: majLigneCorbeille });
     horsSemaine.hidden = !jetes.length;
+    // Préparations de chaque semaine (T3d) : sous les plats, tant que la semaine montrée a des plats.
+    chaqueSemaine.maj(ctx, Boolean(lue) && montres.length > 0);
     boutonAutres.hidden = !montres.length || peutPreparerLaSuivante(lue, aujourdhuiDe(ctx));
     noeud.hidden = !montres.length && !jetes.length && enCeMoment.noeud.hidden;
     if (carteActive && !carteActive.isConnected) focusApresRetrait(ordreAvant.indexOf(carteActive), ordreAvant);

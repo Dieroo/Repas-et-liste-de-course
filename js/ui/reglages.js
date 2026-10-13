@@ -1,11 +1,13 @@
 // Écran Réglages (gestionnaire) : rôle, profils du foyer, sauvegarde, projet Claude, relecture des recettes,
 // notifications (T2e : carte « 🔔 Notifications », où l'app crée le sujet ntfy du foyer) et drive (T3b : carte « 🚗
-// Drive », la même feuille « Votre drive » que dans Courses).
+// Drive », la même feuille « Votre drive » que dans Courses), ordre des rayons (T3d : carte « Ordre des rayons », la même
+// feuille que le mode Magasin de Courses) et placard (T3d : carte « 🏠 Placard », les produits que le foyer a réglés
+// dans « Toujours dans mon placard »).
 // Profil d'un enfant (T2c) : « 🧸 Ce que <Enfant> mange › » ouvre l'écran de ses précautions selon l'âge ; la ligne
 // du profil donne son âge (« · 🧸 4 ans ») et, si sa date demande des précautions que ses règles n'ont pas encore
 // (restauration, règle abîmée retirée, barème complété), « 🧸 N précautions à ajouter › ». Calcul seulement : rien
 // n'est écrit avant « Enregistrer » sur l'écran de l'enfant.
-import { el, enteteVue, etatVide, annoncer } from './dom.js';
+import { el, enteteVue, etatVide, annoncer, ecrireTexte, reconcilier } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
 import { avecEcranAge, aujourdhuiDe } from './regime.js';
@@ -19,6 +21,10 @@ import { ageEnMois, estRegleAge, reglesSelonAge, texteAge } from '../coeur/age.j
 import { LIEN_INSTALLER_NTFY, lienAbonnement, sujetValide, texteEssai } from '../coeur/ntfy.js';
 import { TEXTES_DRIVE, texteVotreDrive } from '../coeur/drive.js';
 import { driveDe, majFeuillesDrive, ouvrirVotreDrive } from './drive.js';
+import { majFeuillesArticle, ouvrirOrdreDesRayons } from './article.js';
+import { LIBELLES_RAYON } from '../coeur/edition.js';
+import { ficheProduit, indexDesRecettes } from '../coeur/produits.js';
+import { TEXTES_T3D, ordreRayons, placardDuFoyer, textePlacard } from '../coeur/liste.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
 const JOURS_RAPPEL_SAUVEGARDE = 30;
@@ -684,6 +690,141 @@ function creerCarteDrive(ctx) {
   return { noeud, maj };
 }
 
+/**
+ * Carte « Ordre des rayons » (T3d) : les premiers rayons dans l'ordre du foyer, et « Changer », qui ouvre la feuille
+ * « Ordre des rayons » (la même qu'en bas du mode Magasin de Courses). → { noeud, maj }
+ */
+function creerCarteRayons(ctx) {
+  let courant = ctx;
+  const texte = el('p', { class: 'texte-doux', id: 'texte-ordre-rayons' });
+  const bouton = el('button', {
+    class: 'bouton bouton-secondaire bouton-plein',
+    type: 'button',
+    'aria-label': 'Changer l’ordre des rayons',
+    'aria-describedby': 'texte-ordre-rayons',
+  }, TEXTES_T3D.changer);
+  bouton.addEventListener('click', () => {
+    ouvrirOrdreDesRayons(() => courant, {
+      onFermer: () => {
+        if (bouton.isConnected) bouton.focus();
+      },
+    });
+  });
+
+  function maj(nouveau) {
+    courant = nouveau;
+    const ordre = Array.isArray(nouveau.rayons) && nouveau.rayons.length ? nouveau.rayons : ordreRayons(nouveau.reglages);
+    const premiers = ordre.slice(0, 3).map((rayon) => LIBELLES_RAYON[rayon] ?? rayon);
+    const voulu = `${premiers.join(', ')}…`;
+    if (texte.textContent !== voulu) texte.textContent = voulu;
+    majFeuillesArticle(nouveau);
+  }
+
+  const noeud = el('section', { class: 'carte carte-rayons', 'aria-labelledby': 'titre-ordre-rayons' },
+    el('h2', { id: 'titre-ordre-rayons' }, TEXTES_T3D.ordreRayons),
+    texte,
+    bouton);
+  maj(ctx);
+  return { noeud, maj };
+}
+
+/**
+ * Carte « 🏠 Placard » (T3d) : les produits que le foyer a réglés par « Toujours dans mon placard » (feuille ⋮ de
+ * Courses ; `ctx.placardFoyer`), mis de côté ou éteints, chacun avec son interrupteur (actions.reglerPlacard(produitId,
+ * oui)) ; pas la liste entière du placard de départ (trop longue). Un produit touché ici reste affiché jusqu'à la sortie de l'écran,
+ * même revenu à son réglage de départ (rien ne disparaît sous le doigt). → { noeud, maj }
+ */
+function creerCartePlacard(ctx) {
+  let courant = ctx;
+  const gardes = new Map(); // produitId → nom, des produits touchés ici
+  let memoIndex = { plats: null, index: new Map() };
+  const indexDe = (plats) => {
+    if (memoIndex.plats !== plats) memoIndex = { plats, index: indexDesRecettes(Array.isArray(plats) ? plats : []) };
+    return memoIndex.index;
+  };
+  const vide = el('p', { class: 'texte-doux' },
+    'Aucun produit réglé pour l’instant. Dans Courses, touchez ⋮ à côté d’un produit, puis «\u00A0Toujours dans mon placard\u00A0».');
+  const liste = el('ul', { class: 'lignes-maison lignes-placard' });
+  const parties = new WeakMap();
+  let numero = 0;
+
+  function basculer(produitId, input) {
+    const oui = input.checked;
+    gardes.set(produitId, parties.get(input.closest('li'))?.nomProduit ?? produitId);
+    const resultat = courant.actions?.reglerPlacard?.(produitId, oui);
+    const suite = (r) => {
+      const refuse = !r || Boolean(r.erreur) || (typeof r.code === 'string' && r.code !== 'ok' && r.code !== 'inchange');
+      if (refuse) input.checked = !oui;
+    };
+    if (resultat && typeof resultat.then === 'function') resultat.then(suite, () => suite(null));
+    else suite(resultat);
+  }
+
+  function creerLigne(produit) {
+    numero += 1;
+    const id = `placard-${numero}`;
+    const input = el('input', { class: 'interrupteur', type: 'checkbox', role: 'switch', 'aria-describedby': `${id}-detail` });
+    input.addEventListener('change', () => basculer(produit.produitId, input));
+    const nom = el('span', { class: 'maison-nom' });
+    const detail = el('span', { class: 'maison-detail', id: `${id}-detail` });
+    // Un mot visible sous l'interrupteur, comme « À racheter » dans Courses (son nom complet reste dans aria-label).
+    const li = el('li', {},
+      el('label', { class: 'ligne-maison' },
+        el('span', { class: 'maison-texte' }, nom, detail),
+        el('span', { class: 'maison-bascule' },
+          el('span', { class: 'maison-bascule-texte', 'aria-hidden': 'true' }, TEXTES_T3D.misDeCote),
+          input)));
+    parties.set(li, { input, nom, detail, nomProduit: produit.nom });
+    majLigne(li, produit);
+    return li;
+  }
+
+  function majLigne(li, produit) {
+    const partie = parties.get(li);
+    partie.nomProduit = produit.nom;
+    ecrireTexte(partie.nom, produit.nom);
+    // Éteint : ce que cela change (« Acheté quand vos plats en demandent. »).
+    const texte = produit.texte || (produit.actif ? '' : TEXTES_T3D.achete);
+    ecrireTexte(partie.detail, texte);
+    partie.detail.hidden = !texte;
+    if (partie.input.checked !== produit.actif) partie.input.checked = produit.actif;
+    const libelle = `${TEXTES_T3D.placard}\u00A0: ${produit.nom}`;
+    if (partie.input.getAttribute('aria-label') !== libelle) partie.input.setAttribute('aria-label', libelle);
+  }
+
+  /** Produits réglés par le foyer, et ceux touchés ici (revenus au départ, avec l'état de départ). */
+  function produits(c) {
+    const index = indexDe(c.tousLesPlats ?? c.plats ?? []);
+    const produitsFoyer = c.produitsFoyer ?? {};
+    const regles = Array.isArray(c.placardFoyer) ? c.placardFoyer : placardDuFoyer(produitsFoyer, { index });
+    const ids = new Set(regles.map((p) => p.produitId));
+    const touches = [...gardes].filter(([produitId]) => !ids.has(produitId)).map(([produitId, nom]) => {
+      const placard = ficheProduit(produitId, { produitsFoyer, index }).placard.valeur;
+      return { produitId, nom, actif: placard !== null, texte: placard !== null ? textePlacard(placard, { produitId }) : '' };
+    });
+    return [...regles, ...touches].sort((a, b) => a.nom.localeCompare(b.nom, 'fr', { sensitivity: 'base' })
+      || (a.produitId < b.produitId ? -1 : 1));
+  }
+
+  function maj(nouveau) {
+    courant = nouveau;
+    // Avant la lecture des produits, rien n'est dit (jamais « Aucun produit » pour rien).
+    const charges = nouveau.produitsCharges !== false;
+    const affiches = charges ? produits(nouveau) : [];
+    reconcilier(liste, affiches, { cle: (p) => p.produitId, creer: creerLigne, maj: majLigne });
+    liste.hidden = !affiches.length;
+    vide.hidden = !charges || Boolean(affiches.length);
+  }
+
+  const [emoji, ...mots] = TEXTES_T3D.placardReglages.split(' ');
+  const noeud = el('section', { class: 'carte carte-placard', 'aria-labelledby': 'titre-placard' },
+    el('h2', { id: 'titre-placard' }, el('span', { 'aria-hidden': 'true' }, `${emoji}\u00A0`), mots.join(' ')),
+    vide,
+    liste);
+  maj(ctx);
+  return { noeud, maj };
+}
+
 let versNotifications = false;
 
 /** Appelé par le lien « 🔔 Être prévenu sur votre téléphone › » de Demandes : la prochaine ouverture de Réglages va à la carte « 🔔 Notifications ». */
@@ -697,6 +838,8 @@ export function creer(ctx) {
   const carteRelecture = creerCarteRelecture(ctx);
   const carteNotifications = creerCarteNotifications(ctx);
   const carteDrive = creerCarteDrive(ctx);
+  const carteRayons = creerCarteRayons(ctx);
+  const cartePlacard = creerCartePlacard(ctx);
   // Venu du lien « 🔔 Être prévenu sur votre téléphone › » de l'écran Demandes : une seule fois, la carte « 🔔
   // Notifications » défile en haut et son titre reçoit le focus. Après l'image suivante : `monter` a déjà remis le
   // défilement et le focus de la zone.
@@ -828,6 +971,8 @@ export function creer(ctx) {
       carteRelecture.noeud,
       carteNotifications.noeud,
       carteDrive.noeud,
+      carteRayons.noeud,
+      cartePlacard.noeud,
       etatVide({
         emoji: '⚙️',
         teinte: 'olive',
@@ -842,6 +987,8 @@ export function creer(ctx) {
       carteRelecture.maj(nouveau);
       carteNotifications.maj(nouveau);
       carteDrive.maj(nouveau);
+      carteRayons.maj(nouveau);
+      cartePlacard.maj(nouveau);
     },
     detruire() {
       carteProjetClaude.detruire();

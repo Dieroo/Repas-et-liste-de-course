@@ -3,12 +3,17 @@
 // article » dans une barre fixée au-dessus des onglets. Marche hors ligne ; ce qui est coché sur un téléphone se coche
 // sur l'autre.
 // Deux façons de faire les courses (T3b), retenues sur ce téléphone pour ce compte, Drive d'avance :
-// - « 🚗 Drive » : « Pour cette semaine » (et « Comme chaque semaine » en T3d), sans en-têtes de rayon ; sur chaque ligne,
+// - « 🚗 Drive » : « Pour cette semaine » et « Comme chaque semaine » (T3d : produits « À acheter chaque semaine » et
+//   préparations de chaque semaine), sans en-têtes de rayon ; sur chaque ligne,
 //   🔍 ouvre la recherche du produit sur le site du drive (un vrai lien, jamais une coche) ; au retour sur l'app moins de
 //   15 minutes après, la ligne revient à l'écran, le focus sur sa case, avec « Pas le bon produit ? » et « Changer le
 //   mot cherché » ; drive pas réglé : la carte « Régler le drive » ;
 // - « 🛒 Magasin » : par rayon (en-têtes collants) ; l'écran reste allumé tant que Courses est visible, rendu après 10
-//   minutes sans toucher et redemandé au toucher suivant (toute erreur ignorée).
+//   minutes sans toucher et redemandé au toucher suivant (toute erreur ignorée) ; en bas, « Ordre des rayons › » (T3d :
+//   feuille « Ordre des rayons », article.js).
+// « Pas cette semaine » (T3d, replié, sous la liste) : les produits « À acheter chaque semaine » sautés cette semaine
+// (feuille ⋮), chacun avec son interrupteur pour le remettre (actions.sauterHabituel) ; un produit touché ici reste
+// affiché jusqu'à la prochaine ouverture de Courses.
 // « Courses terminées » (T3b) : finit tout de suite s'il ne reste rien, sinon la feuille « Courses terminées ? » (garder
 // les restes pour la prochaine fois, ou non) ; ensuite « Courses faites ✓ le samedi 10 octobre », « Pour les prochaines
 // courses » (articles restants), « Revoir la liste » (replié) et « Rouvrir la liste ».
@@ -23,13 +28,13 @@
 // actions.rouvrirListe, qui annoncent elles-mêmes.
 import { el, etatVide, ecrireTexte, reconcilier, vibrer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
-import { ouvrirAjoutArticle, ouvrirDetailsArticle, majFeuillesArticle } from './article.js';
+import { ouvrirAjoutArticle, ouvrirDetailsArticle, ouvrirOrdreDesRayons, majFeuillesArticle } from './article.js';
 import { driveDe, majFeuillesDrive, ouvrirMotCherche, ouvrirVotreDrive } from './drive.js';
 import { demanderChoixALArrivee } from './choisir-plats.js';
 import { listeCourante, platsDeLaSemaineDe } from './plat-semaine.js';
 import { LIBELLES_RAYON } from '../coeur/edition.js';
 import {
-  TEXTES_FIN_DES_COURSES, bandeauxCourses, coursesFaites, grouperDrive, grouperParRayon, lignesAjouteesDepuis,
+  TEXTES_FIN_DES_COURSES, TEXTES_T3D, bandeauxCourses, coursesFaites, grouperDrive, grouperParRayon, lignesAjouteesDepuis,
   ordreRayons, phraseRestesFin, restesFinDesCourses, texteAjoutesDepuis, texteCoursesFaites, texteDejaPris, texteOrigine,
 } from '../coeur/liste.js';
 import { lireSemaine, texteDates } from '../coeur/semaine.js';
@@ -112,6 +117,9 @@ export function creer(ctx) {
   const retenues = new Map();
   // Produits du placard rallumés (« À racheter ») pendant cette visite : ils restent dans « Déjà à la maison ? ».
   const gardesMaison = new Set();
+  // Produits « À acheter chaque semaine » remis (ou sautés) ici pendant cette visite : ils restent dans « Pas cette
+  // semaine » jusqu'à la prochaine ouverture de Courses (rien ne disparaît sous le doigt).
+  const gardesSautes = new Set();
   let minuteur = null;
   let toucherEnCours = false;
   let cleSousLeDoigt = null; // ligne touchée en dernier : la référence de l'ancrage
@@ -195,12 +203,27 @@ export function creer(ctx) {
   const resumePanier = el('summary', { class: 'resume-courses' });
   const listePanier = el('ul', { class: 'lignes-courses lignes-panier' });
   const zonePanier = el('details', { class: 'details-courses details-panier', hidden: true }, resumePanier, listePanier);
+  // « Pas cette semaine » (T3d) : les produits « À acheter chaque semaine » sautés cette semaine.
+  const resumeSautes = el('summary', { class: 'resume-courses' });
+  const listeSautes = el('ul', { class: 'lignes-maison lignes-sautes' });
+  const zoneSautes = el('details', { class: 'details-courses details-sautes', hidden: true }, resumeSautes, listeSautes);
   // La liste elle-même : sous l'en-tête pendant les courses, dans « Revoir la liste » une fois les courses faites.
-  const corps = el('div', { class: 'corps-courses' }, zoneMaison, achats, carteFini, zonePanier);
+  const corps = el('div', { class: 'corps-courses' }, zoneMaison, achats, carteFini, zonePanier, zoneSautes);
 
   const boutonTerminer = el('button', { class: 'bouton bouton-secondaire bouton-plein', type: 'button', hidden: true },
     TEXTES_FIN_DES_COURSES.bouton);
   boutonTerminer.addEventListener('click', () => terminer(boutonTerminer));
+  // Mode Magasin (T3d) : « Ordre des rayons › », la feuille qui range les rayons dans l'ordre du magasin.
+  const boutonOrdre = el('button', { class: 'bouton bouton-texte bouton-ordre-rayons', type: 'button', hidden: true },
+    TEXTES_T3D.ordreRayons, el('span', { 'aria-hidden': 'true' }, '›'));
+  boutonOrdre.addEventListener('click', () => {
+    ouvrirOrdreDesRayons(() => courant, {
+      onFermer: () => {
+        const visible = (n) => Boolean(n?.isConnected && !n.hidden && !n.closest('[hidden]'));
+        (visible(boutonOrdre) ? boutonOrdre : boutonAjouter).focus();
+      },
+    });
+  });
   // Drive réglé : son nom, qui ouvre « Votre drive » (changer d'adresse, ne plus chercher au drive).
   const boutonVotreDrive = el('button', { class: 'bouton bouton-texte bouton-votre-drive', type: 'button' });
   boutonVotreDrive.addEventListener('click', () => ouvrirDrive(boutonVotreDrive));
@@ -233,6 +256,7 @@ export function creer(ctx) {
     detailsRevoir,
     corps,
     boutonTerminer,
+    boutonOrdre,
     boutonVotreDrive,
     statut,
     barre);
@@ -480,11 +504,34 @@ export function creer(ctx) {
     if (echoue(resultat)) input.checked = !input.checked;
   }
 
+  /**
+   * « Pas cette semaine » d'un produit « À acheter chaque semaine » (T3d) : sauté ou remis pour la semaine montrée. La
+   * ligne remise revient dans la liste, au-dessus : l'interrupteur touché garde sa place à l'écran.
+   */
+  function sauter(produitId, input) {
+    gardesSautes.add(produitId);
+    const oui = input.checked;
+    const avant = input.getBoundingClientRect().top;
+    const resultat = courant.actions?.sauterHabituel?.(produitId, oui);
+    const ecart = input.isConnected ? input.getBoundingClientRect().top - avant : 0;
+    if (Math.abs(ecart) >= 1) window.scrollBy({ top: ecart, behavior: 'instant' });
+    quand(resultat, (reponse) => {
+      if (!reponse || echoue(reponse)) input.checked = !oui;
+    });
+  }
+
   function ouvrirDetails(cle, bouton) {
     ouvrirDetailsArticle(() => courant, cle, {
-      onFermer: () => {
-        const li = noeudsLignes.get(cle);
-        const cible = bouton.isConnected ? bouton : li?.isConnected ? partiesLignes.get(li)?.details : null;
+      onFermer: (fin) => {
+        // La feuille a pu suivre une autre ligne (article devenu « À acheter chaque semaine », T3d) : son ⋮ d'abord.
+        const finale = typeof fin?.cle === 'string' && fin.cle ? fin.cle : cle;
+        const visible = (n) => Boolean(n?.isConnected && !n.closest('[hidden]'));
+        const li = noeudsLignes.get(finale);
+        const cible = [
+          finale === cle ? bouton : null,
+          li?.isConnected ? partiesLignes.get(li)?.details : null,
+          detailsMaison.get(finale),
+        ].find(visible);
         // Article retiré (« Retirer de la liste ») : le focus passe à la ligne voisine, jamais à la page.
         if (cible) cible.focus();
         else focusVoisine(cle);
@@ -712,29 +759,39 @@ export function creer(ctx) {
   }
 
   const partiesMaison = new WeakMap();
+  // ⋮ des produits de « Déjà à la maison ? », par clé de ligne (T3d) : le focus y revient à la fermeture de sa feuille.
+  const detailsMaison = new Map();
   let numeroMaison = 0;
 
   function creerLigneMaison(ligne) {
     numeroMaison += 1;
     const id = `${base}-maison-${numeroMaison}`;
+    const cle = ligne.cle;
     const input = el('input', { class: 'interrupteur', type: 'checkbox', role: 'switch', 'aria-describedby': `${id}-detail ${id}-etat` });
-    input.addEventListener('change', () => racheter(ligne.cle, input));
+    input.addEventListener('change', () => racheter(cle, input));
     const nom = el('span', { class: 'maison-nom' });
     const detail = el('span', { class: 'maison-detail', id: `${id}-detail` });
     const etat = el('span', { class: 'maison-etat', id: `${id}-etat` });
-    const li = el('li', {},
+    // ⋮ (T3d) : la feuille du produit, d'où l'on éteint « Toujours dans mon placard » là où il est montré.
+    const details = el('button', { class: 'bouton-details', type: 'button' }, el('span', { 'aria-hidden': 'true' }, '⋮'));
+    details.addEventListener('click', () => ouvrirDetails(cle, details));
+    const li = el('li', { class: 'ligne-maison-details' },
       el('label', { class: 'ligne-maison' },
         el('span', { class: 'maison-texte' }, nom, detail, etat),
         el('span', { class: 'maison-bascule' },
           el('span', { class: 'maison-bascule-texte', 'aria-hidden': 'true' }, 'À racheter'),
-          input)));
-    partiesMaison.set(li, { input, nom, detail, etat });
+          input)),
+      details);
+    partiesMaison.set(li, { input, nom, detail, etat, details });
+    detailsMaison.set(cle, details);
     majLigneMaison(li, ligne);
     return li;
   }
 
   function majLigneMaison(li, ligne) {
-    const { input, nom, detail, etat } = partiesMaison.get(li);
+    const { input, nom, detail, etat, details } = partiesMaison.get(li);
+    const nomDetails = `Détails\u00A0: ${ligne.nom}`;
+    if (details.getAttribute('aria-label') !== nomDetails) details.setAttribute('aria-label', nomDetails);
     ecrireTexte(nom, ligne.nom);
     const origine = texteOrigine(ligne, { profils: courant.profils ?? [], moi: courant.moi ?? null });
     ecrireTexte(detail, [ligne.quantite, origine].filter(Boolean).join(' · '));
@@ -743,6 +800,38 @@ export function creer(ctx) {
     etat.hidden = !surLaListe;
     if (input.checked !== ligne.rachetee) input.checked = ligne.rachetee;
     const nomInterrupteur = `À racheter\u00A0: ${ligne.nom}`;
+    if (input.getAttribute('aria-label') !== nomInterrupteur) input.setAttribute('aria-label', nomInterrupteur);
+  }
+
+  const partiesSautes = new WeakMap();
+  let numeroSaute = 0;
+
+  /** Un produit « À acheter chaque semaine » sauté : son nom, « 1 l · chaque semaine », interrupteur « Pas cette semaine ». */
+  function creerLigneSaute(habituel) {
+    numeroSaute += 1;
+    const id = `${base}-saute-${numeroSaute}`;
+    const produitId = habituel.produitId;
+    const input = el('input', { class: 'interrupteur', type: 'checkbox', role: 'switch', 'aria-describedby': `${id}-detail` });
+    input.addEventListener('change', () => sauter(produitId, input));
+    const nom = el('span', { class: 'maison-nom' });
+    const detail = el('span', { class: 'maison-detail', id: `${id}-detail` });
+    const li = el('li', {},
+      el('label', { class: 'ligne-maison' },
+        el('span', { class: 'maison-texte' }, nom, detail),
+        el('span', { class: 'maison-bascule' },
+          el('span', { class: 'maison-bascule-texte', 'aria-hidden': 'true' }, TEXTES_T3D.pasCetteSemaine),
+          input)));
+    partiesSautes.set(li, { input, nom, detail });
+    majLigneSaute(li, habituel);
+    return li;
+  }
+
+  function majLigneSaute(li, habituel) {
+    const { input, nom, detail } = partiesSautes.get(li);
+    ecrireTexte(nom, habituel.nom);
+    ecrireTexte(detail, [habituel.quantite, 'chaque semaine'].filter(Boolean).join(' · '));
+    if (input.checked !== habituel.saute) input.checked = habituel.saute;
+    const nomInterrupteur = `${TEXTES_T3D.pasCetteSemaine}\u00A0: ${habituel.nom}`;
     if (input.getAttribute('aria-label') !== nomInterrupteur) input.setAttribute('aria-label', nomInterrupteur);
   }
 
@@ -819,7 +908,9 @@ export function creer(ctx) {
 
   function cacherTout() {
     for (const zone of [bascule, carteRegler, carteFaites, sectionProchaines, detailsRevoir, bandeauRecette, bandeauxVerifier,
-      zoneMaison, rayons, sectionsDrive, carteFini, zonePanier, boutonTerminer, boutonVotreDrive]) zone.hidden = true;
+      zoneMaison, rayons, sectionsDrive, carteFini, zonePanier, zoneSautes, boutonTerminer, boutonOrdre, boutonVotreDrive]) {
+      zone.hidden = true;
+    }
   }
 
   function dessiner({ ancrer = true } = {}) {
@@ -891,6 +982,8 @@ export function creer(ctx) {
     if (boutonRegler.className !== classeRegler) boutonRegler.className = classeRegler;
     // Courses faites : plus rien à chercher, le réglage du drive attend les prochaines courses (comme la bascule).
     boutonVotreDrive.hidden = !(montree && enDrive && drive) || faites;
+    // Mode Magasin : l'ordre des rayons se règle là où il sert.
+    boutonOrdre.hidden = !montree || enDrive || faites;
     if (drive) ecrireTexte(boutonVotreDrive, `${texteVotreDrive(drive.nom)} ›`);
 
     // Bandeaux : plats sans recette, quantités qui n'ont pas pu être comptées.
@@ -958,6 +1051,7 @@ export function creer(ctx) {
       ...lignes.filter((l) => l.rachetee && gardesMaison.has(l.cle)),
     ].sort((a, b) => a.nom.localeCompare(b.nom, 'fr', { sensitivity: 'base' }) || (a.cle < b.cle ? -1 : 1));
     reconcilier(listeMaison, maison, { cle: (l) => l.cle, creer: creerLigneMaison, maj: majLigneMaison });
+    for (const [cle, bouton] of [...detailsMaison]) if (!bouton.isConnected) detailsMaison.delete(cle);
     zoneMaison.hidden = !maison.length;
     // « Revoir la liste » : seulement s'il y a quelque chose à revoir (les lignes des plats ou le placard).
     detailsRevoir.hidden = !faites || (!lignes.length && !maison.length);
@@ -994,6 +1088,13 @@ export function creer(ctx) {
     reconcilier(listePanier, panier, optionsLignes);
     zonePanier.hidden = !panier.length;
     ecrireTexte(resumePanier, `Dans le panier · ${panier.length}`);
+    // « Pas cette semaine » (T3d) : les habituels sautés, et ceux touchés ici pendant cette visite.
+    const sautes = faites ? [] : (liste?.habituels ?? []).filter((h) => h.saute || gardesSautes.has(h.produitId));
+    reconcilier(listeSautes, sautes, { cle: (h) => h.produitId, creer: creerLigneSaute, maj: majLigneSaute });
+    zoneSautes.hidden = !sautes.length;
+    // Comme « Déjà à la maison ? » : le nombre de lignes montrées (une ligne remise ici reste jusqu'à la prochaine
+    // ouverture : jamais « · 0 » au-dessus d'une ligne visible).
+    ecrireTexte(resumeSautes, `${TEXTES_T3D.pasCetteSemaine} · ${sautes.length}`);
     if (clesAvant.some((cle) => !actuels.has(cle))) ordrePrecedent = clesAvant;
     for (const cle of [...noeudsLignes.keys()]) if (!actuels.has(cle)) noeudsLignes.delete(cle);
     // Une ligne passée d'une liste à l'autre (cochée sur l'autre téléphone) garde le focus ; une ligne partie (retirée

@@ -387,9 +387,15 @@ test('catalogueAvecDictionnaire : le foyer, puis les produits courants triés ; 
   assert.equal(noms.includes('riz basmati'), false);
   assert.ok(noms.includes('pâtes'));
   assert.equal(courants.length, elementsDuDictionnaire().length - 2);
-  // Sans plats : tous les produits courants.
-  assert.equal(catalogueAvecDictionnaire([]).length, DICTIONNAIRE.length);
-  assert.equal(catalogueAvecDictionnaire(null).length, DICTIONNAIRE.length);
+  // Sans plats : tous les produits courants de la cuisine (T3d : jamais les produits hors cuisine, piles ou lessive,
+  // pour une recette) ; avec `horsCuisine`, tous (« Ajouter à la liste »).
+  const cuisine = DICTIONNAIRE.filter((e) => e.recette !== false).length;
+  assert.ok(cuisine < DICTIONNAIRE.length);
+  assert.equal(catalogueAvecDictionnaire([]).length, cuisine);
+  assert.equal(catalogueAvecDictionnaire(null).length, cuisine);
+  assert.equal(catalogueAvecDictionnaire([], { horsCuisine: true }).length, DICTIONNAIRE.length);
+  assert.equal(catalogueAvecDictionnaire(plats, { horsCuisine: true }), catalogueAvecDictionnaire(plats, { horsCuisine: true }));
+  assert.notEqual(catalogueAvecDictionnaire(plats, { horsCuisine: true }), fusion);
   // Le foyer qui connaît « pâte » ne cache pas « pâtes ».
   assert.ok(catalogueAvecDictionnaire([plat('b', [ing('pâte', [])])]).some((e) => e.produit === 'pâtes'));
 });
@@ -398,7 +404,15 @@ test('elementsDuDictionnaire et formesDe', () => {
   const elements = elementsDuDictionnaire();
   assert.equal(elementsDuDictionnaire(), elements);
   assert.ok(Object.isFrozen(elements));
-  assert.equal(elements.length, DICTIONNAIRE.length);
+  // T3d : sans les produits hors cuisine ; avec `horsCuisine`, tous, triés de même, marqués `horsCuisine`.
+  assert.equal(elements.length, DICTIONNAIRE.filter((e) => e.recette !== false).length);
+  const tous = elementsDuDictionnaire({ horsCuisine: true });
+  assert.equal(elementsDuDictionnaire({ horsCuisine: true }), tous);
+  assert.ok(Object.isFrozen(tous));
+  assert.equal(tous.length, DICTIONNAIRE.length);
+  assert.deepEqual(tous.filter((e) => e.horsCuisine).map((e) => e.id).sort(),
+    DICTIONNAIRE.filter((e) => e.recette === false).map((e) => e.id).sort());
+  assert.equal(elements.some((e) => e.horsCuisine), false);
   assert.deepEqual(formesDe(elements.find((e) => e.id === 'pate')), ['pâtes', 'pâtes sèches', 'pâtes courtes']);
   assert.deepEqual(formesDe(DICTIONNAIRE.find((e) => e.id === 'pate')), ['pâtes', 'pâtes sèches', 'pâtes courtes']);
   assert.deepEqual(formesDe({ produit: 'tomate' }), ['tomate']);

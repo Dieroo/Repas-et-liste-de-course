@@ -7,7 +7,10 @@
 // Logique pure : ni DOM ni Firebase. N'importe que slug.js, vocabulaire.js et dictionnaire.js ; edition.js l'importe,
 // jamais l'inverse (pas de cycle). T3a : identifiant d'un produit des courses (`idProduit`, qui sépare les homographes),
 // ce que les recettes du foyer disent de chaque produit (`indexDesRecettes`) et `ficheProduit` (priorité champ par
-// champ : produits/{id} du foyer > recettes > produits courants > défaut).
+// champ : produits/{id} du foyer > recettes > produits courants > défaut). T3d : produits hors cuisine (`recette: false`
+// du dictionnaire : piles, lessive) reconnus par idProduit et proposés par « Ajouter à la liste », jamais par
+// « Modifier la recette » (ni reconnaitre, ni elementsDuDictionnaire par défaut) ; réglages d'un produit lus champ par
+// champ (rayon, placard, habituel : lireRayonFoyer, lirePlacardFoyer, lireHabituel).
 import { cleProduit, motsAccentues, slug } from './slug.js';
 import { MARQUEURS_PRECAUTION, VIANDES, VOCABULAIRES, marqueursEffectifs } from './vocabulaire.js';
 import { DICTIONNAIRE } from './dictionnaire.js';
@@ -242,7 +245,13 @@ function elementDe(entree) {
   element.id = entree.id;
   element.nomCourant = entree.nom;
   element.alias = Object.freeze(Array.isArray(entree.alias) ? [...entree.alias] : []);
+  if (estHorsCuisine(entree)) element.horsCuisine = true;
   return Object.freeze(element);
+}
+
+/** Vrai pour un produit hors cuisine (T3d, `recette: false` : piles, lessive) : jamais dans une recette. */
+export function estHorsCuisine(entree) {
+  return estObjet(entree) && entree.recette === false;
 }
 
 /** Index des produits courants, construit à la première recherche puis gardé. */
@@ -250,10 +259,10 @@ function indexDictionnaire() {
   if (index) return index;
   const parCle = new Map();
   const parId = new Map();
-  const elements = [];
+  const tous = [];
   for (const entree of DICTIONNAIRE) {
     const element = elementDe(entree);
-    elements.push(element);
+    tous.push(element);
     if (!parId.has(entree.id)) parId.set(entree.id, entree);
     for (const forme of [entree.nom, ...(Array.isArray(entree.alias) ? entree.alias : [])]) {
       const cle = cleProduit(forme);
@@ -261,14 +270,20 @@ function indexDictionnaire() {
       if (cle && !parCle.has(cle)) parCle.set(cle, { entree, element, forme });
     }
   }
-  elements.sort((a, b) => comparer(a.produit, b.produit) || (a.id < b.id ? -1 : 1));
-  index = { parCle, parId, elements: Object.freeze(elements) };
+  tous.sort((a, b) => comparer(a.produit, b.produit) || (a.id < b.id ? -1 : 1));
+  index = {
+    parCle, parId, tous: Object.freeze(tous), elements: Object.freeze(tous.filter((element) => !element.horsCuisine)),
+  };
   return index;
 }
 
-/** Éléments des produits courants (voir elementDe), triés par nom. Même tableau gelé à chaque appel. */
-export function elementsDuDictionnaire() {
-  return indexDictionnaire().elements;
+/**
+ * Éléments des produits courants (voir elementDe), triés par nom. Même tableau gelé à chaque appel. Sans les produits
+ * hors cuisine (suggestions de « Modifier la recette ») ; `horsCuisine: true` : avec eux (`horsCuisine: true` sur leur
+ * élément ; suggestions de « Ajouter à la liste », T3d).
+ */
+export function elementsDuDictionnaire({ horsCuisine = false } = {}) {
+  return horsCuisine ? indexDictionnaire().tous : indexDictionnaire().elements;
 }
 
 /** Noms d'un élément ou d'une entrée des produits courants : le nom courant, puis ses autres écritures. */
@@ -278,10 +293,19 @@ export function formesDe(element) {
   return [nom, ...(Array.isArray(element.alias) ? element.alias : [])].filter((f) => typeof f === 'string' && f !== '');
 }
 
-/** { entree, element, forme } des produits courants pour ce nom (même cleProduit, homographes accordés), ou null. */
+/**
+ * { entree, element, forme } des produits courants pour ce nom (même cleProduit, homographes accordés), ou null ;
+ * produits hors cuisine compris (idProduit, entreeCourante) : dansLaCuisine les écarte.
+ */
 function dansLeDictionnaire(nom) {
   const trouve = indexDictionnaire().parCle.get(cleProduit(nom));
   return trouve && accentsAccordes(nom, trouve.forme) ? trouve : null;
+}
+
+/** dansLeDictionnaire, sans les produits hors cuisine (T3d) : ce que « Modifier la recette » reconnaît. */
+function dansLaCuisine(nom) {
+  const trouve = dansLeDictionnaire(nom);
+  return trouve && !estHorsCuisine(trouve.entree) ? trouve : null;
 }
 
 // ——— Reconnaître ———
@@ -316,6 +340,7 @@ function parAutreEcriture(element, entree) {
  *    écriture de cette entrée est connu du foyer (étapes 1-2 sur ce nom), l'élément du foyer l'emporte (« oignon
  *    jaune » quand le foyer a « oignon ») ;
  * 4. sinon null, ou { ambigu: true } pour « pâte », « pâté » et « pate » seuls.
+ * Les produits hors cuisine (T3d : piles, lessive) ne sont jamais reconnus ici (null) : un ingrédient n'en est pas un.
  * Aux étapes 2 et 3 (`autreEcriture: true`), le foyer l'emporte sans rien perdre des repères de précaution : ceux du
  * produit courant s'y ajoutent (`ajoutes`, voir parAutreEcriture), et le nom saisi garde les siens (edition.js).
  * `catalogue` : celui du foyer (catalogueProduits) ; un élément d'origine 'dictionnaire' y est ignoré.
@@ -329,10 +354,10 @@ export function reconnaitre(nom, { catalogue = [] } = {}) {
   const foyer = connuDuFoyer(nom, catalogue);
   if (foyer) {
     if (slug(foyer.produit) === slug(nom)) return { origine: 'foyer', element: duFoyer(foyer) };
-    return parAutreEcriture(foyer, dansLeDictionnaire(nom)?.entree);
+    return parAutreEcriture(foyer, dansLaCuisine(nom)?.entree);
   }
   if (estAmbigu(nom)) return { ambigu: true };
-  const trouve = dansLeDictionnaire(nom);
+  const trouve = dansLaCuisine(nom);
   if (!trouve) return null;
   for (const forme of formesDe(trouve.entree)) {
     const element = connuDuFoyer(forme, catalogue);
@@ -562,6 +587,101 @@ function produitDuFoyer(produitsFoyer, id) {
   return estObjet(valeur) ? valeur : null;
 }
 
+// ——— Réglages d'un produit écrits par le foyer (T3b, T3d) ———
+
+/** Mot cherché au drive d'un produit, au plus (drive.js › RECHERCHE_MAX, recopié pour éviter un import). */
+const MOT_CHERCHE_MAX = 60;
+/** Quantité d'un produit « À acheter chaque semaine » : plus grande que 0, HABITUEL_QTE_MAX au plus (999 g, 999 pièces…). */
+export const HABITUEL_QTE_MAX = 999;
+/** Nom gardé avec l'habituel (celui de la ligne ou de l'article), au plus : le nom d'un article. */
+export const HABITUEL_LIBELLE_MAX = 60;
+
+const reduireTexte = (texte) => (typeof texte === 'string' ? texte.replace(/\s+/g, ' ').trim() : '');
+
+/** Mot cherché au drive écrit par le foyer (`rechercheDrive`, T3b) : texte de 1 à 60 caractères, sinon null. */
+export function lireRechercheFoyer(valeur) {
+  const mot = reduireTexte(valeur);
+  return mot && mot.length <= MOT_CHERCHE_MAX ? mot : null;
+}
+
+/** Rayon écrit par le foyer (`rayon`, T3d) : un rayon du vocabulaire, sinon null. */
+export function lireRayonFoyer(valeur) {
+  return typeof valeur === 'string' && VOCABULAIRES.rayon.includes(valeur) ? valeur : null;
+}
+
+/**
+ * « Toujours dans mon placard » écrit par le foyer (`placard`, T3d) → { actif, libelle? }, sinon null. `actif` (booléen) :
+ * `false` éteint un produit du placard de départ ; `true` met de côté un produit qui n'y est pas (ou rallume le départ).
+ * `libelle` : le nom de la ligne quand il a été réglé (espaces réduits, HABITUEL_LIBELLE_MAX au plus), qui nomme le
+ * produit dans la carte « 🏠 Placard » même si plus aucune recette ne le porte ; illisible : omis, jamais bloquant.
+ */
+export function lirePlacardFoyer(valeur) {
+  if (!estObjet(valeur) || typeof valeur.actif !== 'boolean') return null;
+  const lu = { actif: valeur.actif };
+  const libelle = reduireTexte(valeur.libelle);
+  if (libelle && libelle.length <= HABITUEL_LIBELLE_MAX) lu.libelle = libelle;
+  return lu;
+}
+
+/**
+ * « À acheter chaque semaine » écrit par le foyer (`habituel`, T3d) → { actif, qte?, unite?, libelle? }, sinon null :
+ * `actif` booléen ; `qte` et `unite` ensemble seulement (nombre > 0 et HABITUEL_QTE_MAX au plus, unité du vocabulaire),
+ * sinon sans quantité ; `libelle` : le nom de la ligne ou de l'article quand il a été coché (espaces réduits,
+ * HABITUEL_LIBELLE_MAX au plus), qui nomme le produit et retrouve son identifiant (idProduit) même s'il n'est dans
+ * aucune recette ni dans les produits courants. Une quantité ou un nom illisibles sont omis, jamais bloquants.
+ */
+export function lireHabituel(valeur) {
+  if (!estObjet(valeur) || typeof valeur.actif !== 'boolean') return null;
+  const lu = { actif: valeur.actif };
+  if (typeof valeur.qte === 'number' && Number.isFinite(valeur.qte) && valeur.qte > 0 && valeur.qte <= HABITUEL_QTE_MAX
+    && typeof valeur.unite === 'string' && VOCABULAIRES.unite.includes(valeur.unite)) {
+    lu.qte = valeur.qte;
+    lu.unite = valeur.unite;
+  }
+  const libelle = reduireTexte(valeur.libelle);
+  if (libelle && libelle.length <= HABITUEL_LIBELLE_MAX) lu.libelle = libelle;
+  return lu;
+}
+
+/**
+ * Clés où lire les réglages d'un produit du foyer, dans l'ordre : `id`, puis ses clés de repli (`replis`, sinon
+ * `repli`) ; jamais de repli pour un id à `--` (homographe : « pâté » ne prend jamais les réglages des pâtes).
+ */
+export function clesDuProduit(id, { repli = null, replis = null } = {}) {
+  if (typeof id !== 'string' || id === '') return [];
+  if (id.includes('--')) return [id];
+  const autres = Array.isArray(replis) ? replis : [repli];
+  return [id, ...new Set(autres.filter((cle) => typeof cle === 'string' && cle !== '' && cle !== id))];
+}
+
+/**
+ * Premier réglage lisible d'un champ parmi les documents du foyer de ces clés (`lire` : lireRayonFoyer…) → { valeur,
+ * cle } (la clé du document qui le porte), sinon null. Chaque champ se lit à part, comme une coche : le rayon peut
+ * venir de l'id, le mot cherché d'une clé de repli.
+ */
+export function reglageDuFoyer(produitsFoyer, cles, champ, lire) {
+  for (const cle of Array.isArray(cles) ? cles : []) {
+    const doc = produitDuFoyer(produitsFoyer, cle);
+    const valeur = doc ? lire(doc[champ]) : null;
+    if (valeur !== null) return { valeur, cle };
+  }
+  return null;
+}
+
+/**
+ * Rayon de départ d'un produit (T3d), celui qu'il a sans réglage du foyer : le plus fréquent dans les recettes du foyer
+ * (`index` : indexDesRecettes) > celui du produit courant > 'divers'. Choisir ce rayon dans « Rayon · Changer » efface
+ * le réglage du foyer (liste.js › ecrituresRayon) : produits/{id} ne garde que des différences.
+ */
+export function rayonDeDepart(id, { index = new Map() } = {}) {
+  const recettes = index instanceof Map && typeof id === 'string' ? index.get(id) ?? null : null;
+  const rayonRecettes = recettes ? rayonLePlusFrequent(recettes.rayons) : null;
+  if (rayonRecettes) return { valeur: rayonRecettes, source: 'recettes' };
+  const courant = entreeParId(id);
+  if (VOCABULAIRES.rayon.includes(courant?.rayon)) return { valeur: courant.rayon, source: 'courants' };
+  return { valeur: 'divers', source: 'defaut' };
+}
+
 /**
  * Ce que l'app sait d'un produit des courses, champ par champ, du plus fort au plus faible (décision T3-0) :
  * produits/{id} du foyer > recettes du foyer (indexDesRecettes) > produits courants > défaut.
@@ -569,47 +689,47 @@ function produitDuFoyer(produitsFoyer, id) {
  *   'courants' | 'saisie' | 'defaut' } :
  * - nom : le plus fréquent dans les recettes (à égalité le plus court, puis l'ordre alphabétique) > nom courant >
  *   `saisie` > '' ;
- * - rayon : foyer > le plus fréquent dans les recettes > courant > 'divers' ;
+ * - rayon : foyer (T3d, lireRayonFoyer) > le plus fréquent dans les recettes > courant > 'divers' ;
  * - recherche (T3b) : foyer.rechercheDrive > le nom (même source) ;
  * - placard : foyer.placard { actif } (faux → null ; vrai → le seuil courant, sinon {} : toujours mis de côté, T3d) >
  *   courant (`{}` ou `{ seuil, unite }`) > null ;
- * - equivalences : celles du produit courant, sinon null ; habituel (T3d) : foyer.habituel s'il est actif, sinon null.
- * `repli` : clé cherchée aussi dans produitsFoyer quand `id` n'y est pas (un id changé par le dictionnaire garde ainsi
- * son mot cherché ; cleDeRepli) ; jamais pour un id à `--` (homographe). `produitsFoyer` : objet par id (ou Map). Rien n'est modifié en entrée.
+ * - equivalences : celles du produit courant, sinon null ; habituel (T3d) : foyer.habituel (lireHabituel) s'il est
+ *   actif, sinon null.
+ * Réglages du foyer lus champ par champ (reglageDuFoyer) sous `id`, puis ses clés de repli (`replis`, ou `repli` seule ;
+ * clesDuProduit) : un id changé par le dictionnaire garde ainsi son mot cherché, son rayon, son placard et son
+ * habituel ; jamais pour un id à `--` (homographe). `produitsFoyer` : objet par id (ou Map). Rien n'est modifié en entrée.
  */
-export function ficheProduit(id, { produitsFoyer = {}, index = new Map(), saisie = '', repli = null } = {}) {
-  // Un id à `--` (homographe) n'a jamais de repli : « pâté » ne prend jamais le mot cherché des pâtes.
-  const repliSur = repli && repli !== id && !(typeof id === 'string' && id.includes('--')) ? repli : null;
-  const foyer = produitDuFoyer(produitsFoyer, id) ?? (repliSur ? produitDuFoyer(produitsFoyer, repliSur) : null);
+export function ficheProduit(id, {
+  produitsFoyer = {}, index = new Map(), saisie = '', repli = null, replis = null,
+} = {}) {
+  const cles = clesDuProduit(id, { repli, replis });
+  const duFoyer = (champ, lire) => reglageDuFoyer(produitsFoyer, cles, champ, lire)?.valeur ?? null;
   const recettes = index instanceof Map && typeof id === 'string' ? index.get(id) ?? null : null;
   const courant = entreeParId(id);
 
   const nomRecettes = recettes ? nomLePlusFrequent(recettes.noms) : null;
-  const tape = typeof saisie === 'string' ? saisie.replace(/\s+/g, ' ').trim() : '';
+  const tape = reduireTexte(saisie);
   let nom = { valeur: '', source: 'defaut' };
   if (nomRecettes) nom = { valeur: nomRecettes, source: 'recettes' };
   else if (courant) nom = { valeur: courant.nom, source: 'courants' };
   else if (tape) nom = { valeur: tape, source: 'saisie' };
 
-  let rayon = { valeur: 'divers', source: 'defaut' };
-  const rayonRecettes = recettes ? rayonLePlusFrequent(recettes.rayons) : null;
-  if (VOCABULAIRES.rayon.includes(foyer?.rayon)) rayon = { valeur: foyer.rayon, source: 'foyer' };
-  else if (rayonRecettes) rayon = { valeur: rayonRecettes, source: 'recettes' };
-  else if (VOCABULAIRES.rayon.includes(courant?.rayon)) rayon = { valeur: courant.rayon, source: 'courants' };
+  const rayonFoyer = duFoyer('rayon', lireRayonFoyer);
+  const rayon = rayonFoyer ? { valeur: rayonFoyer, source: 'foyer' } : rayonDeDepart(id, { index });
 
-  const motCherche = typeof foyer?.rechercheDrive === 'string' ? foyer.rechercheDrive.replace(/\s+/g, ' ').trim() : '';
+  const motCherche = duFoyer('rechercheDrive', lireRechercheFoyer);
   const recherche = motCherche ? { valeur: motCherche, source: 'foyer' } : { ...nom };
 
   const placardCourant = estObjet(courant?.placard) ? courant.placard : null;
+  const placardFoyer = duFoyer('placard', lirePlacardFoyer);
   let placard = { valeur: null, source: 'defaut' };
-  if (estObjet(foyer?.placard) && typeof foyer.placard.actif === 'boolean') {
-    placard = { valeur: foyer.placard.actif ? placardCourant ?? {} : null, source: 'foyer' };
-  } else if (placardCourant) placard = { valeur: placardCourant, source: 'courants' };
+  if (placardFoyer) placard = { valeur: placardFoyer.actif ? placardCourant ?? {} : null, source: 'foyer' };
+  else if (placardCourant) placard = { valeur: placardCourant, source: 'courants' };
 
   const equivalences = estObjet(courant?.equivalences)
     ? { valeur: courant.equivalences, source: 'courants' } : { valeur: null, source: 'defaut' };
-  const habituel = estObjet(foyer?.habituel) && foyer.habituel.actif === true
-    ? { valeur: foyer.habituel, source: 'foyer' } : { valeur: null, source: 'defaut' };
+  const habituelFoyer = duFoyer('habituel', lireHabituel);
+  const habituel = habituelFoyer?.actif ? { valeur: habituelFoyer, source: 'foyer' } : { valeur: null, source: 'defaut' };
 
   return { nom, rayon, recherche, placard, equivalences, habituel };
 }
