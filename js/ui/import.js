@@ -13,6 +13,9 @@ import { estDansCorbeille } from '../coeur/corbeille.js';
 import {
   cleQuandMeme, ecrituresRelecture, effetsSurLesVersions, phrasesApercuRelecture,
 } from '../coeur/relecture.js';
+import {
+  natureDuMessage, bilanDuMessage, dejaEnregistre, etatSerie, texteSerie, TEXTES_SERIE,
+} from '../coeur/serie.js';
 
 // Claude refuse une demande écrite pour d'autres instructions que les siennes (docs/projet-claude.md §0) : mêmes
 // messages pour un collage et pour un fichier.
@@ -110,6 +113,10 @@ function listeNoms(noms) {
   return noms.length > 1 ? `${noms.slice(0, -1).join(', ')} et ${noms.at(-1)}` : noms.join('');
 }
 
+// Presse-papiers bloqué : même explication en haut de l'écran et dans la carte de série (T5-0a).
+const TEXTE_BLOCAGE = 'Le téléphone bloque la lecture du presse-papiers. Collez à la main\u00A0: touchez longuement la zone ci-dessous, puis «\u00A0Coller\u00A0». ';
+const TEXTE_BLOCAGE_CHROME = 'Pour réactiver le bouton\u00A0: Chrome › Paramètres › Paramètres des sites › Presse-papiers.';
+
 const MESSAGE_COPIE = 'Copié. Collez-le dans votre projet Claude, puis collez ici sa nouvelle réponse.';
 // Aperçu prêt avec des versions à corriger : un nouveau collage remplacerait l'aperçu, et les autres versions du lot,
 // jamais enregistrées, seraient perdues.
@@ -188,6 +195,18 @@ export function creer(ctx) {
   let copieFaite = false;
   let enregistre = false;
   let focaliserResultat = false;
+  let dernierEtat = null; // dernier aperçu calculé : sa validation dit si le message enregistré est un message d'idées
+  // Série d'idées de Claude (T5-0a, « Coller la suite ») : mémoire de la visite seulement, jamais du téléphone.
+  // `ajoutes` : idées écrites depuis l'ouverture de l'écran ; `ids` : tous les plats écrits pendant la visite (un
+  // message recollé les vise) ; `dernier`, `autres`, `nonRepris` : ceux du dernier message ; `actif` : la carte de
+  // série remplace l'aperçu (jusqu'au prochain collage) ; `montreeA` : heure de son apparition (garde du double
+  // toucher sur « Enregistrer »).
+  // `reprise` : plats écrits par le message dont la carte a proposé « Remettre » (son aperçu recalculé les voit « déjà
+  // dans vos plats » : ils ne sont pas redits).
+  const serie = {
+    ajoutes: [], ids: [], dernier: [], autres: [], nonRepris: [], actif: false, montreeA: 0, reprise: new Set(),
+  };
+  let zoneSerieOuverte = false; // presse-papiers refusé : la carte de série montre sa zone de collage
 
   const sousTitre = el('p', { class: 'sous-titre' });
   const retour = el('a', { class: 'retour', onclick: revenir }, el('span', { 'aria-hidden': 'true' }, '‹'), el('span', { class: 'retour-texte' }));
@@ -207,9 +226,7 @@ export function creer(ctx) {
   const aideFichier = el('p', { class: 'aide', id: 'aide-fichier' },
     'Un fichier de recettes, par exemple le catalogue de départ.');
 
-  const aideBlocage = el('p', { class: 'message-erreur', id: 'aide-blocage', hidden: true },
-    'Le téléphone bloque la lecture du presse-papiers. Collez à la main\u00A0: touchez longuement la zone ci-dessous, puis «\u00A0Coller\u00A0». ',
-    'Pour réactiver le bouton\u00A0: Chrome › Paramètres › Paramètres des sites › Presse-papiers.');
+  const aideBlocage = el('p', { class: 'message-erreur', id: 'aide-blocage', hidden: true }, TEXTE_BLOCAGE, TEXTE_BLOCAGE_CHROME);
 
   const zoneTexte = el('textarea', {
     class: 'champ zone-collage',
@@ -230,6 +247,36 @@ export function creer(ctx) {
     el('label', { class: 'etiquette-champ', for: 'texte-colle' }, 'Réponse de Claude'),
     el('p', { class: 'aide', id: 'aide-collage' }, 'Touchez longuement la zone, puis «\u00A0Coller\u00A0».'),
     zoneTexte,
+  );
+
+  // Carte de série (T5-0a) : zone de collage montrée sous « Coller la suite » quand le téléphone refuse la lecture
+  // du presse-papiers (rien ne bouge au-dessus du bouton touché). Gardée d'un rendu à l'autre.
+  const zoneSerie = el('textarea', {
+    class: 'champ zone-collage',
+    id: 'texte-suite',
+    rows: '5',
+    spellcheck: 'false',
+    autocapitalize: 'off',
+    autocomplete: 'off',
+    'data-action': 'zone-suite',
+    'aria-describedby': 'aide-zone-suite',
+    oninput: () => {
+      clearTimeout(minuteurSaisie);
+      minuteurSaisie = setTimeout(() => {
+        const valeur = zoneSerie.value;
+        if (!valeur.trim()) return;
+        zoneSerie.value = '';
+        analyser(valeur, { manuel: false });
+      }, 300);
+    },
+  });
+  const blocZoneSerie = el('div', { class: 'zone-suite' },
+    el('label', { class: 'etiquette-champ', for: 'texte-suite' }, TEXTES_SERIE.zone),
+    zoneSerie,
+    // Sous la zone : « ci-dessous » de l'explication du haut n'irait pas ici.
+    el('p', { class: 'message-erreur', id: 'aide-zone-suite' },
+      'Le téléphone bloque la lecture du presse-papiers. Touchez longuement la zone, puis «\u00A0Coller\u00A0». ',
+      TEXTE_BLOCAGE_CHROME),
   );
 
   const texteLigneCollee = el('span', {}, '✓ Réponse collée');
@@ -299,6 +346,64 @@ export function creer(ctx) {
     analyser(lu.texte, { manuel: false });
   }
 
+  /**
+   * « 📋 Coller la suite » (T5-0a) : comme le bouton du haut ; lecture refusée, la zone de collage s'ouvre dans la
+   * carte, sous le bouton touché.
+   */
+  async function collerLaSuite() {
+    clearTimeout(minuteurSaisie);
+    const lu = await lirePressePapiers();
+    if (lu.refus) {
+      zoneSerieOuverte = true;
+      dessiner();
+      zoneSerie.focus();
+      return;
+    }
+    analyser(lu.texte, { manuel: false });
+  }
+
+  /**
+   * Rien qui bouge sous le doigt : la carte de série prend la place de l'aperçu au toucher sur « Enregistrer », et ses
+   * boutons peuvent arriver sous le doigt. Un second toucher (double toucher, toucher impatient) dans les 700 ms est
+   * ignoré, sauf « Coller la suite » (sans effet sur un message déjà enregistré).
+   */
+  const DELAI_CARTE_SERIE = 700;
+  const carteTropRecente = () => performance.now() - serie.montreeA < DELAI_CARTE_SERIE;
+
+  /** « Terminé » de la série : retour à l'écran d'où l'on vient (Semaine, Réglages, Plats), sinon Plats. */
+  function terminerSerie() {
+    if (carteTropRecente()) return;
+    if (courant.routePrecedente && courant.routePrecedente !== 'import' && history.length > 1) history.back();
+    else location.replace(retour.getAttribute('href') || '#/plats');
+  }
+
+  /**
+   * « Voir les plats › » : venu de Plats, un pas en arrière (sans doublon dans l'historique) ; sinon cet écran est
+   * remplacé, le geste retour ne ramène pas à une série terminée.
+   */
+  function voirLesPlats(evenement) {
+    evenement.preventDefault();
+    if (carteTropRecente()) return;
+    if (courant.routePrecedente === 'plats' && history.length > 1) history.back();
+    else location.replace('#/plats');
+  }
+
+  /**
+   * « Remettre » d'une idée non reprise de la carte (plat ⏳ de la corbeille) : le plat revient et l'aperçu du même
+   * message se recalcule aussitôt, sans recoller (les idées déjà écrites y sont « déjà dans vos plats »).
+   */
+  function remettreDepuisLaSerie(plat) {
+    if (carteTropRecente()) return;
+    serie.actif = false;
+    serie.reprise = new Set([...serie.dernier, ...serie.autres].map((p) => p.id));
+    oublierChoix();
+    enregistre = false;
+    signature = '';
+    focaliserResultat = true;
+    courant.actions.remettreDeLaCorbeille([plat.id]);
+    dessiner();
+  }
+
   /** Fichier choisi : son texte suit le chemin du collage, avec le plafond d'un fichier. */
   async function choisirUnFichier() {
     clearTimeout(minuteurSaisie);
@@ -317,6 +422,8 @@ export function creer(ctx) {
     texte = lu.texte ?? '';
     colle = true;
     zoneTexte.value = '';
+    serie.actif = false;
+    serie.reprise = new Set();
     oublierChoix();
     copieFaite = false;
     enregistre = false;
@@ -352,6 +459,8 @@ export function creer(ctx) {
 
   function effacer() {
     clearTimeout(minuteurSaisie);
+    serie.actif = false;
+    serie.reprise = new Set();
     oublierChoix();
     texte = '';
     colle = false;
@@ -365,6 +474,9 @@ export function creer(ctx) {
 
   function analyser(nouveau, { manuel }) {
     texte = nouveau ?? '';
+    // Un nouveau collage remplace la carte de série par son aperçu (le compte de la visite reste).
+    serie.actif = false;
+    serie.reprise = new Set();
     source = 'collage';
     erreurFichier = null;
     // Zone vidée à la main : rien à montrer. Presse-papiers vide : on le dit.
@@ -382,7 +494,10 @@ export function creer(ctx) {
     majEntete();
     noteHorsLigne.hidden = navigator.onLine;
     const etat = calculer();
-    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, cases, [...quandMeme], messageEnvoi, navigator.onLine]);
+    dernierEtat = etat;
+    // Carte de série : son « Coller la suite » est la seule action principale (même place, même taille en haut).
+    boutonColler.className = `bouton ${etat.type === 'serie' ? 'bouton-secondaire' : 'bouton-principal'} bouton-plein`;
+    const nouvelleSignature = JSON.stringify([etat, copieFaite, [...decoches], choix, cases, [...quandMeme], messageEnvoi, navigator.onLine, zoneSerieOuverte]);
     if (nouvelleSignature === signature) return;
     signature = nouvelleSignature;
     if (etat.type !== 'pret') preparation = null;
@@ -390,7 +505,8 @@ export function creer(ctx) {
 
     // Un texte collé, lisible ou non, disparaît de l'écran : il contient des mots techniques (§4).
     const traite = etat.type !== 'rien' && !(etat.type === 'illisible' && etat.code === 'vide');
-    ligneCollee.hidden = !traite;
+    // Carte de série : elle dit déjà ce qu'il en est du message ; « Effacer » y ferait croire qu'on retire les idées.
+    ligneCollee.hidden = !traite || etat.type === 'serie';
     texteLigneCollee.textContent = source === 'fichier' ? '✓ Fichier lu' : '✓ Réponse collée';
     if (traite) {
       zoneTexte.value = '';
@@ -411,7 +527,26 @@ export function creer(ctx) {
     }
   }
 
+  /** Carte de série (T5-0a) : après l'enregistrement d'un message d'idées, ou un message d'idées recollé. */
+  function etatCarteSerie(recolle = false) {
+    return {
+      type: 'serie',
+      ...etatSerie({
+        nature: 'idees',
+        ajoutesDepuisOuverture: serie.ajoutes,
+        dernier: recolle ? [] : serie.dernier,
+        autres: recolle ? [] : serie.autres,
+        nonRepris: recolle ? [] : serie.nonRepris,
+        recolle,
+      }),
+    };
+  }
+
+  /** Écran en série : jamais pour « Coller la recette » d'une fiche ni depuis Demandes (retours d'aujourd'hui). */
+  const serieIci = () => !cible && !depuisDemandes();
+
   function calculer() {
+    if (serie.actif) return etatCarteSerie();
     if (!colle) return { type: 'rien' };
     if (erreurFichier) return { type: 'illisible', code: erreurFichier === 'trop_gros' ? 'trop_long' : 'illisible' };
     const extrait = extrairePaquet(texte, source === 'fichier' ? { max: FICHIER_MAX } : undefined);
@@ -452,6 +587,12 @@ export function creer(ctx) {
           ...(prepares.relecture ? { relecture: true } : {}),
         },
       };
+    }
+    // Série d'idées (T5-0a) : le même message recollé (il vise des plats écrits pendant la visite) n'apporte rien de
+    // nouveau, la carte le dit.
+    if (serie.ids.length && serieIci() && !relecture && natureDuMessage(validation) === 'idees'
+      && dejaEnregistre(prepares, serie.ids)) {
+      return etatCarteSerie(true);
     }
     // Réponse écrite avec d'autres instructions que celles de l'app : prévenu, sans bloquer (message seul).
     const instructions = controlerInstructions(extrait.paquets)?.message ?? null;
@@ -531,9 +672,78 @@ export function creer(ctx) {
           copieFaite ? messageCopie() : null,
         )];
       }
+      case 'serie':
+        return [renduSerie(etat)];
       default:
         return [etat.relecture ? renduRelecture(etat) : renduPret(etat)];
     }
+  }
+
+  /**
+   * Carte de série (T5-0a, CLAUDE.md §8) : « ✓ 3 idées ajoutées », noms, « 6 depuis l’ouverture de cet écran. »,
+   * aide, « 📋 Coller la suite » (principal), « Terminé » et « Voir les plats › ». Focus sur le titre ; titre, noms et
+   * compte dans une zone `role="status"`.
+   */
+  function renduSerie(etat) {
+    const textes = texteSerie(etat);
+    // Message recollé : « Ce message est déjà enregistré. Écrivez « suite » à Claude pour le suivant. » d'un tenant.
+    const aide = el('p', { class: 'aide', id: 'aide-suite' }, textes.aide);
+    return el('section', { class: 'carte resultat-serie' },
+      el('div', { class: 'serie-bilan', role: 'status' },
+        titreResultat(textes.titre),
+        etat.recolle ? aide : null,
+        textes.noms.length ? el('ul', { class: 'liste-serie' }, textes.noms.map((nom) => el('li', {}, nom))) : null,
+        textes.autres.length
+          ? el('ul', { class: 'liste-avertissements' }, textes.autres.map((m) => el('li', {}, m)))
+          : null,
+        textes.nonRepris.length
+          ? el('ul', { class: 'liste-avertissements' }, textes.nonRepris.map((m, i) => el('li', {},
+            `⚠️ ${m}`,
+            boutonRemettreSerie(etat.nonRepris[i]))))
+          : null,
+        textes.depuis ? el('p', { class: 'texte-doux' }, textes.depuis) : null),
+      etat.recolle ? null : aide,
+      el('button', {
+        class: 'bouton bouton-principal bouton-plein',
+        type: 'button',
+        'data-action': 'coller-suite',
+        'aria-describedby': 'aide-suite',
+        onclick: collerLaSuite,
+      }, TEXTES_SERIE.collerLaSuite),
+      zoneSerieOuverte ? blocZoneSerie : null,
+      noteHorsLigne,
+      el('div', { class: 'actions-serie' },
+        el('button', {
+          class: 'bouton bouton-secondaire',
+          type: 'button',
+          'data-action': 'terminer-serie',
+          onclick: terminerSerie,
+        }, TEXTES_SERIE.termine),
+        el('a', {
+          class: 'bouton bouton-secondaire',
+          href: '#/plats',
+          'data-action': 'voir-plats',
+          onclick: voirLesPlats,
+        }, TEXTES_SERIE.voirLesPlats)),
+    );
+  }
+
+  /**
+   * « Remettre » sous une idée non reprise de la carte : seulement si le plat, remis, prendrait la recette
+   * (`remettable`) et qu'il est encore dans la corbeille ; la phrase de l'aperçu (« remettez-le pour lui ajouter cette
+   * recette ») reste ainsi vraie.
+   */
+  function boutonRemettreSerie(entree) {
+    if (!entree?.remettable) return null;
+    const plat = tousLesPlats().find((p) => p.id === entree.id);
+    if (!estDansCorbeille(plat)) return null;
+    return el('button', {
+      class: 'bouton bouton-secondaire bouton-remettre-apercu',
+      type: 'button',
+      'data-action': `remettre-${plat.id}`,
+      'aria-label': `Remettre «\u00A0${plat.nom}\u00A0» dans vos plats`,
+      onclick: () => remettreDepuisLaSerie(plat),
+    }, TEXTES_SERIE.remettre);
   }
 
   /** Case « l'enregistrer » d'un plat de l'aperçu (lot de plusieurs écritures). */
@@ -901,10 +1111,37 @@ export function creer(ctx) {
       return;
     }
     enregistre = true;
+    // Message d'idées de Claude (T5-0a) : décidé avant l'envoi, sur le message validé de l'aperçu.
+    const enSerie = serieIci() && dernierEtat?.type === 'pret' && !dernierEtat.relecture
+      && natureDuMessage(dernierEtat.validation) === 'idees';
+    // Bilan lu avant l'envoi : l'affichage local des fiches (actions.importer) redessine aussitôt l'écran, et l'aperçu
+    // recalculé verrait les idées « déjà dans vos plats ».
+    if (enSerie) {
+      const bilan = bilanDuMessage(preparation);
+      // Après « Remettre » de la carte, les plats que ce même message a déjà écrits ne sont pas redits « déjà dans vos
+      // plats » ; une idée d'un autre message, déjà écrite plus tôt dans la visite, l'est (Claude l'a reproposée).
+      const ecritesAvant = serie.reprise;
+      serie.reprise = new Set();
+      serie.ajoutes = [...serie.ajoutes, ...bilan.ajoutes];
+      serie.ids = [...serie.ids, ...bilan.ajoutes.map((p) => p.id), ...bilan.autres.map((p) => p.id)];
+      serie.dernier = bilan.ajoutes;
+      serie.autres = bilan.autres;
+      serie.nonRepris = bilan.nonRepris.filter((entree) => !ecritesAvant.has(entree.id));
+      serie.actif = true;
+      serie.montreeA = performance.now();
+      zoneSerie.value = '';
+    }
     // L'annonce des versions (combien, combien restent) suit leur envoi (actions.importer) ; un échec est annoncé là.
     Promise.resolve(courant.actions.importer(preparation)).catch((erreur) => {
       if (erreur?.code === 'hors_ligne') annoncer(MESSAGE_HORS_LIGNE_VERSIONS);
     });
+    // L'écran reste ouvert : la carte de série remplace l'aperçu, son titre prend le focus (il dit ce qui est ajouté).
+    if (enSerie) {
+      focaliserResultat = true;
+      signature = '';
+      dessiner();
+      return;
+    }
     if (!ecritures.length) annoncer('Recette marquée comme ajoutée.');
     else if (comptes.recettes) annoncer(comptes.recettes > 1 ? `${comptes.recettes} recettes enregistrées.` : 'Recette enregistrée.');
     // Venu de l'écran Demandes : toujours y revenir, il montre ce qui reste à traiter.
@@ -928,6 +1165,7 @@ export function creer(ctx) {
     if (!bloquee) return;
     aideBlocage.hidden = false;
     collageManuel.open = true;
+    zoneSerieOuverte = true;
   });
 
   dessiner();

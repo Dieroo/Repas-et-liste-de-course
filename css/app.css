@@ -1800,6 +1800,39 @@ body.sans-onglets:has(.lien-erreurs:not([hidden])) .annonce {
 
 .resultat-erreur { border-color: var(--accent); }
 
+/* « Coller la suite » (T5-0a) : la carte de série remplace l'aperçu ; noms ajoutés, puis les boutons. */
+.resultat-serie { border-color: var(--olive); }
+
+.serie-bilan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.liste-serie {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+.zone-suite {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* « Terminé » et « Voir les plats › » côte à côte, l'un sous l'autre en police agrandie. */
+.actions-serie {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions-serie .bouton { flex: 1 1 140px; }
+
 .liste-erreurs,
 .liste-avertissements,
 .liste-apercu {
