@@ -20,10 +20,10 @@ export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE };
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 7;
+export const VERSION_INSTRUCTIONS = 8;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '7a89b4bc0e57';
+export const EMPREINTE_INSTRUCTIONS = '3b47db30d958';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -48,8 +48,9 @@ export const SOURCE_IDEE = 'Idée de Claude';
 // Appareils annoncés quand les réglages n'en disent rien (monsieur_cuisine : seulement s'il est actif).
 const APPAREILS_PAR_DEFAUT = ['plaque', 'four', 'cookeo', 'airfryer'];
 
-// Critères de toute demande d'idées (décision du propriétaire) : plats originaux, faciles à faire en batch.
-const CRITERES_IDEES = 'plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts.';
+// Critères de toute demande d'idées (décision du propriétaire) : plats originaux, faciles à faire en batch ; version 8 :
+// au moins un plat sur trois avec des légumes bien présents (comme proposition.js › aDesLegumes pour « Proposer »).
+const CRITERES_IDEES = 'plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts ; au moins un plat sur trois avec des légumes bien présents (visibles, en purée ou en velouté ; la pomme de terre ne compte pas).';
 // Dernière ligne d'une demande d'idées.
 const CONSIGNE_IDEES = `(Rends ${IDEES_PAR_MESSAGE} fiches complètes par message, chacune avec un \`id\` nouveau (slug du nom), \`"statutRecette": "brouillon"\`, \`"source": "${SOURCE_IDEE}"\`, sa \`realisation\` (section 2 bis) et ses variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l'app ». Après chaque message, attends « suite » pour les ${IDEES_PAR_MESSAGE} suivantes. Un seul bloc par message.)`;
 // Dernière ligne d'une demande de recette avec des versions.

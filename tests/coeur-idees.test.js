@@ -19,7 +19,7 @@ const ENFANT = { id: 'enfant', nom: 'Enfant', email: '', ordre: 3, coefPortion: 
 const PROFILS = [ENFANT, ADULTE_B, ADULTE_A];
 
 const DEBUT = ['DEMANDE-IDEES paquet@1', `instructions: ${VERSION_INSTRUCTIONS}`];
-const CRITERES = 'critères: plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts.';
+const CRITERES = 'critères: plats originaux (pas les grands classiques), faciles à faire en batch : préparation simple, se gardent 3 jours au frigo, se réchauffent bien, se congèlent de préférence ; pour toute la famille, jeune enfant compris ; surtout des plats, un ou deux desserts ; au moins un plat sur trois avec des légumes bien présents (visibles, en purée ou en velouté ; la pomme de terre ne compte pas).';
 const APPAREILS_DEFAUT = 'appareils: plaque, four, cookeo, airfryer';
 // Version 7 (T5-0b) : 3 fiches par message, chacune avec sa réalisation.
 const CONSIGNE = '(Rends 3 fiches complètes par message, chacune avec un `id` nouveau (slug du nom), `"statutRecette": "brouillon"`, `"source": "Idée de Claude"`, sa `realisation` (section 2 bis) et ses variantes comme pour DEMANDE-RECETTE. Aucun nom de la ligne « déjà dans l\'app ». Après chaque message, attends « suite » pour les 3 suivantes. Un seul bloc par message.)';

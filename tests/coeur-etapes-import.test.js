@@ -45,7 +45,8 @@ const statuts = (prep) => prep.elements.map((e) => [e.id, e.statut]);
 // ——— Fiches complètes ———
 
 test('version 7 : une fiche complète porte sa réalisation ; `etapes` = ses titres (la liste reçue est ignorée)', () => {
-  assert.equal(VERSION_INSTRUCTIONS, 7);
+  // Version 8 (critère des légumes dans les idées) : la réalisation reste exigée depuis la version 7.
+  assert.equal(VERSION_INSTRUCTIONS, 8);
   assert.equal(VERSION_REALISATION, 7);
   const v = validerPaquet(reponse([{ ...ficheV7(GRATIN, REALISATION_GRATIN), etapes: ['Autre chose.'] }]), { profils: PROFILS });
   assert.equal(v.valide, true, JSON.stringify(v.plats[0].erreurs));
@@ -220,12 +221,12 @@ test('statut `etapes` : titres, nombre, travail, remplace, modifiée à la main,
 });
 
 test('version des instructions : un lot d’étapes d’une autre version est refusé en entier', () => {
-  const paquet = reponse([entree(GRATIN, REALISATION_GRATIN)], 6);
+  const paquet = reponse([entree(GRATIN, REALISATION_GRATIN)], VERSION_INSTRUCTIONS - 1);
   const ancien = preparerLot(paquet, [GRATIN], { controle: controlerInstructions([paquet]) }).prep;
   assert.equal(ancien.refus, 'instructions');
   assert.equal(ancien.messageRefus, 'Ces étapes ne viennent pas des instructions actuelles. Recopiez-les depuis Réglages › Projet Claude, puis redemandez ces recettes.');
   assert.deepEqual(ancien.ecritures, []);
-  const recent = reponse([entree(GRATIN, REALISATION_GRATIN)], 8);
+  const recent = reponse([entree(GRATIN, REALISATION_GRATIN)], VERSION_INSTRUCTIONS + 1);
   assert.equal(preparerLot(recent, [GRATIN], { controle: controlerInstructions([recent]) }).prep.refus, 'app');
   assert.equal(preparerLot(reponse([entree(GRATIN, REALISATION_GRATIN)]), [GRATIN], { controle: controlerInstructions([reponse([])]) }).prep.refus, undefined);
 });
@@ -295,7 +296,7 @@ test('texteDemandeEtapes : un seul plat (fiche), lignes omises quand elles sont 
   const simple = { id: 'soupe', nom: 'Soupe', portionsBase: 2, ingredients: [{ produit: 'poireau', qte: 2, unite: 'pc', marqueurs: ['legume'] }, { produit: 'sel', qte: 1, unite: 'pincee' }] };
   assert.equal(texteDemandeEtapes([simple], { appareils: ['plaque', { id: 'four', actif: false }] }), [
     'DEMANDE-ETAPES paquet@1',
-    'instructions: 7',
+    `instructions: ${VERSION_INSTRUCTIONS}`,
     'appareils: plaque',
     SECTION_UN_PLAT,
     'plats:',
@@ -339,7 +340,7 @@ test('correction d’un message d’étapes dont aucune recette n’a pu être r
   assert.equal(v.valide, false);
   assert.equal(texteCorrectionPourClaude(v), [
     'CORRECTION paquet@1',
-    'instructions: 7',
+    `instructions: ${VERSION_INSTRUCTIONS}`,
     'id: gratin-pates-jambon',
     '- plats[0] (gratin-pates-jambon) realisation[7].duree : entier de 1 à 1440 attendu',
     FORMULE_CORRECTION_ETAPES,
