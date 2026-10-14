@@ -27,7 +27,7 @@
 // une coche écrit seulement son chemin (actions.cocher), une ligne du placard « À racheter » le sien
 // (actions.racheter) ; « Courses terminées » et « Rouvrir la liste » passent par actions.terminerCourses et
 // actions.rouvrirListe, qui annoncent elles-mêmes.
-import { el, etatVide, ecrireTexte, reconcilier, vibrer } from './dom.js';
+import { el, etatVide, ecrireTexte, reconcilier, retirerAutres, vibrer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { ouvrirAjoutArticle, ouvrirDetailsArticle, ouvrirOrdreDesRayons, majFeuillesArticle } from './article.js';
 import { driveDe, majFeuillesDrive, ouvrirMotCherche, ouvrirVotreDrive } from './drive.js';
@@ -842,8 +842,9 @@ export function creer(ctx) {
 
   /**
    * Un rayon : en-tête collant « 🥕 Fruits et légumes · 4 » (Magasin, h2) ou petit titre de rayon (Drive, h3), puis
-   * ses lignes (lignes retenues comprises). Le pictogramme est caché aux lecteurs d'écran : le titre se lit
-   * « Fruits et légumes · 4 ».
+   * la liste de ses lignes, vide ici : `dessiner` y pose les lignes une fois tous les rayons en place (une ligne qui
+   * change de rayon n'est jamais détachée, son focus reste). Le pictogramme est caché aux lecteurs d'écran : le titre
+   * se lit « Fruits et légumes · 4 ».
    */
   function fabriquerRayon(groupe, { balise, classe, classeTitre }) {
     const picto = el('span', { class: 'rayon-picto', 'aria-hidden': 'true' });
@@ -860,11 +861,11 @@ export function creer(ctx) {
   const creerRayonDrive = (groupe) => fabriquerRayon(groupe,
     { balise: 'h3', classe: 'rayon-drive', classeTitre: 'rayon-drive-titre' });
 
+  /** Titre du rayon seul ; ses lignes sont posées par `dessiner`. */
   function majRayon(noeud, groupe) {
-    const { picto, texte, liste } = partiesRayons.get(noeud);
+    const { picto, texte } = partiesRayons.get(noeud);
     ecrireTexte(picto, groupe.picto);
     ecrireTexte(texte, `${groupe.libelle} · ${groupe.lignes.length}`);
-    reconcilier(liste, groupe.lignes, optionsLignes);
   }
 
   const optionsRayons = { cle: (g) => g.rayon, creer: creerRayon, maj: majRayon };
@@ -1079,31 +1080,43 @@ export function creer(ctx) {
     const dansLaListe = faites ? lignes : tous;
     const resteEnAchat = (e) => retenues.get(e.cle) === 'achat' || (!e.cochee && retenues.get(e.cle) !== 'panier');
     const affichage = { lignes: dansLaListe.map((e) => ({ ...e, cochee: !resteEnAchat(e) })), articles: [] };
-    reconcilier(listeProchaines, faites ? articles : [], optionsLignes);
     sectionProchaines.hidden = !faites || !articles.length;
     let nbAAcheter = 0;
     let panier;
-    // Les lignes passent d'abord à leur nouvelle place (leur nœud et leur focus gardés), puis l'autre mode se vide.
+    // En trois temps, pour qu'une ligne qui change de place (de rayon, de section, vers le panier) ne soit jamais
+    // détachée, donc garde son nœud et son focus : (1) les rayons, titres seuls, rien de retiré ; (2) les lignes,
+    // chacune à sa nouvelle place, rien de retiré ; (3) ce qui n'est plus voulu (lignes, rayons, l'autre mode) part.
+    const poses = []; // [parent, nœuds voulus]
+    const listesDeLignes = []; // [ul, lignes]
+    const poserRayons = (parent, groupes, options) => {
+      const noeuds = reconcilier(parent, groupes, { ...options, retirer: false });
+      poses.push([parent, noeuds]);
+      noeuds.forEach((noeud, i) => listesDeLignes.push([partiesRayons.get(noeud).liste, groupes[i].lignes]));
+    };
     if (enDrive) {
       const groupes = grouperDrive(affichage, { rayons: rangs });
-      reconcilier(listeSemaine, enGroupesDeRayon(groupes.pourCetteSemaine), optionsRayonsDrive);
-      reconcilier(listeChaqueSemaine, enGroupesDeRayon(groupes.commeChaqueSemaine), optionsRayonsDrive);
-      reconcilier(rayons, [], optionsRayons);
+      poserRayons(listeSemaine, enGroupesDeRayon(groupes.pourCetteSemaine), optionsRayonsDrive);
+      poserRayons(listeChaqueSemaine, enGroupesDeRayon(groupes.commeChaqueSemaine), optionsRayonsDrive);
+      poserRayons(rayons, [], optionsRayons);
       sectionSemaine.hidden = !groupes.pourCetteSemaine.length;
       sectionChaqueSemaine.hidden = !groupes.commeChaqueSemaine.length;
       nbAAcheter = groupes.pourCetteSemaine.length + groupes.commeChaqueSemaine.length;
       panier = groupes.panier;
     } else {
       const groupes = grouperParRayon(affichage, { rayons: rangs });
-      reconcilier(rayons, groupes.aAcheter, optionsRayons);
-      reconcilier(listeSemaine, [], optionsRayonsDrive);
-      reconcilier(listeChaqueSemaine, [], optionsRayonsDrive);
+      poserRayons(rayons, groupes.aAcheter, optionsRayons);
+      poserRayons(listeSemaine, [], optionsRayonsDrive);
+      poserRayons(listeChaqueSemaine, [], optionsRayonsDrive);
       nbAAcheter = groupes.aAcheter.reduce((n, g) => n + g.lignes.length, 0);
       panier = groupes.panier;
     }
+    listesDeLignes.push([listePanier, panier], [listeProchaines, faites ? articles : []]);
+    for (const [ul, lignesDuParent] of listesDeLignes) {
+      poses.push([ul, reconcilier(ul, lignesDuParent, { ...optionsLignes, retirer: false })]);
+    }
+    for (const [parent, noeuds] of poses.reverse()) retirerAutres(parent, noeuds);
     rayons.hidden = enDrive || !nbAAcheter;
     sectionsDrive.hidden = !enDrive || !nbAAcheter;
-    reconcilier(listePanier, panier, optionsLignes);
     zonePanier.hidden = !panier.length;
     ecrireTexte(resumePanier, `Dans le panier · ${panier.length}`);
     // « Pas cette semaine » (T3d) : les habituels sautés, et ceux touchés ici pendant cette visite.

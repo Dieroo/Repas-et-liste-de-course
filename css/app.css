@@ -4035,6 +4035,9 @@ html:has(.vue.courses) body { overflow-anchor: none; }
   position: sticky;
   top: max(64px, calc(env(safe-area-inset-top) + 56px)); /* hauteur réelle de l'en-tête */
   z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
   margin: 0 -4px;
   padding: 8px 4px 6px;
   background: var(--fond);
@@ -4046,15 +4049,17 @@ body:has(.bandeau-apercu:not([hidden])) .rayon-titre {
   top: calc(max(64px, calc(env(safe-area-inset-top) + 56px)) + 60px); /* sous le bandeau d'aperçu */
 }
 
-/* Pictogramme du rayon (2026-10-14), devant le libellé, caché aux lecteurs d'écran ; un peu plus grand que le texte. */
+/* Pictogramme du rayon (2026-10-14), devant le libellé, caché aux lecteurs d'écran ; un peu plus grand que le texte,
+   sans dépasser 24 px tant que le texte est plus petit (en police agrandie, la taille du texte : un titre qui tient sur
+   une ligne sans lui y reste). Colonne à part : un libellé coupé repart sous le libellé, jamais sous le pictogramme. */
 .rayon-picto {
-  display: inline-block;
-  margin-inline-end: 0.4em;
+  flex: none;
   font-family: var(--police-texte);
-  font-size: 1.25em;
+  font-size: min(1.25em, 24px);
   line-height: 1;
-  vertical-align: -0.1em;
 }
+
+.rayon-titre-texte { min-width: 0; }
 
 /* Mode Drive : dans chaque section, les lignes regroupées sous un petit titre de rayon (non collant). */
 .rayons-drive {
@@ -4064,6 +4069,9 @@ body:has(.bandeau-apercu:not([hidden])) .rayon-titre {
 }
 
 .rayon-drive-titre {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
   margin: 0;
   padding: 6px 12px;
   border-left: 4px solid var(--olive);
@@ -4072,7 +4080,7 @@ body:has(.bandeau-apercu:not([hidden])) .rayon-titre {
   color: var(--texte);
   font-family: var(--police-texte);
   font-size: 0.9375rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.3;
   letter-spacing: 0;
   overflow-wrap: anywhere;
@@ -4283,7 +4291,7 @@ body:has(.barre-courses) .annonce {
 .sections-drive {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 28px;
 }
 
 .section-courses {
@@ -4292,10 +4300,22 @@ body:has(.barre-courses) .annonce {
   gap: 2px;
 }
 
+/* Mode Drive : la frontière entre « Pour cette semaine » et « Comme chaque semaine » se voit plus que celle entre deux
+   rayons (filet, plus d'espace, titre plus grand que les petits titres de rayon). */
+.sections-drive > .section-courses:not([hidden]) + .section-courses:not([hidden]) {
+  padding-top: 16px;
+  border-top: 2px solid var(--bordure);
+}
+
 .titre-section-courses {
   padding: 4px 0;
   font-size: 1.0625rem;
   overflow-wrap: anywhere;
+}
+
+.sections-drive .titre-section-courses {
+  margin-bottom: 8px;
+  font-size: 1.25rem;
 }
 
 /* Une ligne : la case et son texte (la cible), 🔍, ⋮ ; « Pas le bon produit ? » passe dessous, sur toute la largeur. */

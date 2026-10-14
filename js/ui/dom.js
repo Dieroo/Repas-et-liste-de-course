@@ -75,9 +75,12 @@ function placer(parent, noeud, reference) {
  * `noeuds` (facultatif) : Map clé → nœud partagée par plusieurs parents, pour qu'un nœud passe de l'un à l'autre sans
  * être recréé (une ligne cochée qui rejoint « Dans le panier ») ; tenue à jour ici, à l'appelant d'en retirer les clés
  * disparues de tous les parents.
+ * `retirer` (vrai par défaut) : faux, les enfants qui ne sont plus voulus restent, après les nœuds voulus, pour que
+ * l'appelant pose d'abord tout ce qui bouge entre plusieurs parents (une ligne passe d'un rayon à l'autre sans jamais
+ * être détachée, donc sans perdre le focus), puis retire le reste (`retirerAutres`).
  * → les nœuds, dans l'ordre.
  */
-export function reconcilier(parent, elements, { cle, creer, maj = null, noeuds = null } = {}) {
+export function reconcilier(parent, elements, { cle, creer, maj = null, noeuds = null, retirer = true } = {}) {
   const presents = new Map();
   for (const enfant of [...parent.children]) {
     if (clesDesNoeuds.has(enfant)) presents.set(clesDesNoeuds.get(enfant), enfant);
@@ -94,15 +97,20 @@ export function reconcilier(parent, elements, { cle, creer, maj = null, noeuds =
     noeuds?.set(k, noeud);
     return noeud;
   });
-  const gardes = new Set(voulus);
-  for (const enfant of [...parent.children]) {
-    if (!gardes.has(enfant)) enfant.remove();
-  }
+  if (retirer) retirerAutres(parent, voulus);
   voulus.forEach((noeud, i) => {
     const reference = parent.children[i] ?? null;
     if (reference !== noeud) placer(parent, noeud, reference);
   });
   return voulus;
+}
+
+/** Retire de `parent` les enfants qui ne sont pas dans `gardes` (seconde moitié de `reconcilier` sans `retirer`). */
+export function retirerAutres(parent, gardes) {
+  const voulus = new Set(gardes);
+  for (const enfant of [...parent.children]) {
+    if (!voulus.has(enfant)) enfant.remove();
+  }
 }
 
 /** Remplace un texte seulement s'il change (un lecteur d'écran ne relit pas un texte inchangé). */
