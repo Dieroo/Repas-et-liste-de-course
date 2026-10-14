@@ -494,13 +494,14 @@ const frigoJoursDuPlat = (plat) => {
 
 /**
  * Fin de cuisson (cuit le `jour`, 'AAAA-MM-JJ') → { jour, jours, auFrigo, aCongeler, auPlusTard, partFragile: null |
- * { profil, style, jours, auPlusTard }, congelerSiApres: null | date }.
+ * { profil, style, jours, auPlusTard }, congelerSiApres: null | date, aFinirAvant: null | date }.
  * `auPlusTard` = jour + jours au frigo (compris) : jours de l'élément de la semaine (conservation), sinon de la fiche,
  * sinon `reglages.frigoJoursDefaut`, sinon 3 ; la même date que le rappel « À congeler » (T4). `auFrigo` : portions à
  * cuisiner de la semaine (sans élément : `portions`, sinon portionsBase) ; `aCongeler` : portions à congeler ;
  * `partFragile` : la version qui se garde moins longtemps (semaine.js › conservation.limite ; sans élément, celle des
  * `versions` mises de côté) ; `congelerSiApres` :
- * `auPlusTard` si la semaine (`finSemaine`) finit après.
+ * `auPlusTard` si la semaine (`finSemaine`) finit après, pour un plat qui se congèle ; `aFinirAvant` : la même date pour
+ * un plat qui ne se congèle pas (`conservation.congelable: false`), jamais conseillé au congélateur.
  */
 export function finDeCuisson(plat, element, jour, { finSemaine = null, reglages = null, portions = null, versions = null } = {}) {
   const semaine = semaineUtile(element);
@@ -509,6 +510,8 @@ export function finDeCuisson(plat, element, jour, { finSemaine = null, reglages 
   const jours = (semaine && Number.isInteger(element.conservation?.jours) ? element.conservation.jours : null)
     ?? frigoJoursDuPlat(plat) ?? duFoyer;
   const auPlusTard = jourValide(jour) ? ajouterJours(jour, jours) : null;
+  const apres = auPlusTard && jourValide(finSemaine) && finSemaine > auPlusTard ? auPlusTard : null;
+  const congelable = plat?.conservation?.congelable !== false;
   // Sans élément de la semaine (« la recette », ou hors semaine) : la version mise de côté qui se garde le moins (`versions`
   // de pasAPas : [{ profil, style, nomme, frigoJours | variante }]), comme semaine.js › conservation.limite.
   let limite = semaine ? element.conservation?.limite ?? null : null;
@@ -530,7 +533,10 @@ export function finDeCuisson(plat, element, jour, { finSemaine = null, reglages 
     aCongeler: semaine ? element.aCongeler : 0,
     auPlusTard,
     partFragile,
-    congelerSiApres: auPlusTard && jourValide(finSemaine) && finSemaine > auPlusTard ? auPlusTard : null,
+    // Un plat qui ne se congèle pas (`conservation.congelable: false`) n'est jamais à congeler : la phrase dit alors de
+    // le finir à temps (`aFinirAvant`). Absent : le plat est tenu pour congelable, comme avant.
+    congelerSiApres: congelable ? apres : null,
+    aFinirAvant: congelable ? null : apres,
   };
 }
 
@@ -556,7 +562,8 @@ export function texteFrigoAvant(finCuisson) {
  * Phrases de l'écran de fin (plan §8.5) → { titre, portions, partFragile, congeler, conseils: [texte] } :
  * « 6 portions : 4 au frigo, au plus tard le mercredi 21 octobre ; 2 au congélateur. » ; « 4 portions au frigo, au
  * plus tard le … » ; « 🐟 La part d’Adulte B : au plus tard le lundi 20 octobre. » ; « Si vous en mangez après le
- * mercredi 21 : congelez ces portions aujourd’hui, sortez-les au frigo la veille. » ; conseils 4 et 5, puis 6 (congeler
+ * mercredi 21 : congelez ces portions aujourd’hui, sortez-les au frigo la veille. » (plat qui ne se congèle pas :
+ * « Ce plat ne se congèle pas : prévoyez de le finir au plus tard le mercredi 21. ») ; conseils 4 et 5, puis 6 (congeler
  * utile) et 7 (une portion va au congélateur).
  */
 export function phrasesDeFin(fin, { moi = null } = {}) {
@@ -575,12 +582,15 @@ export function phrasesDeFin(fin, { moi = null } = {}) {
     const emoji = STYLES.includes(fin.partFragile.style) ? `${EMOJIS_STYLE[fin.partFragile.style]} ` : '';
     partFragile = `${emoji}${majuscule(laPart(fin.partFragile.profil, moi))}\u00A0: ${texteDateLimite(fin.partFragile.auPlusTard)}.`;
   }
-  const congeler = fin?.congelerSiApres
-    ? `Si vous en mangez après le ${texteJour(fin.congelerSiApres, { jourSemaine: true, mois: false })}\u00A0: congelez ces portions aujourd’hui, sortez-les au frigo la veille.`
-    : null;
+  let congeler = null;
+  if (fin?.congelerSiApres) {
+    congeler = `Si vous en mangez après le ${texteJour(fin.congelerSiApres, { jourSemaine: true, mois: false })}\u00A0: congelez ces portions aujourd’hui, sortez-les au frigo la veille.`;
+  } else if (fin?.aFinirAvant) {
+    congeler = `Ce plat ne se congèle pas\u00A0: prévoyez de le finir au plus tard le ${texteJour(fin.aFinirAvant, { jourSemaine: true, mois: false })}.`;
+  }
   const conseils = [CONSEILS.boites.texte, CONSEILS.etiquette.texte];
-  if (congeler) conseils.push(CONSEILS.congeler.texte);
-  if (fin?.aCongeler > 0 || congeler) conseils.push(CONSEILS.decongeler.texte);
+  if (fin?.congelerSiApres) conseils.push(CONSEILS.congeler.texte);
+  if (fin?.aCongeler > 0 || fin?.congelerSiApres) conseils.push(CONSEILS.decongeler.texte);
   return { titre: TEXTES_CUISINE.fin, portions, partFragile, congeler, conseils };
 }
 
