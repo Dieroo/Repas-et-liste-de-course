@@ -55,6 +55,31 @@ export const LIBELLES_RAYON = {
   divers: 'Divers',
 };
 
+/**
+ * Pictogramme de chaque rayon (2026-10-14, option B du propriétaire) : devant le libellé des en-têtes de rayon de
+ * Courses (mode Magasin) et des petits titres de rayon du mode Drive, toujours caché aux lecteurs d'écran. Un rayon
+ * inconnu prend celui de « Divers », comme son libellé (pictoRayon).
+ */
+export const PICTOS_RAYON = Object.freeze({
+  fruits_legumes: '🥕',
+  boucherie: '🥩',
+  charcuterie: '🥓',
+  poissonnerie: '🐟',
+  cremerie: '🥛',
+  fromages: '🧀',
+  epicerie_salee: '🥫',
+  epicerie_sucree: '🍪',
+  boulangerie: '🥖',
+  surgeles: '🧊',
+  boissons: '🧃',
+  hygiene: '🧴',
+  entretien: '🧽',
+  divers: '📦',
+});
+
+/** Pictogramme d'un rayon ; rayon inconnu → celui de « Divers ». */
+export const pictoRayon = (rayon) => (Object.hasOwn(PICTOS_RAYON, rayon ?? '') ? PICTOS_RAYON[rayon] : PICTOS_RAYON.divers);
+
 export const LIBELLES_FORME = { hachee: 'Hachée', fine: 'En fines lamelles', morceaux: 'En morceaux', effilochable: 'Effilochée' };
 
 export const LIBELLES_ROLE = { principal: 'Bien visible', incorpore: 'Fondu dans le plat' };

@@ -4,12 +4,13 @@
 // sur l'autre.
 // Deux façons de faire les courses (T3b), retenues sur ce téléphone pour ce compte, Drive d'avance :
 // - « 🚗 Drive » : « Pour cette semaine » et « Comme chaque semaine » (T3d : produits « À acheter chaque semaine » et
-//   préparations de chaque semaine), sans en-têtes de rayon ; sur chaque ligne,
+//   préparations de chaque semaine), chacune regroupée sous de petits titres de rayon (« 🥕 Fruits et légumes · 4 »,
+//   2026-10-14, coeur/liste.js › enGroupesDeRayon) ; sur chaque ligne,
 //   🔍 ouvre la recherche du produit sur le site du drive (un vrai lien, jamais une coche) ; au retour sur l'app moins de
 //   15 minutes après, la ligne revient à l'écran, le focus sur sa case, avec « Pas le bon produit ? » et « Changer le
 //   mot cherché » ; drive pas réglé : la carte « Régler le drive » ;
-// - « 🛒 Magasin » : par rayon (en-têtes collants) ; l'écran reste allumé tant que Courses est visible, rendu après 10
-//   minutes sans toucher et redemandé au toucher suivant (toute erreur ignorée) ; en bas, « Ordre des rayons › » (T3d :
+// - « 🛒 Magasin » : par rayon (en-têtes collants, avec le pictogramme du rayon) ; l'écran reste allumé tant que Courses
+//   est visible, rendu après 10 minutes sans toucher et redemandé au toucher suivant (toute erreur ignorée) ; en bas, « Ordre des rayons › » (T3d :
 //   feuille « Ordre des rayons », article.js).
 // « Pas cette semaine » (T3d, replié, sous la liste) : les produits « À acheter chaque semaine » sautés cette semaine
 // (feuille ⋮), chacun avec son interrupteur pour le remettre (actions.sauterHabituel) ; un produit touché ici reste
@@ -26,7 +27,7 @@
 // une coche écrit seulement son chemin (actions.cocher), une ligne du placard « À racheter » le sien
 // (actions.racheter) ; « Courses terminées » et « Rouvrir la liste » passent par actions.terminerCourses et
 // actions.rouvrirListe, qui annoncent elles-mêmes.
-import { el, etatVide, ecrireTexte, reconcilier, vibrer } from './dom.js';
+import { el, etatVide, ecrireTexte, reconcilier, retirerAutres, vibrer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { ouvrirAjoutArticle, ouvrirDetailsArticle, ouvrirOrdreDesRayons, majFeuillesArticle } from './article.js';
 import { driveDe, majFeuillesDrive, ouvrirMotCherche, ouvrirVotreDrive } from './drive.js';
@@ -34,8 +35,9 @@ import { demanderChoixALArrivee } from './choisir-plats.js';
 import { listeCourante, platsDeLaSemaineDe } from './plat-semaine.js';
 import { LIBELLES_RAYON } from '../coeur/edition.js';
 import {
-  TEXTES_FIN_DES_COURSES, TEXTES_T3D, bandeauxCourses, coursesFaites, grouperDrive, grouperParRayon, lignesAjouteesDepuis,
-  ordreRayons, phraseRestesFin, restesFinDesCourses, texteAjoutesDepuis, texteCoursesFaites, texteDejaPris, texteOrigine,
+  TEXTES_FIN_DES_COURSES, TEXTES_T3D, bandeauxCourses, coursesFaites, enGroupesDeRayon, grouperDrive, grouperParRayon,
+  lignesAjouteesDepuis, ordreRayons, phraseRestesFin, restesFinDesCourses, texteAjoutesDepuis, texteCoursesFaites,
+  texteDejaPris, texteOrigine,
 } from '../coeur/liste.js';
 import { lireSemaine, texteDates } from '../coeur/semaine.js';
 import {
@@ -185,10 +187,11 @@ export function creer(ctx) {
 
   // ——— À acheter : par rayon (Magasin) ou en sections (Drive) ———
   const rayons = el('div', { class: 'rayons' });
-  const listeSemaine = el('ul', { class: 'lignes-courses' });
+  // Mode Drive : chaque section regroupe ses lignes sous de petits titres de rayon (h3, non collants).
+  const listeSemaine = el('div', { class: 'rayons-drive' });
   const sectionSemaine = el('section', { class: 'section-courses' },
     el('h2', { class: 'titre-section-courses' }, TEXTES_DRIVE.pourCetteSemaine), listeSemaine);
-  const listeChaqueSemaine = el('ul', { class: 'lignes-courses' });
+  const listeChaqueSemaine = el('div', { class: 'rayons-drive' });
   const sectionChaqueSemaine = el('section', { class: 'section-courses', hidden: true },
     el('h2', { class: 'titre-section-courses' }, TEXTES_DRIVE.commeChaqueSemaine), listeChaqueSemaine);
   const sectionsDrive = el('div', { class: 'sections-drive', hidden: true }, sectionSemaine, sectionChaqueSemaine);
@@ -837,21 +840,36 @@ export function creer(ctx) {
 
   const partiesRayons = new WeakMap();
 
-  /** Un rayon : en-tête collant « Fruits et légumes · 4 », puis ses lignes (lignes retenues comprises). */
-  function creerRayon(groupe) {
-    const titre = el('h2', { class: 'rayon-titre' });
+  /**
+   * Un rayon : en-tête collant « 🥕 Fruits et légumes · 4 » (Magasin, h2) ou petit titre de rayon (Drive, h3), puis
+   * la liste de ses lignes, vide ici : `dessiner` y pose les lignes une fois tous les rayons en place (une ligne qui
+   * change de rayon n'est jamais détachée, son focus reste). Le pictogramme est caché aux lecteurs d'écran : le titre
+   * se lit « Fruits et légumes · 4 ».
+   */
+  function fabriquerRayon(groupe, { balise, classe, classeTitre }) {
+    const picto = el('span', { class: 'rayon-picto', 'aria-hidden': 'true' });
+    const texte = el('span', { class: 'rayon-titre-texte' });
+    const titre = el(balise, { class: classeTitre }, picto, texte);
     const liste = el('ul', { class: 'lignes-courses' });
-    const noeud = el('section', { class: 'rayon' }, titre, liste);
-    partiesRayons.set(noeud, { titre, liste });
+    const noeud = el('section', { class: classe }, titre, liste);
+    partiesRayons.set(noeud, { picto, texte, liste });
     majRayon(noeud, groupe);
     return noeud;
   }
 
+  const creerRayon = (groupe) => fabriquerRayon(groupe, { balise: 'h2', classe: 'rayon', classeTitre: 'rayon-titre' });
+  const creerRayonDrive = (groupe) => fabriquerRayon(groupe,
+    { balise: 'h3', classe: 'rayon-drive', classeTitre: 'rayon-drive-titre' });
+
+  /** Titre du rayon seul ; ses lignes sont posées par `dessiner`. */
   function majRayon(noeud, groupe) {
-    const { titre, liste } = partiesRayons.get(noeud);
-    ecrireTexte(titre, `${groupe.libelle} · ${groupe.lignes.length}`);
-    reconcilier(liste, groupe.lignes, optionsLignes);
+    const { picto, texte } = partiesRayons.get(noeud);
+    ecrireTexte(picto, groupe.picto);
+    ecrireTexte(texte, `${groupe.libelle} · ${groupe.lignes.length}`);
   }
+
+  const optionsRayons = { cle: (g) => g.rayon, creer: creerRayon, maj: majRayon };
+  const optionsRayonsDrive = { cle: (g) => g.cle, creer: creerRayonDrive, maj: majRayon };
 
   const optionsLignes = { cle: (l) => l.cle, creer: creerLigne, maj: majLigne, noeuds: noeudsLignes };
 
@@ -1062,30 +1080,43 @@ export function creer(ctx) {
     const dansLaListe = faites ? lignes : tous;
     const resteEnAchat = (e) => retenues.get(e.cle) === 'achat' || (!e.cochee && retenues.get(e.cle) !== 'panier');
     const affichage = { lignes: dansLaListe.map((e) => ({ ...e, cochee: !resteEnAchat(e) })), articles: [] };
-    reconcilier(listeProchaines, faites ? articles : [], optionsLignes);
     sectionProchaines.hidden = !faites || !articles.length;
     let nbAAcheter = 0;
     let panier;
+    // En trois temps, pour qu'une ligne qui change de place (de rayon, de section, vers le panier) ne soit jamais
+    // détachée, donc garde son nœud et son focus : (1) les rayons, titres seuls, rien de retiré ; (2) les lignes,
+    // chacune à sa nouvelle place, rien de retiré ; (3) ce qui n'est plus voulu (lignes, rayons, l'autre mode) part.
+    const poses = []; // [parent, nœuds voulus]
+    const listesDeLignes = []; // [ul, lignes]
+    const poserRayons = (parent, groupes, options) => {
+      const noeuds = reconcilier(parent, groupes, { ...options, retirer: false });
+      poses.push([parent, noeuds]);
+      noeuds.forEach((noeud, i) => listesDeLignes.push([partiesRayons.get(noeud).liste, groupes[i].lignes]));
+    };
     if (enDrive) {
       const groupes = grouperDrive(affichage, { rayons: rangs });
-      reconcilier(rayons, [], { cle: (g) => g.rayon, creer: creerRayon, maj: majRayon });
-      reconcilier(listeSemaine, groupes.pourCetteSemaine, optionsLignes);
-      reconcilier(listeChaqueSemaine, groupes.commeChaqueSemaine, optionsLignes);
+      poserRayons(listeSemaine, enGroupesDeRayon(groupes.pourCetteSemaine), optionsRayonsDrive);
+      poserRayons(listeChaqueSemaine, enGroupesDeRayon(groupes.commeChaqueSemaine), optionsRayonsDrive);
+      poserRayons(rayons, [], optionsRayons);
       sectionSemaine.hidden = !groupes.pourCetteSemaine.length;
       sectionChaqueSemaine.hidden = !groupes.commeChaqueSemaine.length;
       nbAAcheter = groupes.pourCetteSemaine.length + groupes.commeChaqueSemaine.length;
       panier = groupes.panier;
     } else {
       const groupes = grouperParRayon(affichage, { rayons: rangs });
-      reconcilier(listeSemaine, [], optionsLignes);
-      reconcilier(listeChaqueSemaine, [], optionsLignes);
-      reconcilier(rayons, groupes.aAcheter, { cle: (g) => g.rayon, creer: creerRayon, maj: majRayon });
+      poserRayons(rayons, groupes.aAcheter, optionsRayons);
+      poserRayons(listeSemaine, [], optionsRayonsDrive);
+      poserRayons(listeChaqueSemaine, [], optionsRayonsDrive);
       nbAAcheter = groupes.aAcheter.reduce((n, g) => n + g.lignes.length, 0);
       panier = groupes.panier;
     }
+    listesDeLignes.push([listePanier, panier], [listeProchaines, faites ? articles : []]);
+    for (const [ul, lignesDuParent] of listesDeLignes) {
+      poses.push([ul, reconcilier(ul, lignesDuParent, { ...optionsLignes, retirer: false })]);
+    }
+    for (const [parent, noeuds] of poses.reverse()) retirerAutres(parent, noeuds);
     rayons.hidden = enDrive || !nbAAcheter;
     sectionsDrive.hidden = !enDrive || !nbAAcheter;
-    reconcilier(listePanier, panier, optionsLignes);
     zonePanier.hidden = !panier.length;
     ecrireTexte(resumePanier, `Dans le panier · ${panier.length}`);
     // « Pas cette semaine » (T3d) : les habituels sautés, et ceux touchés ici pendant cette visite.
