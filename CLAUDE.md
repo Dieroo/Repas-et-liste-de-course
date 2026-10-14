@@ -63,16 +63,16 @@ Web-app familiale installable (PWA), partagée en temps réel entre deux télép
 - Phrases courtes et chaleureuses. Jamais affichés : « paquet », « slug », « JSON », « IA ». L'import s'appelle « Ajouter des recettes » ; un produit courant reconnu s'annonce « Produit connu », jamais « dictionnaire » ni « catalogue ».
 - États vides utiles (« Aucun plat noté : découvrez-en 10 en une minute »).
 
-**Direction « cuisine familiale »** (contrastes AA vérifiés)
+**Direction « cuisine familiale »** (contrastes AA vérifiés), **en mode clair seul** (2026-10-14 : l'app ne suit plus le thème sombre du téléphone ni de Chrome ; `color-scheme: light`, aucune règle `prefers-color-scheme: dark`, vérifié par `tests/theme.test.js`)
 
-| Token | Clair | Sombre |
-|---|---|---|
-| `--fond` | `#FBF7F1` | `#1C1917` |
-| `--surface` | `#FFFFFF` | `#26221F` |
-| `--texte` | `#2B2622` | `#F3EDE5` |
-| `--accent` (terracotta) | `#B4492F`, texte blanc dessus | `#E07A5C`, texte `#1C1917` dessus |
-| `--olive` | `#4F6E4A` | `#8FB089` |
-| `--bordure` | `#E9E1D6` | `#3A332E` |
+| Token | Valeur |
+|---|---|
+| `--fond` | `#FBF7F1` |
+| `--surface` | `#FFFFFF` |
+| `--texte` | `#2B2622` |
+| `--accent` (terracotta) | `#B4492F`, texte blanc dessus |
+| `--olive` | `#4F6E4A` |
+| `--bordure` | `#E9E1D6` |
 
 - Titres : « Fraunces » (Google Fonts, mise en cache par le service worker) ; texte : police système.
 - Cartes arrondies (16 px), ombres douces, espacements généreux, cibles ≥ 48 px.
@@ -722,7 +722,7 @@ V2 (après 4 à 6 samedis d'historique) : produits « probablement manquants » 
 
 - Tout en français : interface, noms métier, commentaires, messages de commit.
 - Contenu utilisateur inséré avec `textContent`, jamais `innerHTML`.
-- HTML sémantique, cibles tactiles ≥ 48 px, contraste AA, mode sombre via `prefers-color-scheme`.
+- HTML sémantique, cibles tactiles ≥ 48 px, contraste AA, mode clair seul (2026-10-14 : plus de mode sombre).
 - `js/coeur/` sans DOM ni Firebase ; chaque fonction testée.
 - Un abonnement `onSnapshot` par requête, créé une fois ; écritures uniquement sur action de l'utilisateur.
 - La liste de courses se calcule sur le téléphone ; on n'écrit que les gestes (plats choisis et leurs réglages, coches, articles), toujours par lot (hors ligne : plus tard), par chemins pointés ; aucune transaction pour planifier ni faire les courses (rien ne doit être refusé en magasin).
@@ -841,3 +841,4 @@ Décisions :
 - 2026-10-13 — Légumes dans « Proposer » (demande de l'utilisatrice des courses : « il faudrait tout de même qu'il y en ait avec des légumes, pour garder un certain équilibre » ; choix du propriétaire : au moins un plat avec des légumes, même en purée) : `aDesLegumes` (§9 Proposition, « Légumes ») et `LEGUMES_MIN` = 1 pour ✨, par échange après le remplissage (nombre, graine, groupes et annonce inchangés ; jamais pour les desserts) ; 🔄 garde des légumes quand l'ancien plat était le seul ; raison « · avec des légumes ». Écarts au détail tranché, signalés : poids à la pièce lus sur la plus longue suite de premiers mots de la clé (« chou-fleur », « céleri-rave » ne se liraient pas au premier mot), avec trois poids ajoutés (tomate cerise 15 g, chou de Bruxelles 15 g, radis noir 250 g) ; un ingrédient marqué `feculent` n'est jamais un légume ici, la pomme de terre non plus même marquée `legume` ; « gousse d'ail » et « petit oignon » sont aromatiques ; ni couleur ni état (« vert », « rouge », « frais »…) ne comptent pour le nom du plat ; « ✨ Proposé : avec des légumes. » quand la raison n'avait rien d'autre à dire. Après relecture (trois relecteurs) : les bases de sauce tomate (tomate concassée ou pelée, pulpe, coulis, passata, concentré, sauce, tomate séchée) ne comptent jamais, comme les aromatiques (une boîte de tomates faisait de la bolognaise, des lasagnes ou d'un chili un plat « avec des légumes », annoncé ainsi dans sa feuille) ; un légume principal (a) ou nommé dans le plat (b) pèse au moins 40 g par portion quand sa quantité se lit (une rondelle de tomate de burger, des lamelles de champignons de pizza ne suffisent plus) ; la patate douce est un féculent par son nom, comme la pomme de terre et comme dans les produits courants (une recette de Claude la marque `legume`), retirée des poids à la pièce (écart au détail tranché, qui la pesait) ; l'échange se fait palier par palier, groupe ensuite (un plat que quelqu'un ne mange pas ou un plat récent entraient alors qu'un plat avec des légumes du palier 1 d'un autre groupe était libre), et un candidat du palier 3 peut remplacer un retenu du palier 3 placé plus haut. Rapporté, non appliqué : « 🔄 » sur le seul plat avec des légumes cherche un plat avec des légumes jusqu'au palier 3 avant tout autre plat (lettre du point décidé, comme ✨ : le faire passer après les plats des paliers 1 et 2 sans légumes ferait céder « au moins un » à la règle du palier 3 : à trancher). Le critère des idées (« au moins un plat sur trois avec des légumes bien présents ») n'est pas livré : la ligne `critères:` de DEMANDE-IDEES est citée mot pour mot dans l'exemple de `docs/projet-claude.md` (un test l'exige), donc il demande des instructions en version 8 : à décider. Instructions du projet Claude inchangées (version 7). Puis (2026-10-13) le critère des idées est livré (un plat, jamais un dessert ; ni les tomates en conserve, séchées ou en sauce, comme `aDesLegumes`) : instructions du projet Claude en version 8, une seule copie à faire par le propriétaire, avec celles des étapes détaillées.
 - 2026-10-13 — Demandes du propriétaire pour une prochaine mise à jour (à planifier après la remise de l'app, avec T5-1b ; format et instructions du projet Claude à changer : version 9) : (1) les idées de Claude suivent mieux les notes (plats aimés et évités, « J'aime bien » compris), deux sur trois dans l'esprit des préférés, une sur trois pour surprendre ; (2) une source vérifiable quand Claude s'inspire d'un site (lien gardé dans `source`), sans jamais l'inventer ; (3) une difficulté d'exécution par recette, donnée par Claude (facile, intermédiaire, technique ; « rapide » calculé par l'app d'après `tempsActifMin` et la cuisson) ; (4) deux familles de recettes : « Pour le batch » (faciles et rapides, se gardent) et « Pour une occasion » (plus de technique, pour surprendre des invités), que « ✨ Proposer » distingue (jamais une recette d'occasion dans le batch de la semaine) et que « 💡 Idées de plats » laisse choisir ; les recettes déjà là reçoivent difficulté et famille par une courte demande à Claude.
 - 2026-10-13 — « Cuisiner pas à pas », correctif trouvé en préparant le protocole de test de A à Z : la fin du pas à pas conseillait de congeler un plat qui ne se congèle pas (`conservation.congelable: false`) ; il ne l'est plus jamais (`finDeCuisson` : `congelerSiApres` nul, `aFinirAvant`), et la fin dit « Ce plat ne se congèle pas : prévoyez de le finir au plus tard le mercredi 21. » quand la semaine finit après sa date limite ; `congelable` absent : tenu pour congelable, comme avant.
+- 2026-10-14 — Mode clair seul (demande du propriétaire pendant le protocole de A à Z, mercredi soir : l'app trop sombre, des cases et sections pas assez démarquées ; en mode sombre, les cartes `#26221F` se distinguaient à peine du fond `#1C1917`, et Chrome passé en thème clair laissait l'app sombre) : l'app reste en mode clair quel que soit le thème du téléphone ou de Chrome (`color-scheme: light` dans `css/app.css` et `index.html`, une seule couleur de barre `#FBF7F1`, jetons sombres retirés). Proposés, en attente de sa réponse : pictogramme par rayon (🥕 Fruits et légumes…) et sections plus marquées ; refonte visuelle plus large après la remise, d'après la réaction de l'utilisatrice des courses. Instructions du projet Claude inchangées (version 8).
