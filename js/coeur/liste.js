@@ -26,7 +26,7 @@ import {
   lireSemaine, peutPreparerLaSuivante, platsDeLaSemaine, semaineSuivante, semaineVisee, statutSemaine, texteDates,
   texteJour,
 } from './semaine.js';
-import { LIBELLES_RAYON, UNITES_EDITION } from './edition.js';
+import { LIBELLES_RAYON, UNITES_EDITION, pictoRayon } from './edition.js';
 import { LIBELLES_STYLE } from './vocabulaire.js';
 import { RECHERCHE_MAX, lireDrive } from './drive.js';
 import { PROPOSITION_MIN, TEXTES_PROPOSER, libelleProposer } from './proposition.js';
@@ -700,8 +700,11 @@ function rangeurDeRayons(rayons) {
 
 const parNomDeLigne = (a, b) => comparerNoms(a.nom, b.nom) || parId(a.cle, b.cle);
 
+/** Libellé d'un rayon ; rayon inconnu → « Divers ». */
+const libelleRayon = (rayon) => (Object.hasOwn(LIBELLES_RAYON, rayon ?? '') ? LIBELLES_RAYON[rayon] : LIBELLES_RAYON.divers);
+
 /**
- * Écran Courses : rayons dans l'ordre du foyer → { aAcheter: [{ rayon, libelle, lignes }], maison, panier, total, pris,
+ * Écran Courses : rayons dans l'ordre du foyer → { aAcheter: [{ rayon, libelle, picto, lignes }], maison, panier, total, pris,
  * vide }. Lignes et articles à acheter rangés par rayon puis par nom ; `panier` : ceux qui sont cochés (« Dans le
  * panier ») ; `maison` : « Déjà à la maison ? » (hors des comptes). `total` : lignes et articles, cochés compris ;
  * `pris` : cochés ; `vide` : aucune ligne ni article (jamais « Tout est dans le panier » sur une liste vide).
@@ -716,7 +719,7 @@ export function grouperParRayon(liste, { rayons = null } = {}) {
     groupes.get(element.rayon).push(element);
   }
   const aAcheter = [...groupes].sort(([a], [b]) => rang(a) - rang(b) || parId(a, b))
-    .map(([rayon, lignes]) => ({ rayon, libelle: LIBELLES_RAYON[rayon] ?? LIBELLES_RAYON.divers, lignes: lignes.sort(parNomDeLigne) }));
+    .map(([rayon, lignes]) => ({ rayon, libelle: libelleRayon(rayon), picto: pictoRayon(rayon), lignes: lignes.sort(parNomDeLigne) }));
   const panier = elements.filter((e) => e.cochee).sort((a, b) => rang(a.rayon) - rang(b.rayon) || parNomDeLigne(a, b));
   return {
     aAcheter, maison: listeDe(liste?.maison), panier, total: elements.length, pris: panier.length,
@@ -726,7 +729,8 @@ export function grouperParRayon(liste, { rayons = null } = {}) {
 
 /**
  * Écran Courses en mode Drive (T3b, décision 17) → { pourCetteSemaine, commeChaqueSemaine, panier, maison, total,
- * pris, vide } : trois listes à plat, sans en-têtes de rayon, chacune rangée par rayon (ordre du foyer) puis par nom :
+ * pris, vide } : trois listes, chacune rangée par rayon (ordre du foyer ; deux rayons inconnus, par leur nom) puis par
+ * nom ; l'écran regroupe les deux premières sous de petits titres de rayon (enGroupesDeRayon, 2026-10-14) :
  * `pourCetteSemaine` (lignes des plats et articles ajoutés à la main, à acheter ; une ligne d'un habituel ou d'une
  * préparation qui sert aussi un plat de la semaine en fait partie), `commeChaqueSemaine` (T3d : lignes à acheter dont
  * toutes les sources sont des habituels ou des préparations de chaque semaine, `chaqueSemaine`), `panier` (cochés,
@@ -734,7 +738,7 @@ export function grouperParRayon(liste, { rayons = null } = {}) {
  */
 export function grouperDrive(liste, { rayons = null } = {}) {
   const rang = rangeurDeRayons(rayons);
-  const ordre = (a, b) => rang(a.rayon) - rang(b.rayon) || parNomDeLigne(a, b);
+  const ordre = (a, b) => rang(a.rayon) - rang(b.rayon) || parId(a.rayon ?? '', b.rayon ?? '') || parNomDeLigne(a, b);
   const elements = [...listeDe(liste?.lignes), ...listeDe(liste?.articles)];
   const panier = elements.filter((e) => e.cochee).sort(ordre);
   return {
@@ -746,6 +750,31 @@ export function grouperDrive(liste, { rayons = null } = {}) {
     pris: panier.length,
     vide: elements.length === 0,
   };
+}
+
+/**
+ * Mode Drive (2026-10-14) : les lignes d'une section, déjà rangées (grouperDrive), réunies sous de petits titres de
+ * rayon → [{ cle, rayon, libelle, picto, lignes }]. Seules les lignes consécutives d'un même rayon sont réunies, dans
+ * l'ordre reçu (rien n'est trié ici) ; `cle` : le rayon, suivi de `--2`, `--3`… si un rayon revenait plus loin (clés
+ * uniques pour l'écran). Rayon inconnu : libellé et pictogramme de « Divers ». Liste vide ou absente → [].
+ */
+export function enGroupesDeRayon(lignes) {
+  const groupes = [];
+  const vus = new Map();
+  for (const ligne of listeDe(lignes)) {
+    const rayon = ligne?.rayon ?? '';
+    const dernier = groupes[groupes.length - 1];
+    if (dernier && dernier.rayon === rayon) {
+      dernier.lignes.push(ligne);
+      continue;
+    }
+    const fois = (vus.get(rayon) ?? 0) + 1;
+    vus.set(rayon, fois);
+    groupes.push({
+      cle: fois === 1 ? rayon : `${rayon}--${fois}`, rayon, libelle: libelleRayon(rayon), picto: pictoRayon(rayon), lignes: [ligne],
+    });
+  }
+  return groupes;
 }
 
 /**

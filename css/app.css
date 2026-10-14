@@ -4046,6 +4046,40 @@ body:has(.bandeau-apercu:not([hidden])) .rayon-titre {
   top: calc(max(64px, calc(env(safe-area-inset-top) + 56px)) + 60px); /* sous le bandeau d'aperçu */
 }
 
+/* Pictogramme du rayon (2026-10-14), devant le libellé, caché aux lecteurs d'écran ; un peu plus grand que le texte. */
+.rayon-picto {
+  display: inline-block;
+  margin-inline-end: 0.4em;
+  font-family: var(--police-texte);
+  font-size: 1.25em;
+  line-height: 1;
+  vertical-align: -0.1em;
+}
+
+/* Mode Drive : dans chaque section, les lignes regroupées sous un petit titre de rayon (non collant). */
+.rayons-drive {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rayon-drive-titre {
+  margin: 0;
+  padding: 6px 12px;
+  border-left: 4px solid var(--olive);
+  border-radius: 10px;
+  background: var(--olive-doux);
+  color: var(--texte);
+  font-family: var(--police-texte);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.rayon-drive .lignes-courses { margin-top: 2px; }
+
 .lignes-courses {
   display: flex;
   flex-direction: column;
