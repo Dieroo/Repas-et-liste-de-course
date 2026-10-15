@@ -24,8 +24,10 @@
 // - `equivalences` (T3a, omis sinon) : `{ <unité>: { qte, unite: 'g' | 'ml' } }`, propres au produit (une gousse d'ail
 //   pèse 5 g) ; elles ne servent qu'à comparer au seuil du placard (jamais sur un produit sans seuil).
 // - `recette: false` (T3d, omis sinon) : produit hors cuisine (hygiène, entretien, divers : piles, lessive, éponge),
-//   pour la liste de courses seulement : reconnu par l'identifiant d'une ligne (produits.js › idProduit) et proposé par
-//   « Ajouter à la liste », jamais par « Modifier la recette » (ni reconnu, ni suggéré) ; ni repère, ni placard.
+//   ou (2026-10-16) produit des courses du quotidien qui ne sert jamais dans une recette (lait infantile, petit
+//   pot, gourde de compote), dans son rayon ; pour la liste de courses seulement : reconnu par l'identifiant d'une
+//   ligne (produits.js › idProduit) et proposé par « Ajouter à la liste », jamais par « Modifier la recette » (ni
+//   reconnu, ni suggéré) ; ni repère, ni placard.
 // Sens prudent : un nom ambigu reste hors du dictionnaire (« pâte », « pâté », « crème », « fromage », « bouillon »,
 // « steak », « saucisse », « farce » seuls) ; la question « C'est… ? » reste alors posée. Hors du dictionnaire aussi :
 // un nom qui, accents ôtés, désigne un autre produit que la saisie ne distingue pas (clé hors de HOMOGRAPHES) :
@@ -333,7 +335,7 @@ export const DICTIONNAIRE = Object.freeze([
   { id: 'beurre-demi-sel', nom: 'beurre demi-sel', rayon: 'cremerie', unite: 'g', marqueurs: ['laitier'] },
   { id: 'beurre-sale', nom: 'beurre salé', rayon: 'cremerie', unite: 'g', marqueurs: ['laitier'] },
   { id: 'beurre-clarifie', nom: 'beurre clarifié', rayon: 'cremerie', unite: 'g', marqueurs: ['laitier'], alias: ['ghee'] },
-  { id: 'lait', nom: 'lait', rayon: 'cremerie', unite: 'cl', marqueurs: ['laitier'], alias: ['lait froid', 'lait tiède', 'lait chaud', 'lait de vache'], placard: { seuil: 10, unite: 'cl' } },
+  { id: 'lait', nom: 'lait', rayon: 'cremerie', unite: 'cl', marqueurs: ['laitier'], alias: ['lait froid', 'lait tiède', 'lait chaud', 'lait de vache', 'pack de lait', 'brique de lait', 'bouteille de lait'], placard: { seuil: 10, unite: 'cl' } },
   { id: 'lait-entier', nom: 'lait entier', rayon: 'cremerie', unite: 'cl', marqueurs: ['laitier'], placard: { seuil: 10, unite: 'cl' } },
   { id: 'lait-demi-ecreme', nom: 'lait demi-écrémé', rayon: 'cremerie', unite: 'cl', marqueurs: ['laitier'], placard: { seuil: 10, unite: 'cl' } },
   { id: 'lait-ecreme', nom: 'lait écrémé', rayon: 'cremerie', unite: 'cl', marqueurs: ['laitier'], placard: { seuil: 10, unite: 'cl' } },
@@ -750,6 +752,37 @@ export const DICTIONNAIRE = Object.freeze([
   { id: 'eau-gazeuse', nom: 'eau gazeuse', rayon: 'boissons', unite: 'cl', alias: ['eau pétillante'] },
   { id: 'cola', nom: 'cola', rayon: 'boissons', unite: 'cl', marqueurs: ['cafeine'] },
 
+  // ——— Courses du quotidien (2026-10-16) : petit-déjeuner, goûters, boissons, desserts ———
+  { id: 'cereale', nom: 'céréales', rayon: 'epicerie_sucree', unite: 'g', alias: ['céréales du petit-déjeuner'] },
+  { id: 'biscuit', nom: 'biscuit', rayon: 'epicerie_sucree', unite: 'g', alias: ['biscuit sec', 'gâteau sec'] },
+  { id: 'madeleine', nom: 'madeleine', rayon: 'epicerie_sucree', unite: 'pc', marqueurs: ['feculent', 'oeuf', 'laitier'] },
+  { id: 'pain-au-lait', nom: 'pain au lait', rayon: 'boulangerie', unite: 'pc', marqueurs: ['feculent', 'oeuf', 'laitier'] },
+  { id: 'chocolat', nom: 'chocolat', rayon: 'epicerie_sucree', unite: 'g', alias: ['tablette de chocolat'] },
+  { id: 'compote', nom: 'compote', rayon: 'epicerie_sucree', unite: 'g', alias: ['compote de fruits'] },
+  { id: 'bonbon', nom: 'bonbon', rayon: 'epicerie_sucree', unite: 'g' },
+  { id: 'yaourt-au-fruit', nom: 'yaourt aux fruits', rayon: 'cremerie', unite: 'pc', marqueurs: ['laitier'] },
+  { id: 'creme-dessert', nom: 'crème dessert', rayon: 'cremerie', unite: 'pc', marqueurs: ['laitier'] },
+  { id: 'fromage-en-portion', nom: 'fromage en portion', rayon: 'fromages', unite: 'pc', marqueurs: ['laitier'], alias: ['portion de fromage'] },
+  { id: 'eau-minerale', nom: 'eau minérale', rayon: 'boissons', unite: 'l', alias: ['eau plate', 'eau de source', "pack d'eau", "bouteille d'eau"] },
+  { id: 'ju-de-fruit', nom: 'jus de fruits', rayon: 'boissons', unite: 'cl', alias: ['jus multifruit'] },
+  { id: 'sirop', nom: 'sirop', rayon: 'boissons', unite: 'cl', alias: ['sirop à diluer'] },
+  { id: 'soda', nom: 'soda', rayon: 'boissons', unite: 'cl', alias: ['boisson gazeuse'] },
+  { id: 'vin', nom: 'vin', rayon: 'boissons', unite: 'cl' },
+  { id: 'glace', nom: 'glace', rayon: 'surgeles', unite: 'pc', alias: ['crème glacée'] },
+  { id: 'capsule-de-cafe', nom: 'capsule de café', rayon: 'epicerie_sucree', unite: 'pc', marqueurs: ['cafe'], alias: ['dosette de café'] },
+
+  // ——— Courses du quotidien (2026-10-16, `recette: false` : pour la liste seulement) : capsules, goûters, bébé ———
+  { id: 'barre-de-cereale', nom: 'barre de céréales', rayon: 'epicerie_sucree', unite: 'pc', recette: false },
+  { id: 'gourde-de-compote', nom: 'gourde de compote', rayon: 'epicerie_sucree', unite: 'pc', recette: false, alias: ['compote à boire'] },
+  { id: 'yaourt-a-boire', nom: 'yaourt à boire', rayon: 'cremerie', unite: 'pc', recette: false },
+  { id: 'pizza-surgelee', nom: 'pizza surgelée', rayon: 'surgeles', unite: 'pc', recette: false },
+  { id: 'lait-infantile', nom: 'lait infantile', rayon: 'epicerie_sucree', unite: 'pc', recette: false, alias: ['lait bébé', 'lait 1er âge', 'lait premier âge'] },
+  { id: 'lait-2e-age', nom: 'lait 2e âge', rayon: 'epicerie_sucree', unite: 'pc', recette: false, alias: ['lait deuxième âge', 'lait de suite'] },
+  { id: 'lait-de-croissance', nom: 'lait de croissance', rayon: 'epicerie_sucree', unite: 'pc', recette: false },
+  { id: 'petit-pot', nom: 'petit pot', rayon: 'epicerie_sucree', unite: 'pc', recette: false, alias: ['petit pot bébé'] },
+  { id: 'cereale-bebe', nom: 'céréales bébé', rayon: 'epicerie_sucree', unite: 'pc', recette: false, alias: ['céréales infantiles'] },
+  { id: 'biscuit-bebe', nom: 'biscuit bébé', rayon: 'epicerie_sucree', unite: 'pc', recette: false },
+
   // ——— Hors cuisine (T3d, `recette: false`) : hygiène ———
   { id: 'papier-toilette', nom: 'papier toilette', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['papier hygiénique'] },
   { id: 'mouchoir', nom: 'mouchoir', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['mouchoir en papier'] },
@@ -811,4 +844,39 @@ export const DICTIONNAIRE = Object.freeze([
   { id: 'cure-dent', nom: 'cure-dent', rayon: 'divers', unite: 'pc', recette: false },
   { id: 'pique-a-brochette', nom: 'pique à brochette', rayon: 'divers', unite: 'pc', recette: false },
   { id: 'ficelle-de-cuisine', nom: 'ficelle de cuisine', rayon: 'divers', unite: 'pc', recette: false },
+
+  // ——— Courses du quotidien (2026-10-16, `recette: false`) : soins de l'enfant et de la famille ———
+  { id: 'couche-culotte', nom: 'couche-culotte', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'liniment', nom: 'liniment', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['liniment oléo-calcaire'] },
+  { id: 'creme-pour-le-change', nom: 'crème pour le change', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['crème de change'] },
+  { id: 'serum-physiologique', nom: 'sérum physiologique', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['dosette de sérum physiologique'] },
+  { id: 'gel-lavant-bebe', nom: 'gel lavant bébé', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'shampooing-enfant', nom: 'shampooing enfant', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['shampooing bébé', 'shampoing enfant', 'shampoing bébé'] },
+  { id: 'dentifrice-enfant', nom: 'dentifrice enfant', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'brosse-a-dent-enfant', nom: 'brosse à dents enfant', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'creme-solaire', nom: 'crème solaire', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['protection solaire', 'écran solaire'] },
+  { id: 'creme-solaire-enfant', nom: 'crème solaire enfant', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'apre-soleil', nom: 'après-soleil', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'creme-hydratante', nom: 'crème hydratante', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'creme-pour-le-main', nom: 'crème pour les mains', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'baume-a-levre', nom: 'baume à lèvres', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['stick à lèvres'] },
+  { id: 'demaquillant', nom: 'démaquillant', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'bain-moussant', nom: 'bain moussant', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'gel-hydroalcoolique', nom: 'gel hydroalcoolique', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'demelant', nom: 'démêlant', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['spray démêlant'] },
+  { id: 'shampooing-anti-pou', nom: 'shampooing anti-poux', rayon: 'hygiene', unite: 'pc', recette: false, alias: ['shampoing anti-poux'] },
+  { id: 'lotion-anti-pou', nom: 'lotion anti-poux', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'peigne-anti-pou', nom: 'peigne anti-poux', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'elastique-a-cheveu', nom: 'élastique à cheveux', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'tetine', nom: 'tétine', rayon: 'hygiene', unite: 'pc', recette: false },
+  { id: 'biberon', nom: 'biberon', rayon: 'hygiene', unite: 'pc', recette: false },
+
+  // ——— Courses du quotidien (2026-10-16, `recette: false`) : école ———
+  { id: 'cahier', nom: 'cahier', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'stylo', nom: 'stylo', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'crayon-a-papier', nom: 'crayon à papier', rayon: 'divers', unite: 'pc', recette: false, alias: ['crayon de papier'] },
+  { id: 'crayon-de-couleur', nom: 'crayon de couleur', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'feutre', nom: 'feutre', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'gomme', nom: 'gomme', rayon: 'divers', unite: 'pc', recette: false },
+  { id: 'colle', nom: 'colle', rayon: 'divers', unite: 'pc', recette: false, alias: ['bâton de colle', 'tube de colle'] },
 ].map(Object.freeze));

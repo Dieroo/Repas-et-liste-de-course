@@ -340,4 +340,17 @@ export const AJOUTEES_AVANT = new Map([
   ['vinaigre de framboise', 'vinaigre-de-framboise'], ['vinaigre de jerez', 'vinaigre-de-jerez'],
   ['vinaigre de modène', 'vinaigre-de-modene'], ['vinaigre de vin de xérès', 'vinaigre-de-vin-de-xere'],
   ['worcestershire', 'worcestershire'],
+  // 2026-10-16 : courses du quotidien (chaque écriture était inconnue : sa propre clé).
+  ['pack de lait', 'pack-de-lait'], ['brique de lait', 'brique-de-lait'], ['bouteille de lait', 'bouteille-de-lait'],
+  ['céréales', 'cereale'], ['céréales du petit-déjeuner', 'cereale-du-petit-dejeuner'], ['biscuit', 'biscuit'],
+  ['biscuit sec', 'biscuit-sec'], ['gâteau sec', 'gateau-sec'], ['madeleine', 'madeleine'],
+  ['pain au lait', 'pain-au-lait'], ['chocolat', 'chocolat'], ['tablette de chocolat', 'tablette-de-chocolat'],
+  ['compote', 'compote'], ['compote de fruits', 'compote-de-fruit'], ['bonbon', 'bonbon'],
+  ['yaourt aux fruits', 'yaourt-au-fruit'], ['crème dessert', 'creme-dessert'],
+  ['fromage en portion', 'fromage-en-portion'], ['portion de fromage', 'portion-de-fromage'],
+  ['eau minérale', 'eau-minerale'], ['eau plate', 'eau-plate'], ['eau de source', 'eau-de-source'],
+  ["pack d'eau", 'pack-d-eau'], ["bouteille d'eau", 'bouteille-d-eau'], ['jus de fruits', 'ju-de-fruit'],
+  ['jus multifruit', 'ju-multifruit'], ['sirop', 'sirop'], ['sirop à diluer', 'sirop-a-diluer'], ['soda', 'soda'],
+  ['boisson gazeuse', 'boisson-gazeuse'], ['vin', 'vin'], ['glace', 'glace'], ['crème glacée', 'creme-glacee'],
+  ['capsule de café', 'capsule-de-cafe'], ['dosette de café', 'dosette-de-cafe'],
 ]);

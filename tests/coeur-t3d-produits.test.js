@@ -18,6 +18,9 @@ import { catalogueAvecDictionnaire, ingredientSaisi, suggestions } from '../js/c
 import { IDS_DICTIONNAIRE } from './donnees/ids-dictionnaire.js';
 
 const HORS_CUISINE = DICTIONNAIRE.filter((e) => e.recette === false);
+/** Produits alimentaires pour la liste seulement (2026-10-16) : jamais dans une recette, rangés dans leur rayon. */
+const LISTE_SEULEMENT_ALIMENTAIRE = new Set(['barre-de-cereale', 'gourde-de-compote', 'yaourt-a-boire', 'pizza-surgelee',
+  'lait-infantile', 'lait-2e-age', 'lait-de-croissance', 'petit-pot', 'cereale-bebe', 'biscuit-bebe']);
 const formes = (entree) => [entree.nom, ...(entree.alias ?? [])];
 
 /**
@@ -49,15 +52,43 @@ const AVANT_T3D = new Map([
   ['sac de congélation', 'sac-de-congelation'], ['piles', 'pile'], ['ampoule', 'ampoule'], ['allumette', 'allumette'],
   ['bougie', 'bougie'], ['briquet', 'briquet'], ['ruban adhésif', 'ruban-adhesif'], ['litière', 'litiere'],
   ['gobelet', 'gobelet'], ['assiette en carton', 'assiette-en-carton'], ['serviette en papier', 'serviette-en-papier'],
-  ['cure-dent', 'cure-dent'], ['pique à brochette', 'pique-a-brochette'], ['ficelle de cuisine', 'ficelle-de-cuisine'],
+  ['cure-dent', 'cure-dent'], ['pique à brochette', 'pique-a-brochette'], ['ficelle de cuisine', 'ficelle-de-cuisine'],  // 2026-10-16 : courses du quotidien pour la liste seulement (chaque écriture était inconnue : sa propre clé).
+  ['barre de céréales', 'barre-de-cereale'], ['gourde de compote', 'gourde-de-compote'],
+  ['compote à boire', 'compote-a-boire'], ['yaourt à boire', 'yaourt-a-boire'], ['pizza surgelée', 'pizza-surgelee'],
+  ['lait infantile', 'lait-infantile'], ['lait bébé', 'lait-bebe'], ['lait 1er âge', 'lait-1er-age'],
+  ['lait premier âge', 'lait-premier-age'], ['lait 2e âge', 'lait-2e-age'],
+  ['lait deuxième âge', 'lait-deuxieme-age'], ['lait de suite', 'lait-de-suite'],
+  ['lait de croissance', 'lait-de-croissance'], ['petit pot', 'petit-pot'], ['petit pot bébé', 'petit-pot-bebe'],
+  ['céréales bébé', 'cereale-bebe'], ['céréales infantiles', 'cereale-infantile'], ['biscuit bébé', 'biscuit-bebe'],
+  ['couche-culotte', 'couche-culotte'], ['liniment', 'liniment'],
+  ['liniment oléo-calcaire', 'liniment-oleo-calcaire'], ['crème pour le change', 'creme-pour-le-change'],
+  ['crème de change', 'creme-de-change'], ['sérum physiologique', 'serum-physiologique'],
+  ['dosette de sérum physiologique', 'dosette-de-serum-physiologique'], ['gel lavant bébé', 'gel-lavant-bebe'],
+  ['shampooing enfant', 'shampooing-enfant'], ['shampooing bébé', 'shampooing-bebe'],
+  ['shampoing enfant', 'shampoing-enfant'], ['shampoing bébé', 'shampoing-bebe'],
+  ['dentifrice enfant', 'dentifrice-enfant'], ['brosse à dents enfant', 'brosse-a-dent-enfant'],
+  ['crème solaire', 'creme-solaire'], ['protection solaire', 'protection-solaire'],
+  ['écran solaire', 'ecran-solaire'], ['crème solaire enfant', 'creme-solaire-enfant'],
+  ['après-soleil', 'apre-soleil'], ['crème hydratante', 'creme-hydratante'],
+  ['crème pour les mains', 'creme-pour-le-main'],
+  ['baume à lèvres', 'baume-a-levre'], ['stick à lèvres', 'stick-a-levre'], ['démaquillant', 'demaquillant'],
+  ['bain moussant', 'bain-moussant'],
+  ['gel hydroalcoolique', 'gel-hydroalcoolique'], ['démêlant', 'demelant'], ['spray démêlant', 'spray-demelant'],
+  ['shampooing anti-poux', 'shampooing-anti-pou'], ['shampoing anti-poux', 'shampoing-anti-pou'],
+  ['lotion anti-poux', 'lotion-anti-pou'], ['peigne anti-poux', 'peigne-anti-pou'],
+  ['élastique à cheveux', 'elastique-a-cheveu'], ['tétine', 'tetine'], ['biberon', 'biberon'], ['cahier', 'cahier'],
+  ['stylo', 'stylo'], ['crayon à papier', 'crayon-a-papier'], ['crayon de papier', 'crayon-de-papier'],
+  ['crayon de couleur', 'crayon-de-couleur'], ['feutre', 'feutre'], ['gomme', 'gomme'], ['colle', 'colle'],
+  ['bâton de colle', 'baton-de-colle'], ['tube de colle', 'tube-de-colle'],
 ]);
 
 // ——— Dictionnaire : produits hors cuisine ———
 
-test('hors cuisine : une cinquantaine de produits en hygiène, entretien et divers ; `recette: false`, ni repère ni placard', () => {
-  assert.ok(HORS_CUISINE.length >= 45 && HORS_CUISINE.length <= 60, `${HORS_CUISINE.length} produits hors cuisine`);
+test('hors cuisine : une centaine de produits pour la liste seulement, hygiène, entretien et divers surtout ; `recette: false`, ni repère ni placard', () => {
+  assert.ok(HORS_CUISINE.length >= 90 && HORS_CUISINE.length <= 110, `${HORS_CUISINE.length} produits hors cuisine`);
   for (const entree of HORS_CUISINE) {
-    assert.ok(['hygiene', 'entretien', 'divers'].includes(entree.rayon), `${entree.id} : rayon`);
+    // 2026-10-16 : quelques produits alimentaires pour la liste seulement (lait infantile, petit pot), dans leur rayon.
+    assert.ok(['hygiene', 'entretien', 'divers'].includes(entree.rayon) || LISTE_SEULEMENT_ALIMENTAIRE.has(entree.id), `${entree.id} : rayon`);
     assert.equal(entree.unite, 'pc', entree.id);
     for (const champ of ['marqueurs', 'forme', 'role', 'placard', 'equivalences']) assert.equal(champ in entree, false, `${entree.id} : ${champ}`);
     assert.ok(estHorsCuisine(entree), entree.id);
@@ -117,7 +148,7 @@ test('hors cuisine : proposés par « Ajouter à la liste » (catalogue avec `ho
   const courses = catalogueAvecDictionnaire([], { horsCuisine: true });
   assert.deepEqual(suggestions(courses, 'pil').map((e) => e.produit), ['piles', 'pilon de poulet']);
   assert.deepEqual(suggestions(courses, 'papier h').map((e) => e.produit), ['papier toilette']);
-  assert.deepEqual(suggestions(courses, 'eau', { max: 3 }).map((e) => e.produit), ['eau', 'eau gazeuse', 'eau de javel']);
+  assert.deepEqual(suggestions(courses, 'eau', { max: 4 }).map((e) => e.produit), ['eau', 'eau gazeuse', 'eau minérale', 'eau de javel']);
   const piles = suggestions(courses, 'piles')[0];
   assert.equal(piles.horsCuisine, true);
   assert.equal(piles.rayon, 'divers');
