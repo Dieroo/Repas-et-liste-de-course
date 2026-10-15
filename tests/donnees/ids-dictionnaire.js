@@ -98,5 +98,14 @@ export const IDS_DICTIONNAIRE = Object.freeze([
   'mousse-a-raser', 'nettoyant-multi-usage', 'nettoyant-vitre', 'nettoyant-wc', 'pansement', 'papier-aluminium',
   'papier-cuisson', 'papier-toilette', 'pastille-lave-vaisselle', 'pile', 'pique-a-brochette', 'protege-slip', 'rasoir',
   'ruban-adhesif', 'sac-congelation', 'sac-poubelle', 'savon', 'sel-regenerant', 'serpilliere', 'serviette-en-papier',
-  'serviette-hygienique', 'shampooing', 'tampon-hygienique', 'vinaigre-menager',
+  'serviette-hygienique', 'shampooing', 'tampon-hygienique', 'vinaigre-menager',  // 2026-10-16 : courses du quotidien et de l'enfant, triés à part.
+  'apre-soleil', 'bain-moussant', 'barre-de-cereale', 'baume-a-levre', 'biberon', 'biscuit', 'biscuit-bebe',
+  'bonbon', 'brosse-a-dent-enfant', 'cahier', 'capsule-de-cafe', 'cereale', 'cereale-bebe', 'chocolat', 'colle',
+  'compote', 'couche-culotte', 'crayon-a-papier', 'crayon-de-couleur', 'creme-dessert', 'creme-hydratante',
+  'creme-pour-le-change', 'creme-pour-le-main', 'creme-solaire', 'creme-solaire-enfant', 'demaquillant', 'demelant',
+  'dentifrice-enfant', 'eau-minerale', 'elastique-a-cheveu', 'feutre', 'fromage-en-portion', 'gel-hydroalcoolique',
+  'gel-lavant-bebe', 'glace', 'gomme', 'gourde-de-compote', 'ju-de-fruit', 'lait-2e-age', 'lait-de-croissance',
+  'lait-infantile', 'liniment', 'lotion-anti-pou', 'madeleine', 'pain-au-lait', 'peigne-anti-pou', 'petit-pot',
+  'pizza-surgelee', 'serum-physiologique', 'shampooing-anti-pou', 'shampooing-enfant', 'sirop', 'soda', 'stylo',
+  'tetine', 'vin', 'yaourt-a-boire', 'yaourt-au-fruit',
 ]);

@@ -29,7 +29,7 @@ const lire = (chemin) => readFileSync(fileURLToPath(new URL(`../${chemin}`, impo
  * Budget du fichier (octets UTF-8) : ~117 octets par entrée mesurés sur les 50 premières ; ~70 Ko pour ~580 entrées.
  * La marge sert aux champs de T3 (placard et équivalences en T3a, produits hors cuisine en T3d).
  */
-const BUDGET_OCTETS = 90_000;
+const BUDGET_OCTETS = 100_000;
 
 const CHAMPS = ['id', 'nom', 'rayon', 'unite', 'marqueurs', 'forme', 'role', 'alias', 'placard', 'equivalences', 'recette'];
 /** Charcuteries qui ne sont pas de porc (point 2) : bœuf séché, merguez (bœuf et mouton), volaille. */
@@ -835,16 +835,39 @@ const ECRITURES_AJOUTEES = [
   ['levure-chimique', ['levure chimique en poudre']],
   ['extrait-de-vanille', ['arôme vanille', 'arôme de vanille', 'vanille liquide', 'extrait de vanille liquide',
     'essence de vanille']],
-  ['miel', ['miel liquide', "miel d'acacia", 'miel de fleurs', 'miel crémeux']],
+  ['miel', ['miel liquide', "miel d'acacia", 'miel de fleurs', 'miel crémeux']],  // 2026-10-16 : courses du quotidien (pack de lait, eau minérale, céréales, goûters…).
+  ['lait', ['pack de lait', 'brique de lait', 'bouteille de lait']],
+  ['cereale', ['céréales', 'céréales du petit-déjeuner']],
+  ['biscuit', ['biscuit', 'biscuit sec', 'gâteau sec']],
+  ['madeleine', ['madeleine']],
+  ['pain-au-lait', ['pain au lait']],
+  ['chocolat', ['chocolat', 'tablette de chocolat']],
+  ['compote', ['compote', 'compote de fruits']],
+  ['bonbon', ['bonbon']],
+  ['yaourt-au-fruit', ['yaourt aux fruits']],
+  ['creme-dessert', ['crème dessert']],
+  ['fromage-en-portion', ['fromage en portion', 'portion de fromage']],
+  ['eau-minerale', ['eau minérale', 'eau plate', 'eau de source', "pack d'eau", "bouteille d'eau"]],
+  ['ju-de-fruit', ['jus de fruits', 'jus multifruit']],
+  ['sirop', ['sirop', 'sirop à diluer']],
+  ['soda', ['soda', 'boisson gazeuse']],
+  ['vin', ['vin']],
+  ['glace', ['glace', 'crème glacée']],
+  ['capsule-de-cafe', ['capsule de café', 'dosette de café']],
 ];
-/** Entrées neuves du 2026-10-11 (autre article acheté : autre pot, autre bouteille, herbe sèche dont le nom seul est frais). */
+/** Entrées neuves du 2026-10-11 et du 2026-10-16 (autre article acheté : autre pot, autre bouteille, herbe sèche dont le nom seul est frais). */
 const ENTREES_NEUVES = new Set(['poivre-blanc', 'paprika-fort', 'graine-de-cumin', 'baton-de-cannelle', 'piment-en-poudre',
   'graine-de-coriandre', 'graine-de-moutarde', 'ail-en-poudre', 'basilic-seche', 'persil-seche', 'romarin-seche',
   'menthe-sechee', 'huile-d-arachide', 'huile-de-pepin-de-raisin', 'huile-de-coco', 'vinaigre-balsamique-blanc', 'tamari',
   'sauce-d-huitre', 'moutarde-douce', 'estragon-seche', 'aneth-seche', 'ciboulette-sechee', 'sauge-sechee', 'sarriette',
   'marjolaine', 'baie-de-genievre', 'carvi', 'cinq-epice', 'poivre-de-sichuan', 'melange-cinq-baie', 'piment-seche',
   'flocon-de-piment', 'graine-de-fenouil', 'huile-de-noisette', 'vinaigre-de-framboise', 'mirin', 'sauce-piquante',
-  'sauce-hoisin']);
+  'sauce-hoisin',
+  // 2026-10-16 : courses du quotidien.
+  'cereale', 'biscuit', 'madeleine', 'pain-au-lait', 'chocolat', 'compote', 'bonbon', 'yaourt-au-fruit',
+  'creme-dessert', 'fromage-en-portion', 'eau-minerale', 'ju-de-fruit', 'sirop', 'soda', 'vin', 'glace',
+  'capsule-de-cafe',
+]);
 
 test('14. écritures d’avant : chaque forme du dictionnaire au 2026-10-10 garde son idProduit (table figée)', () => {
   assert.ok(FORMES_AVANT.size >= 700, `${FORMES_AVANT.size} formes`);
