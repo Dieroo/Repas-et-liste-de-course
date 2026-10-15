@@ -5045,6 +5045,37 @@ body:has(.vue.cuisiner) .bandeau-apercu-bouton { display: none; }
 
 .etape-rappel .case-cuisine { min-height: 48px; padding: 2px 10px; }
 
+/* Four et part à mettre de côté (2026-10-15) : bandeau terracotta plein, texte blanc en gras, dessin au trait de l'app
+   (four, assiette) dans sa colonne : on ne peut pas passer à côté, téléphone posé à un mètre. */
+.etape-rappel-four,
+.etape-rappel-part {
+  background: var(--accent);
+  color: var(--sur-accent);
+  box-shadow: 0 2px 10px rgb(180 73 47 / 30%);
+}
+
+.etape-rappel-four .etape-rappel-texte,
+.etape-rappel-part .etape-rappel-texte,
+.ligne-part-avant {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.picto.picto-rappel {
+  width: 1.7em;
+  height: 1.7em;
+  margin-top: -0.15em;
+}
+
+.etape-rappel-part .case-cuisine {
+  background: var(--surface);
+  color: var(--texte);
+  border-radius: 12px;
+}
+
+.ligne-part-avant .picto-rappel { color: var(--accent); width: 1.5em; height: 1.5em; margin-top: 0; }
+
 /* Ce que demande la part mise de côté, sous le texte de l'étape. */
 .etape-cuisine-parts {
   display: flex;
