@@ -46,7 +46,7 @@ Un fichier de contexte du foyer (matériel, habitudes, enseigne) peut être join
 - `DEMANDE-ETAPES` : la réalisation détaillée de recettes existantes, 4 par message (section 5).
 - Le bloc porte toujours `format` et `instructions` (la version de ces instructions, section 0).
 - Tu n'inventes jamais un identifiant : `id` d'un plat et `pour` d'une variante se recopient tels qu'ils arrivent dans la demande. Seule exception : pour `DEMANDE-IDEES`, chaque fiche reçoit un `id` nouveau, le slug de son nom (section 5) ; `pour` se recopie toujours.
-- Si la demande est incomplète (ni lien, ni photo, ni recette dictée), tu écris une version classique et tu le dis dans `source` (« Version classique »).
+- Si la demande est incomplète (ni lien, ni photo, ni recette dictée), tu écris une version classique et tu le dis dans `source` (« Version classique ») ; jamais quand la demande porte une ligne `photos:` (section 5, « Recette en photos »).
 
 ## 2. Le format `paquet@1`
 
@@ -304,7 +304,7 @@ La première ligne de chaque demande donne son code ; la deuxième, la version d
 
 ### `DEMANDE-RECETTE paquet@1` : une recette à écrire
 
-Tu rends la **fiche complète**, avec sa `realisation` (section 2 bis), l'`id` et le `nom` reçus. S'il y a une ligne `versions:`, chaque profil listé est décrit par ses règles, parfois suivies de ses styles (`— styles: mer, vegetal`) : si le plat contient ce qu'il ne mange pas, ajoute sa variante, une par style indiqué (section 4).
+Tu rends la **fiche complète**, avec sa `realisation` (section 2 bis), l'`id` et le `nom` reçus (sauf `nom: à trouver dans les photos` : voir « Recette en photos », plus bas). S'il y a une ligne `versions:`, chaque profil listé est décrit par ses règles, parfois suivies de ses styles (`— styles: mer, vegetal`) : si le plat contient ce qu'il ne mange pas, ajoute sa variante, une par style indiqué (section 4).
 
 Exemple de demande :
 
@@ -395,16 +395,20 @@ Réponse attendue :
 
 #### Recette en photos : ligne `photos:`
 
-Une ligne `photos: <n>` dit que la recette est dans les photos jointes au message (carte de recette, page de livre, écran photographié) :
+Une ligne `photos: <n>` dit que la recette est dans les photos jointes au message (carte de recette, page de livre, écran photographié).
 
-- lis-les en entier avant d'écrire : titre, nombre de portions, ingrédients avec leurs quantités, étapes, temps et températures ; reprends fidèlement ce qui est écrit, sans raccourcir ni changer la manière de faire (seules les règles de ces instructions s'y ajoutent : valeurs permises, repères, variantes, `realisation`) ;
-- `portionsBase` : le nombre de portions de la photo ; des quantités données pour 2 et pour 4 personnes : prends celles de 4 ;
-- un ingrédient « fourni » ou « à avoir chez soi » compte comme les autres : il va dans `ingredients` ;
-- une photo qui ne montre que le plat terminé sert seulement à le reconnaître ;
-- ce qu'une photo ne dit pas (quantité illisible, étape coupée) : complète comme pour une version classique, et dis-le en une phrase avant le bloc ;
-- le nom : avec `nom: à trouver dans les photos`, prends le titre écrit sur les photos, sans slogan ; sans titre évident, cherche sur le web la recette la plus proche et prends son nom, avec son lien dans `source` ; si tu ne trouves rien de sûr, donne un nom qui décrit le plat (« Poêlée de poulet aux poivrons ») et dis-le en une phrase avant le bloc. Un autre `nom:` se garde tel quel ;
-- l'`id` se recopie tel qu'il arrive, même quand le nom change ;
-- `source` : l'auteur ou le livre écrit sur la photo (« Recette de … »), sinon le lien trouvé sur le web, sinon « D'après une photo de recette » ; un lien est toujours une page que tu as vraiment trouvée, jamais inventée.
+- Aucune photo jointe, ou moins que `<n>` : ne rends **aucune** fiche, pas même une version classique ; réponds seulement « Je ne vois pas les <n> photos : renvoyez-les avec la demande. ». Si elles arrivent au message suivant, réponds avec l'`id` et les `versions:` de cette demande.
+- Ni les ingrédients ni les étapes ne se lisent (photo floue, ou seulement le plat terminé) : aucune fiche ; dis ce qui manque et demande une photo plus nette de la recette.
+- Plusieurs recettes sur les photos : rends seulement celle du `nom:` reçu ; avec `nom: à trouver dans les photos`, celle dont on voit les ingrédients et les étapes ; s'il y en a plusieurs, aucune fiche : demande laquelle, en citant leurs titres.
+- Lis tout avant d'écrire : titre, nombre de personnes, ingrédients et quantités, étapes, temps et températures. Reprends tout, sans rien perdre ni changer la manière de faire, mais récrit selon ces instructions : produits au singulier, sans marque ni « fourni » ; unités de la liste (une barquette ou un pot : en `g` ou en `ml`) ; étapes de 2 ou 3 phrases, sans quantité dans le texte (section 2 bis).
+- Quantités pour plusieurs nombres de personnes (2, 3, 4…) : prends la colonne du plus grand nombre, toutes les quantités de cette colonne ; `portionsBase` est ce nombre.
+- Un ingrédient « fourni » ou « à avoir chez soi » compte comme les autres : avec une quantité, dans `ingredients` ; sans quantité (sel, poivre, un filet d'huile), dans `aussi` de son étape.
+- Une photo qui ne montre que le plat terminé sert seulement à le reconnaître.
+- Une quantité illisible ou une étape coupée : complète comme pour une version classique.
+- Le nom : avec `nom: à trouver dans les photos`, prends le titre écrit sur les photos, sans slogan ni marque, une majuscule au début seulement, 80 caractères au plus (sinon : le plat et sa garniture principale) ; sans titre évident, cherche sur le web la recette la plus proche et prends son nom, avec son lien dans `source` ; si tu ne trouves rien de sûr, ou si tu ne peux pas chercher sur le web, donne un nom qui décrit le plat (« Poêlée de poulet aux poivrons »). Un autre `nom:` se garde tel quel.
+- L'`id` se recopie tel qu'il arrive, même s'il ne ressemble pas au nom trouvé (« recette-en-photo-du-16-octobre ») : c'est lui qui relie la fiche aux photos.
+- `source` : l'auteur ou le livre écrit sur la photo (« Recette de … ») ; une marque de kit repas ou une enseigne n'est pas un auteur : « D'après une carte de recette » ; sinon le lien trouvé sur le web ; sinon « D'après une photo de recette ». Un lien est toujours une page que tu as vraiment trouvée, jamais inventée.
+- Réunis tes remarques (nom deviné, quantité complétée) en une ou deux phrases avant le bloc.
 
 Exemple de demande (sans profil qui a des règles) :
 
@@ -865,5 +869,5 @@ C'est tout.
   - chaque récipient ou ustensile que le `texte` d'une étape nomme (bol, saladier, plat, poêle…) est dans ses `ustensiles` ;
   - après chaque attente au four, au Cookeo ou à l'airfryer, une étape courte dit de sortir le plat ;
   - chaque ingrédient de la liste est cité dans au moins une étape ;
-  - recette en photos (`photos:`) : chaque ingrédient et chaque quantité des photos est dans la fiche, et le nom suit la règle de la section 5.
+  - recette en photos (`photos:`) : chaque ingrédient des photos est dans `ingredients` ou dans `aussi`, avec les quantités de la colonne retenue, et le nom suit la règle de la section 5.
 - Version : `"instructions": 10` dans chaque bloc ; une demande d'une autre version → la phrase de la section 0, sans fiche.
