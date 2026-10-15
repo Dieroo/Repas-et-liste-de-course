@@ -92,20 +92,46 @@ export function partageDePhotosPossible() {
   }
 }
 
-/**
- * Partage des images seules (menu « Partager » d'Android, vers l'app Claude) : l'app Claude garde le texte d'un partage
- * qui porte texte et images, et laisse les images (essai du 2026-10-15) ; le texte part donc par le presse-papiers.
- * À appeler dans le toucher, sans attente préalable : les fichiers sont construits tout de suite.
- * → promesse de 'partage' | 'annule' | 'impossible'.
- */
-export async function partagerImages({ images }) {
-  const fichiers = images.map(({ nom, adresse }) => fichierDeLImage(adresse, nom)).filter(Boolean);
-  const contenu = { files: fichiers };
+/** Vrai si le téléphone sait partager, avec des photos, un fichier texte (la demande pour Claude). */
+export function partageDuTextePossible() {
   try {
-    if (!fichiers.length || typeof navigator.share !== 'function' || !navigator.canShare?.(contenu)) return 'impossible';
+    if (typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return false;
+    return navigator.canShare({ files: [
+      new File(['essai'], 'essai.txt', { type: 'text/plain' }),
+      new File([new Uint8Array(1)], 'essai.jpg', { type: 'image/jpeg' }),
+    ] });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Partage des images et, si le téléphone le permet, un texte en fichier joint (menu « Partager » d'Android, vers
+ * l'app Claude) : l'app Claude garde le texte d'un partage qui porte texte et images, et laisse les images (essai du
+ * 2026-10-15) ; un fichier texte part comme les images, en pièce jointe, devant elles. Sans partage de fichier texte,
+ * les images seules (le texte part alors par le presse-papiers).
+ * `texte` : { nom, contenu } ou null. À appeler dans le toucher, sans attente préalable : les fichiers sont construits
+ * tout de suite.
+ * → promesse de { issue: 'partage' | 'annule' | 'impossible', avecTexte }.
+ */
+export async function partagerImages({ images, texte = null }) {
+  const fichiers = images.map(({ nom, adresse }) => fichierDeLImage(adresse, nom)).filter(Boolean);
+  let contenu = { files: fichiers };
+  let avecTexte = false;
+  try {
+    if (!fichiers.length || typeof navigator.share !== 'function' || !navigator.canShare?.(contenu)) {
+      return { issue: 'impossible', avecTexte };
+    }
+    if (texte?.contenu && texte?.nom) {
+      const avec = { files: [new File([texte.contenu], texte.nom, { type: 'text/plain' }), ...fichiers] };
+      if (navigator.canShare(avec)) {
+        contenu = avec;
+        avecTexte = true;
+      }
+    }
     await navigator.share(contenu);
-    return 'partage';
+    return { issue: 'partage', avecTexte };
   } catch (erreur) {
-    return erreur?.name === 'AbortError' ? 'annule' : 'impossible';
+    return { issue: erreur?.name === 'AbortError' ? 'annule' : 'impossible', avecTexte };
   }
 }

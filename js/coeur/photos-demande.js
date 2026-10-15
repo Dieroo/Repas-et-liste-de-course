@@ -110,3 +110,8 @@ export function champsDemandePhotos({ photos = 0, nomATrouver = false } = {}) {
 export function nomFichierPhoto(platId, rang) {
   return `${slug(String(platId ?? '')) || 'recette'}-photo-${rang}.jpg`;
 }
+
+/** Nom du fichier texte de la demande, envoyé avec les photos : « <platId>-demande.txt ». */
+export function nomFichierDemande(platId) {
+  return `${slug(String(platId ?? '')) || 'recette'}-demande.txt`;
+}
