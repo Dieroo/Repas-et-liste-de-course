@@ -32,8 +32,8 @@ import { ouvrirEnSerieEtapes } from './import.js';
 import { boutonCuisiner, TEXTES_CUISINE } from '../coeur/cuisine.js';
 import { avecPictogramme } from './etape.js';
 import { creerPhotosDeLaDemande } from './photos-demande.js';
-import { partageDePhotosPossible, partagerImages, telechargerImages } from './fichier.js';
-import { demandeEnPhotos, nomFichierPhoto, nombrePhotos } from '../coeur/photos-demande.js';
+import { partageDePhotosPossible, partageDuTextePossible, partagerImages, telechargerImages } from './fichier.js';
+import { demandeEnPhotos, nomFichierDemande, nomFichierPhoto, nombrePhotos } from '../coeur/photos-demande.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -443,13 +443,19 @@ export function creer(ctx) {
   // Recette demandée en photos (2026-10-16) : « 📤 Envoyer à Claude » (menu « Partager » d'Android : la demande et
   // ses photos) et « 📥 Télécharger les photos » ; montrés seulement quand la demande ouverte en porte.
   const partagePossible = partageDePhotosPossible();
+  // La demande part aussi, en fichier texte joint, quand le téléphone sait le partager : un seul geste, rien à coller.
+  const texteJoint = partagePossible && partageDuTextePossible();
   const boutonEnvoyer = el('button', { class: 'bouton bouton-plein', type: 'button', hidden: true, onclick: envoyerAClaude },
     el('span', { 'aria-hidden': 'true' }, '📤\u00A0'), 'Envoyer à Claude');
   const boutonTelecharger = el('button', { class: 'bouton bouton-plein bouton-secondaire', type: 'button', hidden: true, onclick: telechargerPhotos },
     el('span', { 'aria-hidden': 'true' }, '📥\u00A0'), 'Télécharger les photos');
-  // Guidage lu avant le toucher : une fois dans le menu « Partager », il est trop tard pour le lire.
+  // Guidage lu avant le toucher : une fois dans le menu « Partager », il est trop tard pour le lire. Le menu propose une
+  // conversation de l'app Claude, jamais un projet : la conversation s'ouvre d'abord dans le projet.
   const aideEnvoi = el('p', { class: 'aide aide-envoi', hidden: true },
-    'La demande est copiée, les photos partent par le menu «\u00A0Partager\u00A0»\u00A0: choisissez Claude, puis une conversation de votre projet de recettes. Collez ensuite la demande dans le message, puis envoyez.');
+    'Dans l’app Claude, ouvrez d’abord une conversation dans votre projet de recettes\u00A0: le menu «\u00A0Partager\u00A0» ne propose pas le projet. ',
+    texteJoint
+      ? 'Touchez ensuite ce bouton, choisissez Claude, puis cette conversation\u00A0: la demande et les photos sont jointes au message. Envoyez.'
+      : 'La demande est copiée, les photos partent par le menu «\u00A0Partager\u00A0»\u00A0: choisissez Claude, puis cette conversation. Collez la demande dans le message, puis envoyez.');
   const photosDemande = creerPhotosDeLaDemande(ctx.actions.suivrePhotosDemande ?? (() => () => {}), () => majActionsRecette());
   const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, aideEnvoi, boutonEnvoyer, boutonDemander, boutonTelecharger, lienColler);
   // Vrai quand « Demander à Claude » est dans la section « Nouvelle version » (bas de fiche, geste rare) : il y est
@@ -613,8 +619,9 @@ export function creer(ctx) {
   }
 
   /**
-   * « 📤 Envoyer à Claude » : la demande et ses photos, par le menu « Partager » (vers une conversation du projet
-   * Claude). Le texte est aussi copié : si l'app Claude ne garde que les photos, il reste à coller.
+   * « 📤 Envoyer à Claude » : la demande (en fichier texte joint, si le téléphone sait le partager) et ses photos, par
+   * le menu « Partager » (vers une conversation du projet Claude). Le texte est aussi copié : si l'app Claude ne garde
+   * que les photos, il reste à coller.
    */
   async function envoyerAClaude() {
     const plat = platCourant();
@@ -625,12 +632,18 @@ export function creer(ctx) {
       majActionsRecette();
       return;
     }
-    // Texte copié d'abord (la copie ne consomme pas l'activation du toucher, qui dure quelques secondes), puis les photos
-    // seules par le partage : l'app Claude ne garde pas les photos d'un partage qui porte aussi du texte.
+    // Texte copié d'abord (la copie ne consomme pas l'activation du toucher, qui dure quelques secondes), puis le
+    // partage : la demande en fichier texte et les photos, jamais en texte (l'app Claude ne garde pas les photos d'un
+    // partage qui porte aussi du texte).
     const texte = demandeDuPlat(plat);
     const copiee = await copier(texte);
-    const issue = await partagerImages({ images });
-    if (issue === 'partage') {
+    const { issue, avecTexte } = await partagerImages({ images, texte: { nom: nomFichierDemande(plat.id), contenu: texte } });
+    if (issue === 'partage' && avecTexte) {
+      demandeCopiee = true;
+      messageCopie.textContent = copiee
+        ? 'Demande et photos envoyées. Dans Claude, vérifiez qu’elles sont jointes au message, puis envoyez (si la demande manque, collez-la\u00A0: appui long, puis «\u00A0Coller\u00A0»). Revenez ensuite ici et touchez «\u00A0Coller la réponse\u00A0».'
+        : 'Demande et photos envoyées. Dans Claude, vérifiez qu’elles sont jointes au message, puis envoyez. Revenez ensuite ici et touchez «\u00A0Coller la réponse\u00A0».';
+    } else if (issue === 'partage') {
       demandeCopiee = true;
       messageCopie.textContent = copiee
         ? 'Photos envoyées. Dans Claude, collez la demande dans le message (appui long, puis «\u00A0Coller\u00A0»), puis envoyez. Revenez ensuite ici et touchez «\u00A0Coller la réponse\u00A0».'

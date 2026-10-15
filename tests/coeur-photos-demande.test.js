@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   PHOTOS_DEMANDE_MAX, nombrePhotos, idPhotoDemande, idsPhotosDeLaDemande, demandeEnPhotos, nomLibre, nomParDefaut,
-  champsDemandePhotos, nomFichierPhoto,
+  champsDemandePhotos, nomFichierPhoto, nomFichierDemande,
 } from '../js/coeur/photos-demande.js';
 import { NOM_MAX, demandeDeRecette } from '../js/coeur/plats.js';
 import { NOM_A_TROUVER, VERSION_INSTRUCTIONS, texteDemandeRecette } from '../js/coeur/claude.js';
@@ -73,6 +73,12 @@ test('champsDemandePhotos : photos et nomATrouver, rien sans photo', () => {
 test('nomFichierPhoto : <platId>-photo-<rang>.jpg', () => {
   assert.equal(nomFichierPhoto('gratin', 2), 'gratin-photo-2.jpg');
   assert.equal(nomFichierPhoto('', 1), 'recette-photo-1.jpg');
+});
+
+test('nomFichierDemande : <platId>-demande.txt', () => {
+  assert.equal(nomFichierDemande('gratin'), 'gratin-demande.txt');
+  assert.equal(nomFichierDemande(''), 'recette-demande.txt');
+  assert.equal(nomFichierDemande(null), 'recette-demande.txt');
 });
 
 // ——— Noms ———
