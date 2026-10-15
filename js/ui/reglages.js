@@ -263,7 +263,7 @@ function creerCarteProjetClaude(ctx) {
       if (reussi) courant.actions?.noterInstructionsCopiees?.();
       if (detruit) return;
       etat.textContent = reussi
-        ? 'Copié. Collez-le dans les instructions de votre projet Claude, à la place des anciennes.'
+        ? 'Copié. Collez-le, depuis l’ordinateur, dans les instructions de votre projet Claude, à la place des anciennes.'
         : 'La copie n’a pas marché. Réessayez.';
       etat.hidden = false;
     },
@@ -314,7 +314,7 @@ function creerCarteProjetClaude(ctx) {
       bouton,
       etat,
       reessayer,
-      el('p', { class: 'aide' }, 'Le plus simple\u00A0: faites-le depuis l’ordinateur, où vous modifiez votre projet Claude.'),
+      el('p', { class: 'aide' }, 'Collez-les depuis l’ordinateur\u00A0: sur le téléphone, l’app Claude coupe les instructions vers 20\u00A0000\u00A0caractères (elles en font davantage). Ensuite, ne les enregistrez plus depuis le téléphone.'),
       el('a', { class: 'lien-fiche', href: './docs/projet-claude.md', target: '_blank', rel: 'noopener' },
         'Ouvrir les instructions ›'),
     ),

@@ -93,12 +93,14 @@ export function partageDePhotosPossible() {
 }
 
 /**
- * Partage un texte et des images (menu « Partager » d'Android, vers l'app Claude). À appeler dans le toucher, sans
- * attente préalable : les fichiers sont construits tout de suite. → promesse de 'partage' | 'annule' | 'impossible'.
+ * Partage des images seules (menu « Partager » d'Android, vers l'app Claude) : l'app Claude garde le texte d'un partage
+ * qui porte texte et images, et laisse les images (essai du 2026-10-15) ; le texte part donc par le presse-papiers.
+ * À appeler dans le toucher, sans attente préalable : les fichiers sont construits tout de suite.
+ * → promesse de 'partage' | 'annule' | 'impossible'.
  */
-export async function partagerImages({ texte, images }) {
+export async function partagerImages({ images }) {
   const fichiers = images.map(({ nom, adresse }) => fichierDeLImage(adresse, nom)).filter(Boolean);
-  const contenu = { text: texte, files: fichiers };
+  const contenu = { files: fichiers };
   try {
     if (!fichiers.length || typeof navigator.share !== 'function' || !navigator.canShare?.(contenu)) return 'impossible';
     await navigator.share(contenu);
