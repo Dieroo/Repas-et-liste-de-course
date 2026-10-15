@@ -490,7 +490,8 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
       maxlength: NOM_MAX,
       autocomplete: 'off',
       enterkeyhint: 'done',
-      autofocus: true,
+      // Vue « Repas et courses » : pas de clavier d'office, il cacherait les photos (le nom y est facultatif).
+      autofocus: !choix,
       oninput: () => { erreur.hidden = true; },
     });
     return el('form', {
@@ -501,13 +502,16 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
         if (envoiEnCours) return;
         let photos = {};
         if (choix?.aDesPhotos()) {
-          // Les photos se préparent dès leur choix ; on attend la dernière avant d'envoyer.
+          // Les photos se préparent dès leur choix ; on attend la dernière avant d'envoyer, section inerte (un retrait
+          // ou un ajout pendant l'attente serait perdu) ; « Ajouter » garde le focus (aria-disabled, pas disabled).
           envoiEnCours = true;
-          boutonAjouter.disabled = true;
+          boutonAjouter.setAttribute('aria-disabled', 'true');
+          choix.bloquer(true);
           if (choix.enCours()) attente.textContent = 'Préparation des photos…';
           photos = await choix.valeurs();
           envoiEnCours = false;
-          boutonAjouter.disabled = false;
+          boutonAjouter.removeAttribute('aria-disabled');
+          choix.bloquer(false);
           attente.textContent = '';
           // Feuille fermée pendant la préparation : rien n'est ajouté.
           if (!entree.isConnected) return;
@@ -515,9 +519,11 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
         const resultat = ctx.actions.ajouterPlat(entree.value, photos);
         if (resultat.erreur) {
           erreur.replaceChildren(
-            el('span', {}, choix && !entree.value.trim()
-              ? 'Donnez un nom au plat, ou ajoutez une photo de la recette.'
-              : resultat.erreur),
+            el('span', {}, !choix || entree.value.trim()
+              ? resultat.erreur
+              : choix.aDesPhotos()
+                ? 'Les photos n’ont pas pu être préparées. Donnez un nom au plat, ou essayez d’autres photos.'
+                : 'Donnez un nom au plat, ou ajoutez une photo de la recette.'),
             ...(resultat.existant
               ? [el('a', {
                 class: 'bouton bouton-secondaire bouton-plein lien-erreur',

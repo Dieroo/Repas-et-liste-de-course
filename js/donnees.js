@@ -270,15 +270,26 @@ export function retirerPhoto(platId, auteur) {
  * peut pas recréer une demande disparue. Échec silencieux : la demande reste ouverte, elle sera close au prochain
  * ajout ou à la prochaine modification de la recette.
  */
+/**
+ * Recette de Claude enregistrée (2026-10-16) : les photos des demandes de recette closes ne servent plus. Effacées
+ * seulement après l'envoi de la recette (jamais si elle n'a pas pu être écrite), dans un lot à part ; échec silencieux
+ * (photos orphelines, sans effet). « Modifier » ne les efface pas : une recette écrite à la main peut être en cours.
+ */
+function effacerPhotosDemandes(demandesAClore, envoi) {
+  const ids = (demandesAClore ?? []).flatMap((id) => idsPhotosDeLaDemande(id));
+  if (!ids.length) return;
+  Promise.resolve(envoi).then(() => {
+    const lot = writeBatch(db);
+    for (const id of ids) lot.delete(doc(db, 'photosDemandes', id));
+    return lot.commit();
+  }).catch(() => {});
+}
+
 function cloreDemandes(demandesAClore) {
   if (!demandesAClore?.length) return;
   try {
     const lot = writeBatch(db);
-    for (const id of demandesAClore) {
-      lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
-      // Recette enregistrée : les photos de sa demande ne servent plus (2026-10-16).
-      for (const photo of idsPhotosDeLaDemande(id)) lot.delete(doc(db, 'photosDemandes', photo));
-    }
+    for (const id of demandesAClore) lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
     lot.commit().catch(() => {});
   } catch {
     // Échec silencieux, comme ci-dessus.
@@ -347,6 +358,7 @@ export function importer({ ecritures, demandesAClore }, auteur) {
     envoi = Promise.reject(erreur);
   }
   cloreDemandes((demandesAClore ?? []).filter((demande) => !deVersion(demande)));
+  effacerPhotosDemandes((demandesAClore ?? []).filter((demande) => !deVersion(demande)), envoi);
   const envoiVersions = (async () => {
     const manquants = [];
     for (const { id, variantes, attendus } of versions) {

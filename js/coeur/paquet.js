@@ -12,7 +12,7 @@ import { evaluer, marqueursEffectifs, styleDe } from './compatibilite.js';
 import { SOURCE_IDEE, VERSION_INSTRUCTIONS } from './claude.js';
 import { stylesAttendus } from './regles.js';
 import { estDansCorbeille } from './corbeille.js';
-import { demandeEnPhotos, nomLibre } from './photos-demande.js';
+import { demandeEnPhotos, estNomNumerote, nomLibre } from './photos-demande.js';
 import {
   empreinteEtapes, realisationAJour, titresDe, travailRecette, validerRealisation,
 } from './realisation.js';
@@ -1372,7 +1372,11 @@ export function preparerImport(valides, {
     if (viseCible) {
       // Recette demandée en photos (2026-10-16) : le nom de la fiche n'est souvent qu'un nom d'attente (« Recette en
       // photo du 16 octobre ») ; celui que Claude a lu, déjà porté par un autre plat, devient « <nom> (2) ».
-      if (memeNom && memeNom.id !== cible && demandeEnPhotos(cible, demandes)) {
+      if (memeNom && memeNom.id !== cible && donnees.id === cible && estNomNumerote(parId.get(cible).nom, donnees.nom)) {
+        // Recette en photos déjà enregistrée sous « <nom> (2) », recollée sur sa fiche : elle garde ce nom.
+        nomGarde = parId.get(cible).nom;
+      } else if (memeNom && memeNom.id !== cible && donnees.id === cible && demandeEnPhotos(cible, demandes)) {
+        // Seulement si Claude a recopié l'identifiant du plat : une autre réponse collée là par erreur reste une erreur.
         nomGarde = nomLibre(donnees.nom, plats.filter((plat) => plat?.id !== cible)) ?? parId.get(cible).nom;
         avertissementsPlat.push(`«\u00A0${memeNom.nom}\u00A0» existe déjà\u00A0: celle-ci s’appellera «\u00A0${nomGarde}\u00A0».`);
       } else if (memeNom && memeNom.id !== cible && estDansCorbeille(memeNom)) {
@@ -1390,6 +1394,8 @@ export function preparerImport(valides, {
       }
       vise = cible;
     } else if (memeId && (slug(memeId.nom) === slug(donnees.nom)
+      // Recette en photos enregistrée sous « <nom> (2) » (nomLibre), recollée : toujours le même plat.
+      || estNomNumerote(memeId.nom, donnees.nom)
       || statutDe(memeId) === 'attente'
       || ouvertes.has(`${memeId.id}__recette`)
       || (modifieeALaMain(memeId) && !(memeNom && memeNom.id !== memeId.id
@@ -1406,7 +1412,10 @@ export function preparerImport(valides, {
 
     // Recette en photos collée dans « Ajouter des recettes » (même identifiant que le plat ⏳) : même règle de nom libre
     // qu'avec « Coller la recette » de sa fiche.
-    if (!viseCible && memeNom && memeNom.id !== vise && demandeEnPhotos(vise, demandes)) {
+    // Déjà enregistrée sous « <nom> (2) » et recollée : elle garde ce nom (jamais deux plats du même nom).
+    if (!viseCible && memeNom && memeNom.id !== vise && estNomNumerote(parId.get(vise)?.nom, donnees.nom)) {
+      nomGarde = parId.get(vise).nom;
+    } else if (!viseCible && memeNom && memeNom.id !== vise && demandeEnPhotos(vise, demandes)) {
       nomGarde = nomLibre(donnees.nom, plats.filter((plat) => plat?.id !== vise)) ?? parId.get(vise)?.nom ?? null;
       if (nomGarde) avertissementsPlat.push(`«\u00A0${memeNom.nom}\u00A0» existe déjà\u00A0: celle-ci s’appellera «\u00A0${nomGarde}\u00A0».`);
     }

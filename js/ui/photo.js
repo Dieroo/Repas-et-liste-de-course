@@ -18,8 +18,8 @@ export function choisirImage({ appareil = false } = {}) {
 }
 
 /**
- * Plusieurs images de la galerie (ou une photo de l'appareil), `max` au plus. À appeler dans un toucher. → File[]
- * (vide si la personne renonce).
+ * Plusieurs images de la galerie (si `max` > 1), ou une photo de l'appareil. À appeler dans un toucher. → File[], toutes
+ * celles choisies (l'appelant garde les premières) ; vide si la personne renonce.
  */
 export function choisirImages({ appareil = false, max = 1 } = {}) {
   return new Promise((resoudre) => {
@@ -28,7 +28,7 @@ export function choisirImages({ appareil = false, max = 1 } = {}) {
     entree.accept = 'image/*';
     if (appareil) entree.setAttribute('capture', 'environment');
     else if (max > 1) entree.multiple = true;
-    entree.addEventListener('change', () => resoudre([...(entree.files ?? [])].slice(0, Math.max(1, max))), { once: true });
+    entree.addEventListener('change', () => resoudre([...(entree.files ?? [])]), { once: true });
     entree.addEventListener('cancel', () => resoudre([]), { once: true });
     entree.click();
   });
@@ -85,6 +85,9 @@ async function encoder(image, [sx, sy, sl, sh], largeur, hauteur, { octetsMax, q
     fichier = await new Promise((resoudre) => toile.toBlob(resoudre, 'image/jpeg', qualite));
     if (fichier && tailleStockee(fichier.size) <= octetsMax) break;
   }
+  // Mémoire de la toile rendue tout de suite (photos de 12 à 50 Mpx sur téléphone).
+  toile.width = 0;
+  toile.height = 0;
   if (!fichier || tailleStockee(fichier.size) > octetsMax) throw new Error('Image trop lourde après compression.');
   return new Promise((resoudre, rejeter) => {
     const lecteur = new FileReader();

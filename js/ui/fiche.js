@@ -447,8 +447,11 @@ export function creer(ctx) {
     el('span', { 'aria-hidden': 'true' }, '📤\u00A0'), 'Envoyer à Claude');
   const boutonTelecharger = el('button', { class: 'bouton bouton-plein bouton-secondaire', type: 'button', hidden: true, onclick: telechargerPhotos },
     el('span', { 'aria-hidden': 'true' }, '📥\u00A0'), 'Télécharger les photos');
+  // Guidage lu avant le toucher : une fois dans le menu « Partager », il est trop tard pour le lire.
+  const aideEnvoi = el('p', { class: 'aide aide-envoi', hidden: true },
+    'Dans le menu «\u00A0Partager\u00A0», choisissez Claude, puis une conversation de votre projet de recettes.');
   const photosDemande = creerPhotosDeLaDemande(ctx.actions.suivrePhotosDemande ?? (() => () => {}), () => majActionsRecette());
-  const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, boutonEnvoyer, boutonDemander, boutonTelecharger, lienColler);
+  const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, aideEnvoi, boutonEnvoyer, boutonDemander, boutonTelecharger, lienColler);
   // Vrai quand « Demander à Claude » est dans la section « Nouvelle version » (bas de fiche, geste rare) : il y est
   // secondaire, pour que « ＋ Ajouter à la semaine » reste le bouton principal de la fiche.
   let actionsEnBas = false;
@@ -622,11 +625,11 @@ export function creer(ctx) {
       majActionsRecette();
       return;
     }
-    // Texte et fichiers prêts dans le toucher, avant toute attente : le partage reste permis.
+    // Texte copié d'abord (la copie ne consomme pas l'activation du toucher, qui dure quelques secondes), puis partage :
+    // si l'app Claude ne garde que les photos, la demande reste à coller.
     const texte = demandeDuPlat(plat);
-    const copie = copier(texte);
+    const copiee = await copier(texte);
     const issue = await partagerImages({ texte, images });
-    const copiee = await copie;
     if (issue === 'partage') {
       demandeCopiee = true;
       messageCopie.textContent = copiee
@@ -650,8 +653,8 @@ export function creer(ctx) {
     } else {
       telechargerImages(images);
       messageCopie.textContent = images.length === 1
-        ? 'Photo téléchargée. Joignez-la à la demande dans Claude.'
-        : `${images.length}\u00A0photos téléchargées. Joignez-les à la demande dans Claude.`;
+        ? 'Téléchargement lancé. Joignez la photo à la demande dans Claude.'
+        : `Téléchargement lancé (${images.length}\u00A0photos). Joignez-les à la demande dans Claude.`;
     }
     majActionsRecette();
   }
@@ -692,7 +695,13 @@ export function creer(ctx) {
     const enPhotos = Boolean(plat && courant.role === 'gestionnaire' && statutDe(plat) === 'attente'
       && demandeEnPhotos(plat.id, courant.demandes ?? []));
     boutonEnvoyer.hidden = !(enPhotos && partagePossible);
+    aideEnvoi.hidden = boutonEnvoyer.hidden;
     boutonTelecharger.hidden = !enPhotos;
+    // Photos pas encore toutes lues (réseau lent, hors ligne) : boutons inactifs mais focalisables.
+    for (const bouton of [boutonEnvoyer, boutonTelecharger]) {
+      if (enPhotos && !photosDemande.complet()) bouton.setAttribute('aria-disabled', 'true');
+      else bouton.removeAttribute('aria-disabled');
+    }
     const envoi = enPhotos && partagePossible ? boutonEnvoyer : boutonDemander;
     const principal = demandeCopiee ? lienColler : actionsEnBas ? null : envoi;
     boutonEnvoyer.className = `bouton bouton-plein ${principal === boutonEnvoyer ? 'bouton-principal' : 'bouton-secondaire'}`;

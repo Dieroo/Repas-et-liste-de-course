@@ -7,11 +7,12 @@ import { PHOTOS_DEMANDE_MAX } from '../coeur/photos-demande.js';
 
 export const TEXTES_PHOTOS = {
   legende: 'Photos de la recette (facultatif)',
-  aide: 'Le titre, les ingrédients, les étapes\u00A0: jusqu’à 3\u00A0photos. Avec des photos, le nom peut attendre\u00A0: Claude le lira.',
-  prendre: 'Prendre une photo',
-  galerie: 'Depuis la galerie',
+  aide: 'Le titre, les ingrédients, les étapes\u00A0: jusqu’à 3\u00A0photos. Avec des photos, le nom peut attendre\u00A0: il sera lu sur la recette.',
+  prendre: '📷\u00A0Prendre une photo',
+  galerie: '🖼️\u00A0Depuis la galerie',
   duPlat: 'C’est la photo du plat',
-  duPlatChoisie: 'Photo du plat',
+  duPlatChoisie: '✓ Photo du plat',
+  nomDuPlat: (rang) => `Photo ${rang}\u00A0: c’est la photo du plat`,
   aideDuPlat: 'Une photo du plat terminé\u00A0? Touchez «\u00A0⭐ C’est la photo du plat\u00A0»\u00A0: elle ira sur sa fiche.',
   preparation: 'Préparation de la photo…',
   echec: 'Cette photo n’a pas pu être préparée. Essayez-en une autre.',
@@ -19,24 +20,33 @@ export const TEXTES_PHOTOS = {
   maximum: '3\u00A0photos\u00A0: c’est le maximum.',
   compte: (n) => `${n}\u00A0photo${n > 1 ? 's' : ''} sur 3.`,
   retiree: 'Photo retirée.',
+  premieres: (n) => `Seules les ${n === 1 ? 'première est gardée' : `${n}\u00A0premières sont gardées`}\u00A0: 3\u00A0photos au plus.`,
 };
 
 /**
- * Choix des photos d'une demande de recette, dans la feuille « Nouveau plat ». Chaque photo est préparée dès son choix
- * (preparerPhotoRecette) ; celle du plat aussi en photo de fiche et en vignette (preparerPhoto).
- * → { noeud, aDesPhotos(), enCours(), valeurs() } ; valeurs() attend les préparations : { photos: [{ image }],
- *   photoDuPlat: { image, vignette } | null } (les photos qui n'ont pas pu être préparées sont omises).
+ * Choix des photos d'une demande de recette, dans la feuille « Nouveau plat ». Les photos se préparent une à la fois,
+ * dans l'ordre (preparerPhotoRecette : une photo de 50 Mpx décodée en entier pèse 200 Mo) ; celle du plat aussi en
+ * photo de fiche et en vignette (preparerPhoto), après la sienne.
+ * → { noeud, aDesPhotos(), enCours(), valeurs(), bloquer(oui) } ; valeurs() attend les préparations : { photos:
+ *   [{ image }], photoDuPlat: { image, vignette } | null } (les photos qui n'ont pas pu être préparées sont omises) ;
+ *   bloquer(true) rend la section inerte pendant l'envoi.
  */
 export function creerChoixPhotos() {
   const photos = []; // { cle, fichier, image: Promise, lue, echec, li, duPlat: Promise | null }
   let compteur = 0;
+  // File des préparations : une seule image décodée à la fois.
+  let file = Promise.resolve();
+  const enFile = (travail) => {
+    const resultat = file.then(travail);
+    file = resultat.catch(() => {});
+    return resultat;
+  };
   const liste = el('ul', { class: 'photos-choisies' });
   const statut = el('p', { class: 'aide', role: 'status' });
   const aideDuPlat = el('p', { class: 'aide', hidden: true }, TEXTES_PHOTOS.aideDuPlat);
-  const boutonAppareil = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => ajouter(true) },
-    el('span', { 'aria-hidden': 'true' }, '📷\u00A0'), TEXTES_PHOTOS.prendre);
-  const boutonGalerie = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => ajouter(false) },
-    el('span', { 'aria-hidden': 'true' }, '🖼️\u00A0'), TEXTES_PHOTOS.galerie);
+  // Emoji et texte dans un seul nœud, comme les boutons photo de la fiche : en police agrandie, ils tiennent à deux.
+  const boutonAppareil = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => ajouter(true) }, TEXTES_PHOTOS.prendre);
+  const boutonGalerie = el('button', { class: 'bouton bouton-secondaire', type: 'button', onclick: () => ajouter(false) }, TEXTES_PHOTOS.galerie);
   const boutons = el('div', { class: 'choix-photo' }, boutonAppareil, boutonGalerie);
   const noeud = el('fieldset', { class: 'photos-recette' },
     el('legend', { class: 'etiquette-champ' }, TEXTES_PHOTOS.legende),
@@ -45,18 +55,20 @@ export function creerChoixPhotos() {
 
   async function ajouter(appareil) {
     const place = PHOTOS_DEMANDE_MAX - photos.length;
-    if (place <= 0) return;
+    if (place <= 0 || noeud.disabled) return;
     const fichiers = await choisirImages({ appareil, max: place });
-    const nouvelles = fichiers.slice(0, PHOTOS_DEMANDE_MAX - photos.length).map((fichier) => {
+    const gardes = fichiers.slice(0, PHOTOS_DEMANDE_MAX - photos.length);
+    const nouvelles = gardes.map((fichier) => {
       compteur += 1;
       const photo = { cle: compteur, fichier, lue: null, echec: false, li: null, duPlat: null };
-      photo.image = preparerPhotoRecette(fichier).then((image) => {
+      photo.image = enFile(() => preparerPhotoRecette(fichier)).then((image) => {
         photo.lue = image;
         dessiner(photo);
         return image;
       }, () => {
         photo.echec = true;
         dessiner(photo);
+        if (photos.includes(photo)) statut.textContent = `Photo ${photos.indexOf(photo) + 1}\u00A0: ${TEXTES_PHOTOS.echec}`;
         return null;
       });
       photos.push(photo);
@@ -65,13 +77,14 @@ export function creerChoixPhotos() {
     if (!nouvelles.length) return;
     for (const photo of nouvelles) dessiner(photo);
     majCompte();
+    if (fichiers.length > gardes.length) statut.textContent = `${statut.textContent} ${TEXTES_PHOTOS.premieres(gardes.length)}`;
     const suivant = photos.length < PHOTOS_DEMANDE_MAX ? (appareil ? boutonAppareil : boutonGalerie) : nouvelles.at(-1).li.querySelector('button');
     suivant?.focus();
   }
 
   function retirer(photo) {
     const rang = photos.indexOf(photo);
-    if (rang < 0) return;
+    if (rang < 0 || noeud.disabled) return;
     photos.splice(rang, 1);
     photo.li?.remove();
     photos.forEach((p) => dessiner(p));
@@ -82,9 +95,11 @@ export function creerChoixPhotos() {
   }
 
   function choisirDuPlat(photo) {
+    if (noeud.disabled) return;
     const deja = Boolean(photo.duPlat);
     for (const p of photos) p.duPlat = null;
-    if (!deja) photo.duPlat = preparerPhoto(photo.fichier).catch(() => null);
+    // Après la préparation de sa photo de recette : une seule image décodée à la fois.
+    if (!deja) photo.duPlat = enFile(() => preparerPhoto(photo.fichier)).catch(() => null);
     photos.forEach((p) => dessiner(p));
   }
 
@@ -100,13 +115,16 @@ export function creerChoixPhotos() {
       ? el('img', { src: photo.lue, alt: `Photo ${rang}`, class: 'photo-choisie-image' })
       : el('span', { class: 'photo-choisie-image photo-choisie-attente', 'aria-hidden': 'true' }, photo.echec ? '⚠️' : '…');
     const texte = photo.echec ? TEXTES_PHOTOS.echec : photo.lue ? null : TEXTES_PHOTOS.preparation;
+    // Nom accessible fixe (« Photo 2 : c'est la photo du plat »), état dit par aria-pressed ; jamais principal : la
+    // feuille garde « Ajouter » comme seul bouton principal.
     const etoile = photo.echec ? null : el('button', {
-      class: `bouton ${photo.duPlat ? 'bouton-principal' : 'bouton-secondaire'} bouton-etoile`,
+      class: `bouton bouton-secondaire bouton-etoile${photo.duPlat ? ' choisie' : ''}`,
       type: 'button',
       'aria-pressed': photo.duPlat ? 'true' : 'false',
+      'aria-label': TEXTES_PHOTOS.nomDuPlat(rang),
       'data-role': 'etoile',
       onclick: () => choisirDuPlat(photo),
-    }, el('span', { 'aria-hidden': 'true' }, '⭐\u00A0'), photo.duPlat ? TEXTES_PHOTOS.duPlatChoisie : TEXTES_PHOTOS.duPlat);
+    }, photo.duPlat ? `⭐\u00A0${TEXTES_PHOTOS.duPlatChoisie}` : `⭐\u00A0${TEXTES_PHOTOS.duPlat}`);
     const boutonRetirer = el('button', {
       class: 'bouton bouton-texte',
       type: 'button',
@@ -114,14 +132,14 @@ export function creerChoixPhotos() {
       'data-role': 'retirer',
       onclick: () => retirer(photo),
     }, TEXTES_PHOTOS.retirer);
-    // Le bouton qui avait le focus est remplacé par son jumeau, qui le reprend.
+    // Le bouton qui avait le focus est remplacé par son jumeau, qui le reprend (« Retirer » si ⭐ disparaît).
     const focus = photo.li.contains(document.activeElement) ? document.activeElement.dataset?.role : null;
     photo.li.replaceChildren(apercu,
       el('div', { class: 'photo-choisie-texte' },
         texte ? el('p', { class: 'aide' }, texte) : null,
         etoile,
         boutonRetirer));
-    if (focus) photo.li.querySelector(`[data-role="${focus}"]`)?.focus();
+    if (focus) (photo.li.querySelector(`[data-role="${focus}"]`) ?? boutonRetirer).focus();
     aideDuPlat.hidden = photos.length === 0;
   }
 
@@ -136,9 +154,13 @@ export function creerChoixPhotos() {
     noeud,
     aDesPhotos: () => photos.length > 0,
     enCours: () => photos.some((photo) => !photo.lue && !photo.echec),
+    bloquer(oui) {
+      noeud.disabled = Boolean(oui);
+    },
     async valeurs() {
       const images = await Promise.all(photos.map((photo) => photo.image));
-      const choisie = photos.find((photo) => photo.duPlat);
+      // Une photo dont la préparation a échoué ne part pas, même choisie comme photo du plat.
+      const choisie = photos.find((photo) => photo.duPlat && !photo.echec);
       const duPlat = choisie ? await choisie.duPlat : null;
       return {
         photos: images.filter(Boolean).map((image) => ({ image })),

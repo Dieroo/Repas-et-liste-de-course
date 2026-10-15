@@ -183,3 +183,45 @@ test('photo d’une recette : 1600 px, sous la limite d’un document Firestore 
   assert.ok(tailleStockee(600_000) < PHOTO_RECETTE.octetsMax);
   assert.ok([...PHOTO_RECETTE.qualites].every((q, i, l) => q > 0 && q <= 1 && (i === 0 || q < l[i - 1])));
 });
+
+// ——— Relecture (2026-10-16) ———
+
+test('estNomDAttente et estNomNumerote', async () => {
+  const { estNomDAttente, estNomNumerote } = await import('../js/coeur/photos-demande.js');
+  assert.equal(estNomDAttente('Recette en photo du 16 octobre'), true);
+  assert.equal(estNomDAttente('Recette en photo du 16 octobre (2)'), true);
+  assert.equal(estNomDAttente('Recette en photo'), true);
+  assert.equal(estNomDAttente('Tarte de Mamie'), false);
+  assert.equal(estNomNumerote('Gratin (2)', 'Gratin'), true);
+  assert.equal(estNomNumerote('gratin (12)', 'Gratin'), true);
+  assert.equal(estNomNumerote('Gratin', 'Gratin'), false);
+  assert.equal(estNomNumerote('Gratin (1)', 'Gratin'), false);
+  assert.equal(estNomNumerote('Gratin dauphinois (2)', 'Gratin'), false);
+  assert.equal(estNomNumerote('Gratin (2)', ''), false);
+});
+
+test('texteDemandeRecette : fiche renommée à la main → son nom, plus « à trouver »', () => {
+  const texte = texteDemandeRecette({ id: ATTENTE.id, nom: 'Tarte de Mamie' }, { demande: demandePhotos(ATTENTE.id) });
+  assert.match(texte, /\nnom: Tarte de Mamie\nphotos: 2\n/);
+});
+
+test('import sur la fiche : une réponse pour un autre plat, collée par erreur, reste une erreur', () => {
+  const deja = { id: 'gratin', nom: 'Gratin', portionsBase: 2, ingredients: [ing('pain', 1, 'pc')] };
+  const autre = recette({ id: 'gratin', nom: 'Gratin' });
+  const r = preparerImport(valides(autre), { plats: [ATTENTE, deja], demandes: [demandePhotos(ATTENTE.id)], cible: ATTENTE.id });
+  assert.equal(r.erreurs.length, 1);
+  assert.equal(r.ecritures.length, 0);
+});
+
+test('recollée après l’enregistrement sous « Nom (2) » : même plat, nom gardé, l’autre plat intact', () => {
+  const deja = { id: 'bruschetta-tomate-et-basilic', nom: 'Bruschetta tomate et basilic', portionsBase: 2, ingredients: [ing('pain', 1, 'pc')] };
+  const enregistree = { ...recette(), nom: 'Bruschetta tomate et basilic (2)' };
+  const close = { ...demandePhotos(ATTENTE.id), statut: 'traitee' };
+  const changee = recette({ ingredients: [ing('pain de campagne', 6, 'tranche'), ing('tomate', 3, 'pc', ['legume'], { role: 'principal' })] });
+  for (const cible of [null, ATTENTE.id]) {
+    const r = preparerImport(valides(changee), { plats: [enregistree, deja], demandes: [close], cible });
+    assert.deepEqual(r.erreurs, [], String(cible));
+    assert.ok(r.ecritures.every((e) => e.id === ATTENTE.id), `${cible} : ${JSON.stringify(r.ecritures.map((e) => e.id))}`);
+    assert.ok(r.ecritures.every((e) => e.donnees?.nom === undefined || e.donnees.nom === 'Bruschetta tomate et basilic (2)'), String(cible));
+  }
+});

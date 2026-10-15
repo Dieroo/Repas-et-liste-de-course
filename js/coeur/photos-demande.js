@@ -71,6 +71,22 @@ export function nomLibre(nom, plats = []) {
   return null;
 }
 
+/** Vrai pour un nom d'attente (« Recette en photo du 16 octobre », « … (2) ») : la personne ne l'a pas encore changé. */
+export function estNomDAttente(nom) {
+  return /^recette-en-photo(-du-[a-z0-9-]+)?$/.test(slug(String(nom ?? '')));
+}
+
+/**
+ * Vrai si `nom` est `base` numéroté par nomLibre (« Gratin (2) » pour « Gratin »), au slug près : la même recette en
+ * photos, déjà enregistrée sous un nom libre, que l'on recolle.
+ */
+export function estNomNumerote(nom, base) {
+  const cle = slug(String(base ?? ''));
+  if (!cle) return false;
+  const trouve = /^(.*)-(\d+)$/.exec(slug(String(nom ?? '')));
+  return Boolean(trouve) && trouve[1] === cle && Number(trouve[2]) >= 2;
+}
+
 /**
  * Nom d'un plat demandé en photos sans nom : « Recette en photo du 16 octobre », ou « … (2) » s'il est pris (Claude
  * le remplacera par le titre de la recette). `aujourdhui` : 'AAAA-MM-JJ' du téléphone.

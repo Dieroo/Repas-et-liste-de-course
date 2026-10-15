@@ -14,7 +14,7 @@ import { MARQUEURS_PRECAUTION, VOCABULAIRES, code, texte } from './vocabulaire.j
 import { LOT_PRECAUTIONS, empreinteRelecture, lignesRelecture } from './relecture.js';
 import { ETAPES_PAR_MESSAGE, empreinteEtapes, partsAMettreDeCote } from './realisation.js';
 import { cuissonEnTexte } from './empreinte.js';
-import { nombrePhotos } from './photos-demande.js';
+import { estNomDAttente, nombrePhotos } from './photos-demande.js';
 
 export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE };
 
@@ -143,7 +143,8 @@ export function texteDemandeRecette(plat, { profils = [], demande = null } = {})
     `DEMANDE-RECETTE ${FORMAT}`,
     LIGNE_INSTRUCTIONS,
     `id: ${ligne(plat?.id)}`,
-    `nom: ${photos && demande.nomATrouver === true ? NOM_A_TROUVER : ligne(plat?.nom)}`,
+    // Nom à trouver seulement tant que la fiche garde son nom d'attente (pas renommée par « Modifier »).
+    `nom: ${photos && demande.nomATrouver === true && estNomDAttente(plat?.nom) ? NOM_A_TROUVER : ligne(plat?.nom)}`,
     ...(photos ? [`photos: ${photos}`] : []),
     ...versions,
   ];

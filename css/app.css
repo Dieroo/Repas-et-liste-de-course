@@ -1221,6 +1221,9 @@ legend.etiquette-champ {
 
 .photos-recette legend { padding: 0; }
 
+/* Deux colonnes en police normale, une seule en police agrandie (« 🖼️ Depuis » ne se coupe pas). */
+.photos-recette .choix-photo { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9em), 1fr)); }
+
 .photos-choisies,
 .photos-demande-liste {
   display: flex;
@@ -1268,6 +1271,21 @@ legend.etiquette-champ {
 .photo-choisie-texte .aide { margin: 0; }
 
 .bouton-etoile { padding: 0 12px; }
+
+/* Photo du plat choisie : contour terracotta, jamais un second bouton principal dans la feuille. */
+.bouton-etoile.choisie {
+  border: 2px solid var(--accent);
+  color: var(--accent);
+}
+
+.aide-envoi { margin: 0; }
+
+/* Photos pas encore lues, ou envoi en cours : bouton éteint mais focalisable. */
+.actions-recette .bouton[aria-disabled="true"],
+.formulaire .bouton[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
 
 .photos-demande {
   display: flex;

@@ -10,7 +10,7 @@ import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
 import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
 import { nouveauPlatParNom, demandeDeRecette } from './coeur/plats.js';
-import { PHOTOS_DEMANDE_MAX, champsDemandePhotos, nomParDefaut } from './coeur/photos-demande.js';
+import { PHOTOS_DEMANDE_MAX, champsDemandePhotos, nombrePhotos, nomParDefaut } from './coeur/photos-demande.js';
 import { idDemande, demandeOuverte, demandeUtile, demandesATraiter, preparerDemande } from './coeur/demandes.js';
 import {
   SIGNES_SUJET, sujetValide, nouveauSujet, texteNotification, adresseNotification, issueEnvoi,
@@ -1516,6 +1516,12 @@ const actions = {
       evaluer: compat,
     });
     if (preparation.erreur) return { code: preparation.erreur };
+    // Recette demandée de nouveau après un retrait : ses photos (jamais effacées par un retrait) restent jointes.
+    if (!profil) {
+      const avant = etat.demandes.find((d) => d.id === preparation.id);
+      const champs = champsDemandePhotos({ photos: nombrePhotos(avant), nomATrouver: avant?.nomATrouver === true });
+      if (Object.keys(champs).length) preparation.donnees = { ...preparation.donnees, ...champs };
+    }
     const echec = 'La demande n’a pas pu être enregistrée. Réessayez.';
     let envoi;
     try {
