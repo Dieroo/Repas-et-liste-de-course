@@ -449,7 +449,7 @@ export function creer(ctx) {
     el('span', { 'aria-hidden': 'true' }, '📥\u00A0'), 'Télécharger les photos');
   // Guidage lu avant le toucher : une fois dans le menu « Partager », il est trop tard pour le lire.
   const aideEnvoi = el('p', { class: 'aide aide-envoi', hidden: true },
-    'Dans le menu «\u00A0Partager\u00A0», choisissez Claude, puis une conversation de votre projet de recettes.');
+    'La demande est copiée, les photos partent par le menu «\u00A0Partager\u00A0»\u00A0: choisissez Claude, puis une conversation de votre projet de recettes. Collez ensuite la demande dans le message, puis envoyez.');
   const photosDemande = creerPhotosDeLaDemande(ctx.actions.suivrePhotosDemande ?? (() => () => {}), () => majActionsRecette());
   const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, aideEnvoi, boutonEnvoyer, boutonDemander, boutonTelecharger, lienColler);
   // Vrai quand « Demander à Claude » est dans la section « Nouvelle version » (bas de fiche, geste rare) : il y est
@@ -625,16 +625,16 @@ export function creer(ctx) {
       majActionsRecette();
       return;
     }
-    // Texte copié d'abord (la copie ne consomme pas l'activation du toucher, qui dure quelques secondes), puis partage :
-    // si l'app Claude ne garde que les photos, la demande reste à coller.
+    // Texte copié d'abord (la copie ne consomme pas l'activation du toucher, qui dure quelques secondes), puis les photos
+    // seules par le partage : l'app Claude ne garde pas les photos d'un partage qui porte aussi du texte.
     const texte = demandeDuPlat(plat);
     const copiee = await copier(texte);
-    const issue = await partagerImages({ texte, images });
+    const issue = await partagerImages({ images });
     if (issue === 'partage') {
       demandeCopiee = true;
       messageCopie.textContent = copiee
-        ? 'Envoyé. Dans Claude, choisissez une conversation du projet de recettes. La demande est aussi copiée\u00A0: collez-la si elle manque. Puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».'
-        : 'Envoyé. Dans Claude, choisissez une conversation du projet de recettes. Puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».';
+        ? 'Photos envoyées. Dans Claude, collez la demande dans le message (appui long, puis «\u00A0Coller\u00A0»), puis envoyez. Revenez ensuite ici et touchez «\u00A0Coller la réponse\u00A0».'
+        : 'Photos envoyées, mais la demande n’a pas pu être copiée\u00A0: touchez «\u00A0📋 Copier la demande\u00A0», collez-la dans Claude, puis envoyez.';
     } else if (issue === 'annule') {
       messageCopie.textContent = 'Envoi annulé.';
     } else {
