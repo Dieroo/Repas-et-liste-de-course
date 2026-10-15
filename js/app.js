@@ -10,6 +10,7 @@ import * as donnees from './donnees.js';
 import { suivreReglages, arreterReglages, devenirGestionnaire } from './donnees.js';
 import { roleDe, roleEffectif, parametreDe, resoudreRoute, gestionnaireADesigner, normaliserEmail } from './coeur/roles.js';
 import { nouveauPlatParNom, demandeDeRecette } from './coeur/plats.js';
+import { PHOTOS_DEMANDE_MAX, champsDemandePhotos, nomParDefaut } from './coeur/photos-demande.js';
 import { idDemande, demandeOuverte, demandeUtile, demandesATraiter, preparerDemande } from './coeur/demandes.js';
 import {
   SIGNES_SUJET, sujetValide, nouveauSujet, texteNotification, adresseNotification, issueEnvoi,
@@ -975,28 +976,39 @@ const actions = {
    * part dans le même lot, s'affiche tout de suite (la fiche, ouverte aussitôt, dit « 📬 Demandée… ») et le
    * gestionnaire est prévenu (prevenirDemande). → { id } ou { erreur } (coeur/plats.js › nouveauPlatParNom).
    */
-  ajouterPlat(nom) {
-    const resultat = nouveauPlatParNom(nom, etat.plats);
-    if (resultat.erreur) return resultat;
+  ajouterPlat(nom, { photos = [], photoDuPlat = null } = {}) {
     const demanderRecette = roleCourant() !== 'gestionnaire';
+    // Recette en photos (2026-10-16, vue « Repas et courses ») : sans nom, un nom d'attente que Claude remplacera par
+    // le titre lu sur les photos.
+    const images = demanderRecette && Array.isArray(photos) ? photos.slice(0, PHOTOS_DEMANDE_MAX) : [];
+    const nomATrouver = images.length > 0 && !String(nom ?? '').trim();
+    const resultat = nouveauPlatParNom(nomATrouver ? nomParDefaut(dateDuJour(), etat.plats) : nom, etat.plats);
+    if (resultat.erreur) return resultat;
     const email = etat.utilisateur.email;
-    const envoi = donnees.ajouterPlat(resultat.plat, email, { demanderRecette });
-    ecrire(envoi, 'Le plat n’a pas pu être enregistré. Réessayez.');
+    const photo = demanderRecette && photoDuPlat?.image && photoDuPlat?.vignette ? photoDuPlat : null;
+    const envoi = donnees.ajouterPlat(resultat.plat, email, { demanderRecette, photos: images, photoDuPlat: photo, nomATrouver });
+    ecrire(envoi, images.length
+      ? 'Le plat et ses photos n’ont pas pu être enregistrés. Réessayez.'
+      : 'Le plat n’a pas pu être enregistré. Réessayez.');
     // Affiché tout de suite ; la copie de Firestore remplace cette version dès son arrivée.
-    etat.plats = [...etat.plats, resultat.plat];
+    etat.plats = [...etat.plats, { ...resultat.plat, ...(photo ? { vignette: photo.vignette } : {}) }];
     if (demanderRecette) {
-      const demande = demandeDeRecette(resultat.plat.id, email);
+      const recette = demandeDeRecette(resultat.plat.id, email);
+      const demande = { ...recette, donnees: { ...recette.donnees, ...champsDemandePhotos({ photos: images.length, nomATrouver }) } };
       insererDemande(demande);
       const jeton = Symbol(demande.id);
       jetonsDemandes.set(demande.id, jeton);
       prevenirDemande(demande.id, 'recette', resultat.plat, envoi, jeton);
     }
-    annoncer(demanderRecette
-      ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée.`
-      : `«\u00A0${resultat.plat.nom}\u00A0» ajouté.`);
+    annoncer(!demanderRecette
+      ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté.`
+      : images.length
+        ? `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée avec ${images.length === 1 ? 'sa photo' : `ses ${images.length}\u00A0photos`}.`
+        : `«\u00A0${resultat.plat.nom}\u00A0» ajouté. La recette est demandée.`);
     return { id: resultat.plat.id };
   },
   suivrePhoto: donnees.suivrePhoto,
+  suivrePhotosDemande: donnees.suivrePhotosDemande,
   enregistrerPhoto(platId, photo) {
     ecrire(donnees.enregistrerPhoto(platId, photo, etat.utilisateur.email),
       'La photo n’a pas pu être enregistrée. Réessayez.');

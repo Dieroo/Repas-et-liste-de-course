@@ -4,6 +4,10 @@
 // Photo de la fiche : 1024 px au plus, 200 Ko au plus.
 export const PHOTO = { cote: 1024, octetsMax: 200_000, qualites: [0.82, 0.72, 0.62, 0.52, 0.42] };
 
+// Photo d'une recette jointe à une demande (2026-10-16) : assez grande pour que Claude lise le texte d'une carte ou
+// d'une page (1600 px au plus), sous la limite d'un document Firestore (1 Mo) : 900 Ko au plus.
+export const PHOTO_RECETTE = { cote: 1600, octetsMax: 900_000, qualites: [0.85, 0.78, 0.7, 0.6, 0.5, 0.4] };
+
 // Vignette carrée des listes : 10 Ko au plus.
 export const VIGNETTE = { cote: 160, octetsMax: 10_000, qualites: [0.72, 0.6, 0.48, 0.36] };
 

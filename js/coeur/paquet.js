@@ -12,6 +12,7 @@ import { evaluer, marqueursEffectifs, styleDe } from './compatibilite.js';
 import { SOURCE_IDEE, VERSION_INSTRUCTIONS } from './claude.js';
 import { stylesAttendus } from './regles.js';
 import { estDansCorbeille } from './corbeille.js';
+import { demandeEnPhotos, nomLibre } from './photos-demande.js';
 import {
   empreinteEtapes, realisationAJour, titresDe, travailRecette, validerRealisation,
 } from './realisation.js';
@@ -1369,9 +1370,14 @@ export function preparerImport(valides, {
     let vise;
     let nomGarde = null; // nom de la fiche visée, gardé : un plat de la corbeille porte déjà le nom reçu
     if (viseCible) {
-      // Un plat de la corbeille porte déjà ce nom (Claude a raccourci celui de la fiche) : la recette va bien à la
-      // fiche, qui garde son nom (jamais deux plats du même nom, ni erreur pour un plat qui n'apparaît plus).
-      if (memeNom && memeNom.id !== cible && estDansCorbeille(memeNom)) {
+      // Recette demandée en photos (2026-10-16) : le nom de la fiche n'est souvent qu'un nom d'attente (« Recette en
+      // photo du 16 octobre ») ; celui que Claude a lu, déjà porté par un autre plat, devient « <nom> (2) ».
+      if (memeNom && memeNom.id !== cible && demandeEnPhotos(cible, demandes)) {
+        nomGarde = nomLibre(donnees.nom, plats.filter((plat) => plat?.id !== cible)) ?? parId.get(cible).nom;
+        avertissementsPlat.push(`«\u00A0${memeNom.nom}\u00A0» existe déjà\u00A0: celle-ci s’appellera «\u00A0${nomGarde}\u00A0».`);
+      } else if (memeNom && memeNom.id !== cible && estDansCorbeille(memeNom)) {
+        // Un plat de la corbeille porte déjà ce nom (Claude a raccourci celui de la fiche) : la recette va bien à la
+        // fiche, qui garde son nom (jamais deux plats du même nom, ni erreur pour un plat qui n'apparaît plus).
         nomGarde = parId.get(cible).nom;
         avertissementsPlat.push(`Claude l’appelle ${affiche}\u00A0: le nom de la fiche est gardé.`);
       } else if (memeNom && memeNom.id !== cible) {
@@ -1396,6 +1402,13 @@ export function preparerImport(valides, {
       if (memeId) avertissementsPlat.push(`«\u00A0${memeId.nom}\u00A0» utilise déjà cet identifiant\u00A0: la recette est ajoutée à part.`);
     } else {
       vise = donnees.id;
+    }
+
+    // Recette en photos collée dans « Ajouter des recettes » (même identifiant que le plat ⏳) : même règle de nom libre
+    // qu'avec « Coller la recette » de sa fiche.
+    if (!viseCible && memeNom && memeNom.id !== vise && demandeEnPhotos(vise, demandes)) {
+      nomGarde = nomLibre(donnees.nom, plats.filter((plat) => plat?.id !== vise)) ?? parId.get(vise)?.nom ?? null;
+      if (nomGarde) avertissementsPlat.push(`«\u00A0${memeNom.nom}\u00A0» existe déjà\u00A0: celle-ci s’appellera «\u00A0${nomGarde}\u00A0».`);
     }
 
     // Nom retenu pour la fiche : celui reçu, sauf nom de la fiche gardé (plus haut).

@@ -19,6 +19,7 @@ import { estDansCorbeille } from './coeur/corbeille.js';
 import { empreinteRelecture, appliquerReperes } from './coeur/relecture.js';
 import { VERSION_REPERES } from './coeur/vocabulaire.js';
 import { lireIdDemande } from './coeur/demandes.js';
+import { PHOTOS_DEMANDE_MAX, champsDemandePhotos, idPhotoDemande, idsPhotosDeLaDemande } from './coeur/photos-demande.js';
 import { EFFACER, cheminSur, champsValides, jourValide, ecartJours, DUREE_MAX_JOURS } from './coeur/semaine.js';
 import { ARTICLE_MAX, PRECISION_MAX } from './coeur/liste.js';
 import { CHAMPS_PRODUIT, lireChampProduit, lireOrdreRayons } from './coeur/sauvegarde.js';
@@ -145,14 +146,59 @@ function trace(auteur) {
  * `demanderRecette` (rôle effectif « Repas et courses », aperçu compris : décidé par l'app) : crée aussi la demande de
  * recette, `set` sans fusion (une demande traitée du même identifiant se rouvre entière).
  */
-export function ajouterPlat(plat, auteur, { demanderRecette }) {
+export function ajouterPlat(plat, auteur, { demanderRecette, photos = [], photoDuPlat = null, nomATrouver = false }) {
   const lot = writeBatch(db);
-  lot.set(doc(db, 'plats', plat.id), { id: plat.id, nom: plat.nom, ...trace(auteur) }, { merge: true });
+  // Recette en photos (2026-10-16) : « ⭐ C'est la photo du plat » devient la photo de la fiche et sa vignette.
+  const vignette = photoDuPlat?.vignette ? { vignette: photoDuPlat.vignette } : {};
+  lot.set(doc(db, 'plats', plat.id), { id: plat.id, nom: plat.nom, ...vignette, ...trace(auteur) }, { merge: true });
+  if (photoDuPlat?.image) lot.set(doc(db, 'photos', plat.id), { image: photoDuPlat.image, ...trace(auteur) });
   if (demanderRecette) {
     const demande = demandeDeRecette(plat.id, auteur);
-    lot.set(doc(db, 'demandes', demande.id), { ...demande.donnees, creeLe: serverTimestamp() });
+    // Photos de la recette : une par document (près de 1 Mo chacune), lues seulement sur la fiche du plat.
+    const images = (Array.isArray(photos) ? photos : []).filter((p) => typeof p?.image === 'string').slice(0, PHOTOS_DEMANDE_MAX);
+    images.forEach(({ image }, i) => {
+      lot.set(doc(db, 'photosDemandes', idPhotoDemande(plat.id, i + 1)), {
+        platId: plat.id, rang: i + 1, image, creePar: auteur, creeLe: serverTimestamp(),
+      });
+    });
+    lot.set(doc(db, 'demandes', demande.id), {
+      ...demande.donnees,
+      ...champsDemandePhotos({ photos: images.length, nomATrouver }),
+      creeLe: serverTimestamp(),
+    });
   }
   return lot.commit();
+}
+
+/**
+ * Suit les photos de la demande de recette d'un plat (lues seulement quand sa fiche est ouverte) : un document par
+ * photo. rappel([{ rang, image }]) à chaque changement, par rang croissant ; les photos absentes sont omises.
+ * → fonction d'arrêt.
+ */
+export function suivrePhotosDemande(platId, nombre, rappel) {
+  const lues = new Map();
+  const arrets = [];
+  const rendre = () => rappel([...lues.entries()].sort(([a], [b]) => a - b).map(([rang, image]) => ({ rang, image })));
+  try {
+    for (let rang = 1; rang <= Math.min(nombre, PHOTOS_DEMANDE_MAX); rang += 1) {
+      const id = idPhotoDemande(platId, rang);
+      if (!id) continue;
+      arrets.push(onSnapshot(doc(db, 'photosDemandes', id), (instantane) => {
+        const image = instantane.exists() ? instantane.data()?.image : null;
+        if (typeof image === 'string' && image.startsWith('data:image/')) lues.set(rang, image);
+        else lues.delete(rang);
+        rendre();
+      }, () => {
+        lues.delete(rang);
+        rendre();
+      }));
+    }
+  } catch {
+    rendre();
+  }
+  return () => {
+    while (arrets.length) arrets.pop()();
+  };
 }
 
 // ——— Demandes (T2e) ———
@@ -228,7 +274,11 @@ function cloreDemandes(demandesAClore) {
   if (!demandesAClore?.length) return;
   try {
     const lot = writeBatch(db);
-    for (const id of demandesAClore) lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
+    for (const id of demandesAClore) {
+      lot.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });
+      // Recette enregistrée : les photos de sa demande ne servent plus (2026-10-16).
+      for (const photo of idsPhotosDeLaDemande(id)) lot.delete(doc(db, 'photosDemandes', photo));
+    }
     lot.commit().catch(() => {});
   } catch {
     // Échec silencieux, comme ci-dessus.
@@ -812,12 +862,12 @@ export async function viderCorbeille(platIds, demandesAClore = []) {
     vues.add(id);
     plat.push(id);
   }
-  // Groupes de plats : chacun pèse sa suppression, celle de sa photo et ses demandes.
+  // Groupes de plats : chacun pèse sa suppression, celle de sa photo, des photos de sa demande et ses demandes.
   const groupes = [];
   let groupe = [];
   let poids = 0;
   for (const [id, demandes] of parPlat) {
-    const ecritures = 2 + demandes.length;
+    const ecritures = 2 + PHOTOS_DEMANDE_MAX + demandes.length;
     if (groupe.length && poids + ecritures > ECRITURES_PAR_TRANSACTION) {
       groupes.push(groupe);
       groupe = [];
@@ -841,6 +891,7 @@ export async function viderCorbeille(platIds, demandesAClore = []) {
       for (const { id } of aSupprimer) {
         transaction.delete(doc(db, 'plats', id));
         transaction.delete(doc(db, 'photos', id));
+        for (const photo of idsPhotosDeLaDemande(`${id}__recette`)) transaction.delete(doc(db, 'photosDemandes', photo));
       }
       for (const id of ouvertes) {
         transaction.update(doc(db, 'demandes', id), { statut: 'traitee', traiteeLe: serverTimestamp() });

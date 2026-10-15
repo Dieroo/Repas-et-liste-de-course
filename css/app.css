@@ -1208,6 +1208,90 @@ legend.etiquette-champ {
 
 .choix-photo .bouton { padding: 0 12px; }
 
+/* Recette en photos (2026-10-16) : photos choisies dans la feuille « Nouveau plat », photos de la demande sur la fiche. */
+.photos-recette {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.photos-recette legend { padding: 0; }
+
+.photos-choisies,
+.photos-demande-liste {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.photo-choisie {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.photo-choisie-image {
+  flex: none;
+  width: 72px;
+  height: 96px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--accent-doux);
+}
+
+.photo-choisie-attente {
+  display: grid;
+  place-items: center;
+  font-size: 1.4rem;
+}
+
+.photo-choisie-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.photo-choisie-texte .aide { margin: 0; }
+
+.bouton-etoile { padding: 0 12px; }
+
+.photos-demande {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.photos-demande-legende { margin: 0; font-weight: 600; }
+
+.photos-demande-liste {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.photos-demande-liste img {
+  display: block;
+  width: 96px;
+  height: 128px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--accent-doux);
+}
+
 .badges {
   display: flex;
   flex-wrap: wrap;
