@@ -13,6 +13,7 @@ import { copier } from './presse-papiers.js';
 import { vignetteDuPlat } from './plats.js';
 import { nomDe } from './compat.js';
 import { grouperDemandes, texteDemandee } from '../coeur/demandes.js';
+import { nombrePhotos } from '../coeur/photos-demande.js';
 import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { sujetValide } from '../coeur/ntfy.js';
 import { visuelDuPlat } from '../coeur/plats.js';
@@ -52,7 +53,10 @@ function modele(ctx, plats) {
       nom: String(plat.nom ?? ''),
       visuel: visuelDuPlat(plat),
       vignette: plat.vignette ?? '',
-      texte: texteDemandee(demande, options),
+      // Recette en photos (2026-10-16) : le nombre de photos jointes, à envoyer depuis la fiche.
+      texte: nombrePhotos(demande)
+        ? `${texteDemandee(demande, options)} Avec ${nombrePhotos(demande) === 1 ? 'une photo' : `${nombrePhotos(demande)}\u00A0photos`}.`
+        : texteDemandee(demande, options),
     };
   };
   const groupes = versions.map(({ profil, elements }) => ({ profilId: profil.id, nom: nomDe(profil), lignes: elements.map(ligne) }));

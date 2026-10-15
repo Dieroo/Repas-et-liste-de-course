@@ -1,5 +1,5 @@
 // Photo d'un plat : choix sur le téléphone, puis compression dans le navigateur (CLAUDE.md §6 `photos`).
-import { PHOTO, VIGNETTE, dimensionsReduites, carreCentral, tailleStockee } from '../coeur/photo.js';
+import { PHOTO, PHOTO_RECETTE, VIGNETTE, dimensionsReduites, carreCentral, tailleStockee } from '../coeur/photo.js';
 
 /**
  * Ouvre l'appareil photo (`appareil`) ou la galerie du téléphone. À appeler dans un toucher. → File ou null.
@@ -15,6 +15,44 @@ export function choisirImage({ appareil = false } = {}) {
     entree.addEventListener('cancel', () => resoudre(null), { once: true });
     entree.click();
   });
+}
+
+/**
+ * Plusieurs images de la galerie (si `max` > 1), ou une photo de l'appareil. À appeler dans un toucher. → File[], toutes
+ * celles choisies (l'appelant garde les premières) ; vide si la personne renonce.
+ */
+export function choisirImages({ appareil = false, max = 1 } = {}) {
+  return new Promise((resoudre) => {
+    const entree = document.createElement('input');
+    entree.type = 'file';
+    entree.accept = 'image/*';
+    if (appareil) entree.setAttribute('capture', 'environment');
+    else if (max > 1) entree.multiple = true;
+    entree.addEventListener('change', () => resoudre([...(entree.files ?? [])]), { once: true });
+    entree.addEventListener('cancel', () => resoudre([]), { once: true });
+    entree.click();
+  });
+}
+
+/**
+ * Photo d'une recette jointe à une demande (1600 px, 900 Ko au plus), en adresse de données JPEG. Une image trop
+ * chargée pour tenir à 1600 px est réduite à 1200 px.
+ */
+export async function preparerPhotoRecette(fichier) {
+  const image = await createImageBitmap(fichier, { imageOrientation: 'from-image' });
+  try {
+    for (const cote of [PHOTO_RECETTE.cote, 1200]) {
+      const taille = dimensionsReduites(image.width, image.height, cote);
+      try {
+        return await encoder(image, [0, 0, image.width, image.height], taille.largeur, taille.hauteur, PHOTO_RECETTE);
+      } catch (erreur) {
+        if (cote === 1200) throw erreur;
+      }
+    }
+    throw new Error('Image trop lourde après compression.');
+  } finally {
+    image.close();
+  }
 }
 
 /** Photo (1024 px, ~200 Ko) et vignette carrée (160 px, ~12 Ko), en adresses de données JPEG. */
@@ -47,6 +85,9 @@ async function encoder(image, [sx, sy, sl, sh], largeur, hauteur, { octetsMax, q
     fichier = await new Promise((resoudre) => toile.toBlob(resoudre, 'image/jpeg', qualite));
     if (fichier && tailleStockee(fichier.size) <= octetsMax) break;
   }
+  // Mémoire de la toile rendue tout de suite (photos de 12 à 50 Mpx sur téléphone).
+  toile.width = 0;
+  toile.height = 0;
   if (!fichier || tailleStockee(fichier.size) > octetsMax) throw new Error('Image trop lourde après compression.');
   return new Promise((resoudre, rejeter) => {
     const lecteur = new FileReader();

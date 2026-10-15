@@ -47,10 +47,31 @@ const FORMES = {
   ],
 };
 
+// Dessins des rappels de « Cuisiner pas à pas » (2026-10-15), au même trait : une assiette vue de haut, entre une
+// fourchette et un couteau (la part à mettre de côté). Le four des rappels reprend le dessin de l'appareil.
+const FORMES_RAPPELS = {
+  assiette: [
+    ['circle', { cx: '12', cy: '12', r: '7' }],
+    ['circle', { cx: '12', cy: '12', r: '4' }],
+    ['path', { d: 'M2.6 5v3.3a1 1 0 0 0 2 0V5M3.6 5v14' }],
+    ['path', { d: 'M21.4 19V5c-1.3 1-1.8 3.2-1.8 5.6h1.8' }],
+  ],
+};
+
 /** Pictogramme d'un appareil (SVG décoratif), ou null si l'appareil est inconnu. */
 export function pictogramme(appareil, classe = 'picto') {
   if (!Object.hasOwn(FORMES, appareil ?? '')) return null;
-  const formes = FORMES[appareil];
+  return dessiner(FORMES[appareil], classe);
+}
+
+/** Dessin d'un rappel de « Cuisiner pas à pas » : 'part' (assiette) ou un appareil (four, airfryer…) ; null sinon. */
+export function pictoRappel(genre, appareil = 'four', classe = 'picto picto-rappel') {
+  if (genre === 'part') return dessiner(FORMES_RAPPELS.assiette, classe);
+  if (genre === 'four') return pictogramme(Object.hasOwn(FORMES, appareil ?? '') ? appareil : 'four', classe);
+  return null;
+}
+
+function dessiner(formes, classe) {
   const svg = document.createElementNS(NS, 'svg');
   for (const [nom, valeur] of Object.entries({ viewBox: '0 0 24 24', class: classe, 'aria-hidden': 'true', focusable: 'false' })) {
     svg.setAttribute(nom, valeur);

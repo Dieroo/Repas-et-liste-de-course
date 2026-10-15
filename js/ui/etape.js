@@ -1,6 +1,7 @@
 // Carte d'une étape à cuisiner (T5-1, plan §8.5), partagée par « Cuisiner pas à pas » et, plus tard, le batch guidé
-// (T5-2). Ordre fixe, lisible téléphone posé : rappels en tête (fond ocre : « 🔥 Allumez le four… », « ✂\uFE0F Mettez de
-// côté la part… » et sa case, « 🧸 Pour Enfant : … »), titre, quantités de l'étape en gras et « Et aussi : … », texte,
+// (T5-2). Ordre fixe, lisible téléphone posé : rappels en tête (four et part sur un bandeau terracotta, avec le
+// dessin du four ou de l'assiette : « Allumez le four… », « Mettez de côté la part… » et sa case ; sur fond ocre :
+// « 🧸 Pour Enfant : … »), titre, quantités de l'étape en gras et « Et aussi : … », texte,
 // « ✓ Prêt quand : … », puces de durée et d'appareil, ce que demande la part mise de côté (sa consigne et ses ajouts,
 // déjà dits dans « Avant de commencer » : sous le texte, pour que l'étape tienne sur l'écran), conseil de cuisson à
 // cœur, « Pendant que ça cuit… ». Le titre est décrit par les rappels (lecteur d'écran : ils sont lus avec lui).
@@ -8,6 +9,7 @@
 // téléphone par l'écran qui l'affiche (`surCase`). Texte inséré par nœuds texte seulement.
 import { el } from './dom.js';
 import { TEXTES_CUISINE } from '../coeur/cuisine.js';
+import { pictoRappel } from './pictos.js';
 
 // Pictogramme en tête d'un texte (« 🔥 », « ✂\uFE0F », « 🧸 », « ⏱ », « ✓ ») : montré, jamais lu (il ne porte pas le sens).
 const EN_TETE = /^((?:\p{Extended_Pictographic}|[✓⏱])\uFE0F?(?:\u200D\p{Extended_Pictographic}\uFE0F?)*)\s*/u;
@@ -18,6 +20,18 @@ export function avecPictogramme(texte) {
   const trouve = valeur.match(EN_TETE);
   if (!trouve) return [valeur];
   return [el('span', { 'aria-hidden': 'true', class: 'picto-texte' }, `${trouve[1]}\u00A0`), valeur.slice(trouve[0].length)];
+}
+
+/**
+ * Texte d'un rappel (2026-10-15, demande du propriétaire) : le four et la part à mettre de côté portent un dessin au
+ * trait de l'app (four, assiette) à la place de leur emoji de tête ; les autres gardent leur pictogramme.
+ */
+export function texteRappel(texte, genre, appareil) {
+  const dessin = pictoRappel(genre, appareil);
+  if (!dessin) return avecPictogramme(texte);
+  const valeur = String(texte ?? '');
+  const trouve = valeur.match(EN_TETE);
+  return [dessin, el('span', {}, trouve ? valeur.slice(trouve[0].length) : valeur)];
 }
 
 /** Ce qui se voit d'une étape (pour ne rien redessiner quand rien ne change : un lecteur d'écran ne relit pas). */
@@ -63,7 +77,7 @@ export function creerCarteEtape({ surCase = () => {}, niveauTitre = 'h1' } = {})
   }
 
   function rappel(r, cases) {
-    const morceaux = [el('p', { class: 'etape-rappel-texte' }, avecPictogramme(r.texte))];
+    const morceaux = [el('p', { class: 'etape-rappel-texte' }, texteRappel(r.texte, r.genre, r.appareil))];
     if (r.genre === 'part') {
       if (r.case) {
         const input = el('input', { type: 'checkbox', 'data-cle': r.case.cle });

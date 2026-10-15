@@ -12,7 +12,7 @@
 // - Plat ⏳, de la corbeille ou introuvable à l'ouverture : retour à sa fiche. Une fois la cuisine commencée, un plat
 //   changé ailleurs met l'écran à jour (quantités) ; s'il part (corbeille, supprimé), l'écran garde ce qu'il montrait.
 import { el, vibrer } from './dom.js';
-import { creerCarteEtape, avecPictogramme } from './etape.js';
+import { creerCarteEtape, avecPictogramme, texteRappel } from './etape.js';
 import { garderAllume } from './ecran-allume.js';
 import {
   AU_FRIGO_AVANT_MIN, TEXTES_CUISINE, cleReprise, cleTexteCuisine, elementPourCuisiner, lireReprise, pasAPas,
@@ -57,7 +57,7 @@ function ecrire(cle, valeur) {
  */
 function etapeCompacte(etape, caseDe = null) {
   const rappels = (etape.rappels ?? []).map((r) => el('div', { class: `etape-rappel etape-rappel-${r.genre}` },
-    el('p', { class: 'etape-rappel-texte' }, avecPictogramme(r.texte)),
+    el('p', { class: 'etape-rappel-texte' }, texteRappel(r.texte, r.genre, r.appareil)),
     r.consigne ? el('p', { class: 'etape-rappel-consigne' }, r.consigne) : null,
     r.case && caseDe ? el('ul', { class: 'liste-cases' }, caseDe({ cle: r.case.cle, texte: r.case.libelle })) : null));
   return el('li', { class: 'etape-compacte' },
@@ -510,7 +510,7 @@ export function creer(ctx) {
         ? el('div', { class: 'cuisiner-rappels-avant' }, avant.enfant.map((ligne) => el('p', {}, avecPictogramme(ligne.texte))))
         : null,
       avant.parts.length
-        ? el('div', { class: 'cuisiner-rappels-avant' }, avant.parts.map((t) => el('p', {}, avecPictogramme(t))))
+        ? el('div', { class: 'cuisiner-rappels-avant' }, avant.parts.map((t) => el('p', { class: 'ligne-part-avant' }, texteRappel(t, 'part'))))
         : null,
       avant.veille.length
         ? el('section', { class: 'cuisiner-bloc' },
@@ -591,6 +591,10 @@ export function creer(ctx) {
     if (page === 'etape') {
       const actuelle = etapeVue();
       if (actuelle) {
+        // Arrivée sur une étape qui rappelle le four ou la part : une vibration, pour qu'on lève les yeux.
+        if (actuelle.cle !== cleEtape && (actuelle.rappels ?? []).some((r) => r.genre === 'four' || r.genre === 'part')) {
+          try { navigator.vibrate?.([80, 60, 80]); } catch { /* vibration refusée : sans effet */ }
+        }
         cleEtape = actuelle.cle;
         titreEtape = actuelle.titre ?? null;
         rangEtape = actuelle.rang;

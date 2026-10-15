@@ -18,6 +18,7 @@ import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 import { platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
 import { estDansLaSemaine, idsDansLaSemaine, lireSemaine, peutAllerDansLaSemaine, semaineVisee } from '../coeur/semaine.js';
 import { restesPour } from './plat-semaine.js';
+import { creerChoixPhotos } from './photos-demande.js';
 
 // Gardés d'une visite à l'autre : revenir d'une fiche retrouve la même liste, au même endroit.
 let recherche = '';
@@ -477,6 +478,11 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
 
   ouvrirFeuille('Nouveau plat', (fermer) => {
     const erreur = el('p', { class: 'message-erreur', role: 'alert', hidden: true });
+    // Recette en photos (2026-10-16) : vue « Repas et courses » (aperçu compris), la recette est demandée avec elles.
+    const choix = ctx.role === 'gestionnaire' ? null : creerChoixPhotos();
+    const boutonAjouter = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' }, 'Ajouter');
+    const attente = el('p', { class: 'aide', role: 'status' });
+    let envoiEnCours = false;
     const entree = el('input', {
       class: 'champ',
       id: 'nom-du-plat',
@@ -484,18 +490,40 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
       maxlength: NOM_MAX,
       autocomplete: 'off',
       enterkeyhint: 'done',
-      autofocus: true,
+      // Vue « Repas et courses » : pas de clavier d'office, il cacherait les photos (le nom y est facultatif).
+      autofocus: !choix,
       oninput: () => { erreur.hidden = true; },
     });
     return el('form', {
       class: 'formulaire',
       novalidate: true,
-      onsubmit: (evenement) => {
+      onsubmit: async (evenement) => {
         evenement.preventDefault();
-        const resultat = ctx.actions.ajouterPlat(entree.value);
+        if (envoiEnCours) return;
+        let photos = {};
+        if (choix?.aDesPhotos()) {
+          // Les photos se préparent dès leur choix ; on attend la dernière avant d'envoyer, section inerte (un retrait
+          // ou un ajout pendant l'attente serait perdu) ; « Ajouter » garde le focus (aria-disabled, pas disabled).
+          envoiEnCours = true;
+          boutonAjouter.setAttribute('aria-disabled', 'true');
+          choix.bloquer(true);
+          if (choix.enCours()) attente.textContent = 'Préparation des photos…';
+          photos = await choix.valeurs();
+          envoiEnCours = false;
+          boutonAjouter.removeAttribute('aria-disabled');
+          choix.bloquer(false);
+          attente.textContent = '';
+          // Feuille fermée pendant la préparation : rien n'est ajouté.
+          if (!entree.isConnected) return;
+        }
+        const resultat = ctx.actions.ajouterPlat(entree.value, photos);
         if (resultat.erreur) {
           erreur.replaceChildren(
-            el('span', {}, resultat.erreur),
+            el('span', {}, !choix || entree.value.trim()
+              ? resultat.erreur
+              : choix.aDesPhotos()
+                ? 'Les photos n’ont pas pu être préparées. Donnez un nom au plat, ou essayez d’autres photos.'
+                : 'Donnez un nom au plat, ou ajoutez une photo de la recette.'),
             ...(resultat.existant
               ? [el('a', {
                 class: 'bouton bouton-secondaire bouton-plein lien-erreur',
@@ -528,9 +556,11 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
     el('p', { class: 'aide' }, ctx.role === 'gestionnaire'
       ? 'Il apparaîtra avec ⏳ jusqu’à l’ajout de sa recette.'
       : 'Il apparaîtra avec ⏳\u00A0: la recette sera demandée.'),
+    choix?.noeud ?? null,
     erreur,
+    attente,
     el('div', { class: 'actions-feuille' },
-      el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' }, 'Ajouter'),
+      boutonAjouter,
       el('button', { class: 'bouton bouton-texte', type: 'button', onclick: fermer }, 'Annuler'),
     ));
   });

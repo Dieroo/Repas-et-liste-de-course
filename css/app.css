@@ -1208,6 +1208,108 @@ legend.etiquette-champ {
 
 .choix-photo .bouton { padding: 0 12px; }
 
+/* Recette en photos (2026-10-16) : photos choisies dans la feuille « Nouveau plat », photos de la demande sur la fiche. */
+.photos-recette {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.photos-recette legend { padding: 0; }
+
+/* Deux colonnes en police normale, une seule en police agrandie (« 🖼️ Depuis » ne se coupe pas). */
+.photos-recette .choix-photo { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9em), 1fr)); }
+
+.photos-choisies,
+.photos-demande-liste {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.photo-choisie {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.photo-choisie-image {
+  flex: none;
+  width: 72px;
+  height: 96px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--accent-doux);
+}
+
+.photo-choisie-attente {
+  display: grid;
+  place-items: center;
+  font-size: 1.4rem;
+}
+
+.photo-choisie-texte {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.photo-choisie-texte .aide { margin: 0; }
+
+.bouton-etoile { padding: 0 12px; }
+
+/* Photo du plat choisie : contour terracotta, jamais un second bouton principal dans la feuille. */
+.bouton-etoile.choisie {
+  border: 2px solid var(--accent);
+  color: var(--accent);
+}
+
+.aide-envoi { margin: 0; }
+
+/* Photos pas encore lues, ou envoi en cours : bouton éteint mais focalisable. */
+.actions-recette .bouton[aria-disabled="true"],
+.formulaire .bouton[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.photos-demande {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.photos-demande-legende { margin: 0; font-weight: 600; }
+
+.photos-demande-liste {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.photos-demande-liste img {
+  display: block;
+  width: 96px;
+  height: 128px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--accent-doux);
+}
+
 .badges {
   display: flex;
   flex-wrap: wrap;
@@ -5044,6 +5146,37 @@ body:has(.vue.cuisiner) .bandeau-apercu-bouton { display: none; }
 }
 
 .etape-rappel .case-cuisine { min-height: 48px; padding: 2px 10px; }
+
+/* Four et part à mettre de côté (2026-10-15) : bandeau terracotta plein, texte blanc en gras, dessin au trait de l'app
+   (four, assiette) dans sa colonne : on ne peut pas passer à côté, téléphone posé à un mètre. */
+.etape-rappel-four,
+.etape-rappel-part {
+  background: var(--accent);
+  color: var(--sur-accent);
+  box-shadow: 0 2px 10px rgb(180 73 47 / 30%);
+}
+
+.etape-rappel-four .etape-rappel-texte,
+.etape-rappel-part .etape-rappel-texte,
+.ligne-part-avant {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.picto.picto-rappel {
+  width: 1.7em;
+  height: 1.7em;
+  margin-top: -0.15em;
+}
+
+.etape-rappel-part .case-cuisine {
+  background: var(--surface);
+  color: var(--texte);
+  border-radius: 12px;
+}
+
+.ligne-part-avant .picto-rappel { color: var(--accent); width: 1.5em; height: 1.5em; margin-top: 0; }
 
 /* Ce que demande la part mise de côté, sous le texte de l'étape. */
 .etape-cuisine-parts {

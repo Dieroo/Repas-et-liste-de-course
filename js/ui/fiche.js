@@ -31,6 +31,9 @@ import { ouvrirEnSerieEtapes } from './import.js';
 // T5-1 « Cuisiner pas à pas » : bouton sous les étapes.
 import { boutonCuisiner, TEXTES_CUISINE } from '../coeur/cuisine.js';
 import { avecPictogramme } from './etape.js';
+import { creerPhotosDeLaDemande } from './photos-demande.js';
+import { partageDePhotosPossible, partagerImages, telechargerImages } from './fichier.js';
+import { demandeEnPhotos, nomFichierPhoto, nombrePhotos } from '../coeur/photos-demande.js';
 
 // Photos en cours de préparation, au niveau du module : une fiche rouverte pendant la compression le sait.
 const compressions = new Map(); // platId → jeton du dernier choix
@@ -437,7 +440,18 @@ export function creer(ctx) {
   const boutonDemander = el('button', { class: 'bouton bouton-plein', type: 'button', onclick: demanderAClaude }, '📋 Demander à Claude');
   const lienColler = el('a', { class: 'bouton bouton-plein', href: `#/import/${encodeURIComponent(id)}` }, 'Coller la réponse');
   const messageCopie = el('p', { class: 'aide', role: 'status' });
-  const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, boutonDemander, lienColler);
+  // Recette demandée en photos (2026-10-16) : « 📤 Envoyer à Claude » (menu « Partager » d'Android : la demande et
+  // ses photos) et « 📥 Télécharger les photos » ; montrés seulement quand la demande ouverte en porte.
+  const partagePossible = partageDePhotosPossible();
+  const boutonEnvoyer = el('button', { class: 'bouton bouton-plein', type: 'button', hidden: true, onclick: envoyerAClaude },
+    el('span', { 'aria-hidden': 'true' }, '📤\u00A0'), 'Envoyer à Claude');
+  const boutonTelecharger = el('button', { class: 'bouton bouton-plein bouton-secondaire', type: 'button', hidden: true, onclick: telechargerPhotos },
+    el('span', { 'aria-hidden': 'true' }, '📥\u00A0'), 'Télécharger les photos');
+  // Guidage lu avant le toucher : une fois dans le menu « Partager », il est trop tard pour le lire.
+  const aideEnvoi = el('p', { class: 'aide aide-envoi', hidden: true },
+    'Dans le menu «\u00A0Partager\u00A0», choisissez Claude, puis une conversation de votre projet de recettes.');
+  const photosDemande = creerPhotosDeLaDemande(ctx.actions.suivrePhotosDemande ?? (() => () => {}), () => majActionsRecette());
+  const actionsRecette = el('div', { class: 'actions-recette' }, messageCopie, aideEnvoi, boutonEnvoyer, boutonDemander, boutonTelecharger, lienColler);
   // Vrai quand « Demander à Claude » est dans la section « Nouvelle version » (bas de fiche, geste rare) : il y est
   // secondaire, pour que « ＋ Ajouter à la semaine » reste le bouton principal de la fiche.
   let actionsEnBas = false;
@@ -589,7 +603,60 @@ export function creer(ctx) {
       const manque = versionAttendue(etats, profilsDemandeurs(situationsDemande(plat, etats)));
       if (manque) return texteDemandeVariantes([plat], manque.profil);
     }
-    return texteDemandeRecette(plat, { profils: courant.profils ?? [] });
+    return texteDemandeRecette(plat, { profils: courant.profils ?? [], demande: demandeEnPhotos(plat.id, courant.demandes ?? []) });
+  }
+
+  /** Photos de la demande, prêtes à partir : [{ nom, adresse }] ; null tant qu'elles ne sont pas toutes lues. */
+  function photosAEnvoyer(plat) {
+    if (!photosDemande.complet()) return null;
+    return photosDemande.images().map(({ rang, image }) => ({ nom: nomFichierPhoto(plat.id, rang), adresse: image }));
+  }
+
+  /**
+   * « 📤 Envoyer à Claude » : la demande et ses photos, par le menu « Partager » (vers une conversation du projet
+   * Claude). Le texte est aussi copié : si l'app Claude ne garde que les photos, il reste à coller.
+   */
+  async function envoyerAClaude() {
+    const plat = platCourant();
+    if (!plat) return;
+    const images = photosAEnvoyer(plat);
+    if (!images) {
+      messageCopie.textContent = 'Les photos arrivent… Réessayez dans un instant.';
+      majActionsRecette();
+      return;
+    }
+    // Texte copié d'abord (la copie ne consomme pas l'activation du toucher, qui dure quelques secondes), puis partage :
+    // si l'app Claude ne garde que les photos, la demande reste à coller.
+    const texte = demandeDuPlat(plat);
+    const copiee = await copier(texte);
+    const issue = await partagerImages({ texte, images });
+    if (issue === 'partage') {
+      demandeCopiee = true;
+      messageCopie.textContent = copiee
+        ? 'Envoyé. Dans Claude, choisissez une conversation du projet de recettes. La demande est aussi copiée\u00A0: collez-la si elle manque. Puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».'
+        : 'Envoyé. Dans Claude, choisissez une conversation du projet de recettes. Puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».';
+    } else if (issue === 'annule') {
+      messageCopie.textContent = 'Envoi annulé.';
+    } else {
+      messageCopie.textContent = 'L’envoi n’a pas marché. Téléchargez les photos, puis copiez la demande.';
+    }
+    majActionsRecette();
+  }
+
+  /** « 📥 Télécharger les photos » : à joindre à la demande dans Claude (ordinateur, ou envoi qui n'a pas marché). */
+  function telechargerPhotos() {
+    const plat = platCourant();
+    if (!plat) return;
+    const images = photosAEnvoyer(plat);
+    if (!images) {
+      messageCopie.textContent = 'Les photos arrivent… Réessayez dans un instant.';
+    } else {
+      telechargerImages(images);
+      messageCopie.textContent = images.length === 1
+        ? 'Téléchargement lancé. Joignez la photo à la demande dans Claude.'
+        : `Téléchargement lancé (${images.length}\u00A0photos). Joignez-les à la demande dans Claude.`;
+    }
+    majActionsRecette();
   }
 
   async function demanderAClaude() {
@@ -624,8 +691,22 @@ export function creer(ctx) {
    * « Nouvelle version » (bas de fiche), « Demander à Claude » reste secondaire.
    */
   function majActionsRecette() {
-    const principal = demandeCopiee ? lienColler : actionsEnBas ? null : boutonDemander;
+    const plat = platCourant();
+    const enPhotos = Boolean(plat && courant.role === 'gestionnaire' && statutDe(plat) === 'attente'
+      && demandeEnPhotos(plat.id, courant.demandes ?? []));
+    boutonEnvoyer.hidden = !(enPhotos && partagePossible);
+    aideEnvoi.hidden = boutonEnvoyer.hidden;
+    boutonTelecharger.hidden = !enPhotos;
+    // Photos pas encore toutes lues (réseau lent, hors ligne) : boutons inactifs mais focalisables.
+    for (const bouton of [boutonEnvoyer, boutonTelecharger]) {
+      if (enPhotos && !photosDemande.complet()) bouton.setAttribute('aria-disabled', 'true');
+      else bouton.removeAttribute('aria-disabled');
+    }
+    const envoi = enPhotos && partagePossible ? boutonEnvoyer : boutonDemander;
+    const principal = demandeCopiee ? lienColler : actionsEnBas ? null : envoi;
+    boutonEnvoyer.className = `bouton bouton-plein ${principal === boutonEnvoyer ? 'bouton-principal' : 'bouton-secondaire'}`;
     boutonDemander.className = `bouton bouton-plein ${principal === boutonDemander ? 'bouton-principal' : 'bouton-secondaire'}`;
+    boutonDemander.textContent = enPhotos ? '📋 Copier la demande' : '📋 Demander à Claude';
     lienColler.className = `bouton bouton-plein ${principal === lienColler ? 'bouton-principal' : 'bouton-secondaire'}`;
     messageCopie.hidden = !messageCopie.textContent;
     majBlocSemaine();
@@ -798,6 +879,8 @@ export function creer(ctx) {
     const situationRecette = courant.demandesChargees && !jete && statut === 'attente'
       ? etatDemande(plat, null, optionsDemande())
       : null;
+    // Photos de la demande de recette (2026-10-16) : lues tant qu'elle est ouverte et qu'elle en porte.
+    photosDemande.suivre(plat.id, nombrePhotos(situationRecette?.ouverte));
     // Première version qui manque (celle d'un profil qui l'a demandée d'abord) : le bouton unique « Demander à Claude »
     // la demande (demandeDuPlat).
     const versionManquante = gestionnaire && statut !== 'attente' ? versionAttendue(etats, profilsDemandeurs(situations)) : null;
@@ -829,9 +912,12 @@ export function creer(ctx) {
     const carteRecetteAAjouter = () => {
       let textes;
       let bouton = null;
+      const enPhotos = nombrePhotos(situationRecette?.ouverte) > 0;
       if (gestionnaire) {
         textes = [
-          el('p', {}, 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'),
+          el('p', {}, enPhotos
+            ? 'Envoyez la demande et ses photos à votre projet Claude, puis collez sa réponse ici.'
+            : 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'),
           situationRecette?.ouverte ? ligneDemandee(situationRecette.ouverte, auteurs) : null,
         ];
       } else if (situationRecette?.ouverte) {
@@ -851,6 +937,7 @@ export function creer(ctx) {
         el('div', { class: 'carte-ligne' },
           pastille('⏳', 'ocre'),
           el('div', { class: 'carte-texte' }, el('h2', {}, 'Recette à ajouter'), ...textes)),
+        enPhotos ? photosDemande.noeud : null,
         gestionnaire ? actionsRecette : bouton);
     };
     const ingredients = plat.ingredients ?? [];
@@ -1035,6 +1122,7 @@ export function creer(ctx) {
     },
     detruire() {
       arreterPhoto();
+      photosDemande.arreter();
       clearTimeout(minuteurRetrait);
       fichesOuvertes.delete(majBoutonsPhoto);
     },

@@ -14,16 +14,17 @@ import { MARQUEURS_PRECAUTION, VOCABULAIRES, code, texte } from './vocabulaire.j
 import { LOT_PRECAUTIONS, empreinteRelecture, lignesRelecture } from './relecture.js';
 import { ETAPES_PAR_MESSAGE, empreinteEtapes, partsAMettreDeCote } from './realisation.js';
 import { cuissonEnTexte } from './empreinte.js';
+import { estNomDAttente, nombrePhotos } from './photos-demande.js';
 
 export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE };
 
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 8;
+export const VERSION_INSTRUCTIONS = 10;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '3b47db30d958';
+export const EMPREINTE_INSTRUCTIONS = 'f91bd06dd97d';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -125,21 +126,31 @@ function lignesVersions(profils, plat = null) {
   })];
 }
 
+/** Valeur de la ligne `nom:` d'une recette demandée en photos sans nom (Claude le lit sur les photos, section 5). */
+export const NOM_A_TROUVER = 'à trouver dans les photos';
+
 /**
  * (a) Texte copié par « Demander à Claude » pour une recette à ajouter. Sans profil qui a des règles : texte de T1b
  * (plus la ligne de version des instructions). Sinon, une ligne `versions:` par profil contraint (lignesVersions),
- * pour que Claude rende la fiche complète avec leurs variantes.
+ * pour que Claude rende la fiche complète avec leurs variantes. `demande` : la demande de recette ouverte ; si elle
+ * porte des photos (2026-10-16), une ligne `photos: <n>` (jointes au message) et, sans nom donné, `nom: à trouver dans
+ * les photos` ; l'`id` reste celui du plat.
  */
-export function texteDemandeRecette(plat, { profils = [] } = {}) {
+export function texteDemandeRecette(plat, { profils = [], demande = null } = {}) {
   const versions = lignesVersions(profils, plat);
+  const photos = nombrePhotos(demande);
   const lignes = [
     `DEMANDE-RECETTE ${FORMAT}`,
     LIGNE_INSTRUCTIONS,
     `id: ${ligne(plat?.id)}`,
-    `nom: ${ligne(plat?.nom)}`,
+    // Nom à trouver seulement tant que la fiche garde son nom d'attente (pas renommée par « Modifier »).
+    `nom: ${photos && demande.nomATrouver === true && estNomDAttente(plat?.nom) ? NOM_A_TROUVER : ligne(plat?.nom)}`,
+    ...(photos ? [`photos: ${photos}`] : []),
     ...versions,
   ];
-  lignes.push('(Ajoute un lien, une photo ou la recette dictée.)');
+  lignes.push(photos
+    ? `(La recette est dans ${photos === 1 ? 'la photo jointe' : `les ${photos} photos jointes`} à ce message : lis-la en entier.)`
+    : '(Ajoute un lien, une photo ou la recette dictée.)');
   if (versions.length) lignes.push(CONSIGNE_RECETTE);
   return lignes.join('\n');
 }
