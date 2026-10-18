@@ -73,6 +73,7 @@ const FICHIERS_APP = [
   './js/ui/courses.js',
   './js/ui/plat-semaine.js',
   './js/ui/choisir-plats.js',
+  './js/ui/changer-plats.js',
   './js/ui/article.js',
   './js/ui/drive.js',
   './js/ui/plats.js',

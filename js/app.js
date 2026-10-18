@@ -65,11 +65,12 @@ import {
   lireSemaine, semaineAPreparer, semaineEnCours, appliquerChamps, estDansLaSemaine, texteDates, aDesPlats,
   ecrituresAjout, ecrituresRetrait, ecrituresRemise, ecrituresStyle, ecrituresReglage, EFFACER, statutSemaine,
   validerDates, texteErreurDates, cheminSur, semaineVisee, ecrituresAjoutGroupe, ecrituresRetraitGroupe,
-  ecrituresRemplacement, aDesReglagesEcrits,
+  ecrituresRemplacement, ecrituresRemplacements, aDesReglagesEcrits,
 } from './coeur/semaine.js';
 import {
   proposerPlats, proposerDesserts, nombreAProposer, apercuProposition, nombreDeDessertsParDefaut,
   autreIdee as autreIdeeDe, peutChangerDIdee, annonceProposition, texteAutreIdee, TEXTES_PROPOSER,
+  changerDesPlats as changerDesPlatsDe, choixDeLaMer, annonceChangement,
 } from './coeur/proposition.js';
 import {
   listeDeCourses, ecrituresCoche, ecrituresCocheArticle, ecrituresRachat, preparerAjout, texteAjoutArticle,
@@ -617,6 +618,29 @@ function autreIdeePour(semaineId, platId) {
   return visee ? autreIdeeDe(etat.plats, platId, optionsProposition(visee)) : null;
 }
 
+/**
+ * Plats que « 🔄 Changer des plats » (2026-10-18) peut changer dans une semaine : plats (type `plat`, jamais un dessert)
+ * actifs, avec leur recette, avant les courses faites (peutChangerDIdee), dans l'ordre de la semaine → [{ platId, nom }].
+ */
+function changeablesPour(semaineId) {
+  if (!semainesLues()) return [];
+  const semaine = semaineParId(semaineId);
+  if (!semaine) return [];
+  const actifs = new Map(platsSepares().actifs.map((plat) => [plat.id, plat]));
+  return Object.entries(semaine.plats)
+    .filter(([platId, entree]) => estDansLaSemaine(entree) && actifs.has(platId)
+      && (actifs.get(platId).type ?? 'plat') === 'plat' && peutChangerDIdee(semaine, actifs.get(platId)))
+    .sort(([a, ea], [b, eb]) => (ea.ajouteLe - eb.ajouteLe) || (a < b ? -1 : a > b ? 1 : 0))
+    .map(([platId]) => ({ platId, nom: nomBrut(platId) }));
+}
+
+/** « Par quoi ? » de « Changer des plats » pour une semaine : { total, familles } (coeur/proposition.js › choixDeLaMer). */
+function choixDeLaMerPour(semaineId) {
+  if (!semainesLues()) return { total: 0, familles: [] };
+  const visee = cibleProposition(semaineParId(semaineId));
+  return visee ? choixDeLaMer(etat.plats, optionsProposition(visee)) : { total: 0, familles: [] };
+}
+
 /** Nom brut d'un plat (annonce de « 🔄 Une autre idée », qui met ses propres guillemets). */
 function nomBrut(platId) {
   return String(etat.plats.find((plat) => plat?.id === platId)?.nom ?? '').replace(/\s+/g, ' ').trim() || 'Ce plat';
@@ -680,7 +704,9 @@ function instructionsAJour() {
  * une semaine visée : bouton « ✨ Proposer 4 plats », ligne sans proposition, bouton « 🍰 Proposer des desserts » ;
  * null tant que tout n'est pas lu ; gardé tant que rien ne change), `proposition.dessertsParDefaut(cible)` (nombre
  * prérempli de « Combien de desserts ? »), `proposition.raison(semaineId, platId)` (raison retenue sur ce téléphone,
- * ou null) et `proposition.autreIdee(semaineId, platId)` (remplaçant de « 🔄 Une autre idée », ou null).
+ * ou null), `proposition.autreIdee(semaineId, platId)` (remplaçant de « 🔄 Une autre idée », ou null) ; « 🔄 Changer
+ * des plats » (2026-10-18) : `proposition.changeables(semaineId)` ([{ platId, nom }]) et
+ * `proposition.choixDeLaMer(semaineId)` ({ total, familles }).
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -737,6 +763,8 @@ function contexteCourant() {
       dessertsParDefaut: dessertsParDefautPour,
       raison: raisonProposee,
       autreIdee: autreIdeePour,
+      changeables: changeablesPour,
+      choixDeLaMer: choixDeLaMerPour,
     },
     actions,
   };
@@ -1859,6 +1887,68 @@ const actions = {
       },
     });
     return { code: 'ok', nouveau: nouveauId };
+  },
+  /**
+   * « 🔄 Changer des plats » (2026-10-18, les deux membres, aperçu compris ; feuille ouverte sous les plats de la
+   * semaine) : chacun des `platIds` (plats changeables de la semaine, changeablesPour) reçoit un remplaçant, comme
+   * autant de « 🔄 Une autre idée » (coeur/proposition.js › changerDesPlats ; `mer` : null, 'tout' ou une famille de
+   * FAMILLES_MER), en UN lot (coeur/semaine.js › ecrituresRemplacements). Les plats changés ne sont plus proposés
+   * pendant la visite (sauf après « Annuler ») ; les raisons des nouveaux sont gardées sur ce téléphone. Annonce
+   * (annonceChangement) avec « Annuler » pendant 10 s (tous les échanges défaits, puis `apresAnnulation(ancienId)` du
+   * premier). `avant(nouveauId)` : appelé une fois le lot prêt, juste avant de l'écrire (la feuille se ferme là).
+   * `semaineId` : sans lui, la semaine montrée.
+   * → { code: 'ok', faites: [{ ancienId, nouveauId }], restes: [ancienId] } | { code } : aucune (aucun remplaçant :
+   *   rien n'est écrit ni annoncé ; `restes`), invalide, faites, inutile, chargement, echec, refuse.
+   */
+  changerDesPlats(platIds, { semaineId = null, mer = null, apresAnnulation = null, avant = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!semainesLues()) return { code: 'chargement' };
+    const semaine = semaineParId(semaineId);
+    if (!semaine) return { code: 'invalide' };
+    const permis = new Set(changeablesPour(semaine.id).map((c) => c.platId));
+    const ids = [...new Set(Array.isArray(platIds) ? platIds : [])].filter((id) => permis.has(id));
+    if (!ids.length) return { code: 'invalide' };
+    const { remplacements, restes } = changerDesPlatsDe(etat.plats, ids, {
+      semaine, semaines: etat.semaines, profils: etat.profils, evaluer: compat, refuses: refusesDe(semaine.id), mer,
+    });
+    if (!remplacements.length) return { code: 'aucune', restes };
+    const ecritures = ecrituresRemplacements(semaine, remplacements.map((r) => ({ ancienId: r.ancienId, nouveauId: r.platId })));
+    if (ecritures.code) return ecritures;
+    const { faites } = ecritures;
+    if (typeof avant === 'function') avant(faites[0].nouveauId);
+    if (!ecrireDansLaSemaine(ecritures, TEXTES_PROPOSER.changer.echec)) return { code: 'echec' };
+    const refuses = new Map(etat.refuses);
+    refuses.set(semaine.id, new Set([...(refuses.get(semaine.id) ?? []), ...faites.map((f) => f.ancienId)]));
+    etat.refuses = refuses;
+    const raisons = new Map(remplacements.map((r) => [r.platId, r.raison]));
+    for (const { nouveauId } of faites) etat.proposes.set(`${semaine.id}|${nouveauId}`, raisons.get(nouveauId) ?? null);
+    rendre();
+    annoncer(annonceChangement({ remplaces: faites.length, voulus: ids.length, mer }), {
+      action: {
+        libelle: 'Annuler',
+        faire: () => {
+          const actuelle = semaineParId(semaine.id);
+          const inverse = actuelle ? ecrituresRemplacements(actuelle, faites, { inverse: true }) : { code: 'invalide' };
+          if (inverse.code === 'inutile') {
+            annoncer(TEXTES_PROPOSER.erreurs.inutile);
+            return;
+          }
+          if (inverse.code || !ecrireDansLaSemaine(inverse, TEXTES_PROPOSER.changer.echecRemise)) return;
+          for (const { nouveauId } of inverse.faites) etat.proposes.delete(`${semaine.id}|${nouveauId}`);
+          // Les plats remis, gardés exprès, redeviennent proposables (nouvelle Map : les aperçus sont recalculés).
+          const refusesApres = new Map(etat.refuses);
+          const reste = new Set(refusesApres.get(semaine.id) ?? []);
+          for (const { ancienId } of inverse.faites) reste.delete(ancienId);
+          if (reste.size) refusesApres.set(semaine.id, reste);
+          else refusesApres.delete(semaine.id);
+          etat.refuses = refusesApres;
+          rendre();
+          if (typeof apresAnnulation === 'function') apresAnnulation(inverse.faites[0].ancienId);
+        },
+      },
+      duree: DUREE_ANNONCE_PROPOSITION_MS,
+    });
+    return { code: 'ok', faites, restes };
   },
   /**
    * Mer / Végétale pour un profil (carte du plat, feuille du plat) : `plats.<id>.styles.<profilId>` ; le style par

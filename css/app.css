@@ -4924,6 +4924,15 @@ body:has(.barre-courses) .annonce {
 
 .feuille-desserts .actions-feuille { margin-top: 0; }
 
+/* « Changer des plats » (2026-10-18) : plats cochés, « Par quoi ? », produit de la mer. */
+.feuille-changer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feuille-changer .actions-feuille { margin-top: 0; }
+
 /* ——— Cuisiner pas à pas (T5-1, `#/cuisiner/<id>`) ——— */
 
 /* Lisible téléphone posé à un mètre : texte de 1,5 rem (« A+ » : 1,8 rem), titres en Fraunces, barre du bas de 72 px.
