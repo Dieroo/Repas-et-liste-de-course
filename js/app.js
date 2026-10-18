@@ -877,7 +877,9 @@ function deciderAccueil() {
 
 // Après « C’est parti » ou « Dire ce qui me plaît », l'écran suivant se monte sous le doigt (la barre « C’est parti »
 // est à la place des onglets de Semaine, « Dire ce qui me plaît » à celle des gestes de Découvrir) : un second toucher
-// impatient, pendant ce délai, est ignoré, pour qu'il ne change ni d'écran ni de note.
+// impatient, pendant ce délai, est ignoré, pour qu'il ne change ni d'écran ni de note. De même quand une feuille se
+// ferme sur une écriture (« Changer des plats », « 🔄 Une autre idée », ✨ et 🍰 d'une feuille, 2026-10-18) : le second
+// toucher tomberait sur « Annuler » de l'annonce, ou sur la carte du plat arrivé.
 const GARDE_TOUCHER_MS = 500;
 
 /**
@@ -1853,7 +1855,10 @@ const actions = {
     const ecritures = ecrituresRemplacement(semaine, platId, idee.platId);
     if (ecritures.code) return ecritures;
     const reglages = aDesReglagesEcrits(semaine.plats[platId]);
-    if (typeof avant === 'function') avant(idee.platId);
+    if (typeof avant === 'function') {
+      avant(idee.platId);
+      ignorerToucherFantome();
+    }
     if (!ecrireDansLaSemaine(ecritures, 'Ce plat n’a pas pu être changé. Réessayez.')) return { code: 'echec' };
     const refuses = new Map(etat.refuses);
     refuses.set(semaine.id, new Set([...(refuses.get(semaine.id) ?? []), platId]));
@@ -1915,7 +1920,11 @@ const actions = {
     const ecritures = ecrituresRemplacements(semaine, remplacements.map((r) => ({ ancienId: r.ancienId, nouveauId: r.platId })));
     if (ecritures.code) return ecritures;
     const { faites } = ecritures;
-    if (typeof avant === 'function') avant(faites[0].nouveauId);
+    const reglages = faites.some((f) => aDesReglagesEcrits(semaine.plats[f.ancienId]));
+    if (typeof avant === 'function') {
+      avant(faites[0].nouveauId);
+      ignorerToucherFantome();
+    }
     if (!ecrireDansLaSemaine(ecritures, TEXTES_PROPOSER.changer.echec)) return { code: 'echec' };
     const refuses = new Map(etat.refuses);
     refuses.set(semaine.id, new Set([...(refuses.get(semaine.id) ?? []), ...faites.map((f) => f.ancienId)]));
@@ -1923,14 +1932,17 @@ const actions = {
     const raisons = new Map(remplacements.map((r) => [r.platId, r.raison]));
     for (const { nouveauId } of faites) etat.proposes.set(`${semaine.id}|${nouveauId}`, raisons.get(nouveauId) ?? null);
     rendre();
-    annoncer(annonceChangement({ remplaces: faites.length, voulus: ids.length, mer }), {
+    annoncer(annonceChangement({ remplaces: faites.length, voulus: ids.length, mer, reglages }), {
       action: {
         libelle: 'Annuler',
         faire: () => {
           const actuelle = semaineParId(semaine.id);
           const inverse = actuelle ? ecrituresRemplacements(actuelle, faites, { inverse: true }) : { code: 'invalide' };
-          if (inverse.code === 'inutile') {
-            annoncer(TEXTES_PROPOSER.erreurs.inutile);
+          if (inverse.code === 'inutile' || inverse.code === 'faites') {
+            // Rien à remettre (plats changés sur l'autre téléphone, ou courses faites entre-temps) : on le dit, et le
+            // focus, que le bouton disparu sous le doigt laissait sur la page, revient à la carte « prochaine action ».
+            annoncer(inverse.code === 'faites' ? TEXTES_PROPOSER.changer.faites : TEXTES_PROPOSER.erreurs.inutile);
+            if (typeof apresAnnulation === 'function') apresAnnulation(null);
             return;
           }
           if (inverse.code || !ecrireDansLaSemaine(inverse, TEXTES_PROPOSER.changer.echecRemise)) return;
@@ -2681,7 +2693,10 @@ function proposerDansLaSemaine(type, {
   const { proposition, ecritures } = essai;
   if (ecritures.code === 'chevauche' && !feuille) annoncer(TEXTES_PROPOSER.erreurs.chevauche);
   if (ecritures.code) return ecritures;
-  if (typeof avant === 'function') avant(ecritures.ajoutes[0]?.platId ?? null);
+  if (typeof avant === 'function') {
+    avant(ecritures.ajoutes[0]?.platId ?? null);
+    ignorerToucherFantome();
+  }
   if (!ecrireDansLaSemaine(ecritures, TEXTES_PROPOSER.erreurs.echec)) return { code: 'echec' };
   const ajoutes = ecritures.ajoutes;
   const entres = new Set(ajoutes.map((a) => a.platId));

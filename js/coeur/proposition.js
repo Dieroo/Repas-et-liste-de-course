@@ -100,7 +100,8 @@ export const POIDS_PIECE_LEGUMES = Object.freeze({
  * Produits de la mer (« 🔄 Changer des plats », 2026-10-18) : familles proposées dans « Quel produit ? », dans cet
  * ordre. `mots` : suites de mots d'une clé de produit (cleProduit, au pluriel près) qui disent la famille, où qu'elles
  * soient dans la clé (« pavé de saumon », « dos de cabillaud », « noix de Saint-Jacques ») ; `au` : la famille dans une
- * phrase (« Pas d’autre plat au saumon pour l’instant. »). Données génériques, sans rien du foyer.
+ * phrase (« Pas d’autre plat au saumon pour l’instant. » ; « avec du lieu », « avec du bar » : « au lieu » se lirait
+ * « à la place »). Données génériques, sans rien du foyer.
  */
 export const FAMILLES_MER = Object.freeze([
   { id: 'saumon', nom: 'Saumon', au: 'au saumon', mots: [['saumon']] },
@@ -108,18 +109,18 @@ export const FAMILLES_MER = Object.freeze([
   { id: 'thon', nom: 'Thon', au: 'au thon', mots: [['thon']] },
   { id: 'crevette', nom: 'Crevettes', au: 'aux crevettes', mots: [['crevette'], ['gamba']] },
   { id: 'colin', nom: 'Colin', au: 'au colin', mots: [['colin']] },
-  { id: 'lieu', nom: 'Lieu', au: 'au lieu', mots: [['lieu']] },
+  { id: 'lieu', nom: 'Lieu', au: 'avec du lieu', mots: [['lieu']] },
   { id: 'merlu', nom: 'Merlu', au: 'au merlu', mots: [['merlu']] },
   { id: 'poisson-blanc', nom: 'Poisson blanc', au: 'au poisson blanc', mots: [['poisson', 'blanc']] },
   { id: 'truite', nom: 'Truite', au: 'à la truite', mots: [['truite']] },
   { id: 'sardine', nom: 'Sardines', au: 'aux sardines', mots: [['sardine']] },
   { id: 'maquereau', nom: 'Maquereau', au: 'au maquereau', mots: [['maquereau']] },
   { id: 'dorade', nom: 'Dorade', au: 'à la dorade', mots: [['dorade'], ['daurade']] },
-  { id: 'bar', nom: 'Bar', au: 'au bar', mots: [['bar'], ['loup', 'de', 'mer']] },
+  { id: 'bar', nom: 'Bar', au: 'avec du bar', mots: [['bar'], ['loup', 'de', 'mer']] },
   { id: 'sole', nom: 'Sole', au: 'à la sole', mots: [['sole']] },
   { id: 'lotte', nom: 'Lotte', au: 'à la lotte', mots: [['lotte']] },
-  { id: 'poisson-pane', nom: 'Poisson pané', au: 'au poisson pané', mots: [['poisson', 'pane']] },
-  { id: 'saint-jacques', nom: 'Saint-Jacques', au: 'aux saint-jacques', mots: [['saint', 'jacque']] },
+  { id: 'poisson-pane', nom: 'Poisson pané', au: 'au poisson pané', mots: [['poisson', 'pane'], ['batonnet', 'de', 'poisson']] },
+  { id: 'saint-jacques', nom: 'Saint-Jacques', au: 'aux saint-jacques', mots: [['saint', 'jacque'], ['st', 'jacque']] },
   { id: 'moule', nom: 'Moules', au: 'aux moules', mots: [['moule']] },
   { id: 'calamar', nom: 'Calamars', au: 'aux calamars', mots: [['calamar'], ['calmar'], ['encornet']] },
   { id: 'seiche', nom: 'Seiche', au: 'à la seiche', mots: [['seiche']] },
@@ -134,11 +135,15 @@ export const FAMILLES_MER = Object.freeze([
   { id: 'espadon', nom: 'Espadon', au: 'à l’espadon', mots: [['espadon']] },
 ].map((famille) => Object.freeze({ ...famille, mots: Object.freeze(famille.mots.map((m) => Object.freeze([...m]))) })));
 /**
- * Produits de la mer qui ne font pas un plat de la mer (premier mot de la clé) : un assaisonnement ou une garniture
- * (sauce nuoc-mâm, sauce Worcestershire, fumet, œufs de lump). Les anchois aussi, où que soit le mot (« filet
- * d'anchois » d'une pizza) : lireMer.
+ * Produits de la mer qui ne font pas un plat de la mer (premier mot de la clé) : un assaisonnement, un fond de sauce
+ * ou une garniture (sauce nuoc-mâm, fumet, fond de poisson, court-bouillon, dashi, encre de seiche, œufs de lump).
+ * CONDIMENTS_MER_PARTOUT : où que soit le mot (« filet d'anchois » d'une pizza, « worcestershire » seul) : lireMer.
  */
-export const CONDIMENTS_MER = Object.freeze(['nuoc', 'sauce', 'fumet', 'bouillon', 'anchoi', 'huile', 'pate', 'creme', 'oeuf', 'tarama']);
+export const CONDIMENTS_MER = Object.freeze(['nuoc', 'sauce', 'fumet', 'bouillon', 'anchoi', 'huile', 'pate', 'creme', 'oeuf', 'tarama',
+  'fond', 'court', 'dashi', 'bonite', 'garum', 'colatura', 'encre']);
+export const CONDIMENTS_MER_PARTOUT = Object.freeze(['anchoi', 'worcestershire', 'worcester']);
+/** Repères qu'un profil « Pas de viande » ne mange pas (comme regles.js) : un plat qui en a n'est jamais « de la mer ». */
+const REPERES_DE_VIANDE = Object.freeze(['viande', 'bouillon_viande', 'gelatine_animale', 'graisse_animale']);
 
 const ID_SUR = /^[a-z0-9-]+$/;
 /** Mots d'un produit qui ne disent pas le légume (couleur, état) : jamais cherchés dans le nom du plat. */
@@ -400,9 +405,10 @@ function contientLaSuite(mots, suite) {
 
 /**
  * Plat de la mer, pour « 🔄 Changer des plats » → { deLaMer, familles: [id de FAMILLES_MER, dans leur ordre] }, sur la
- * recette seule (jamais ses versions). `deLaMer` : un plat qui a sa recette, aucune viande (marqueur effectif
- * `viande` : un plat de la mer se mange tel quel par un profil qui ne mange pas de viande) et au moins un ingrédient
- * marqué `poisson` ou `fruits_de_mer` qui n'est pas un assaisonnement (CONDIMENTS_MER, anchois). `familles` : celles de ses
+ * recette seule (jamais ses versions). `deLaMer` : un plat qui a sa recette, ni viande, ni bouillon, gélatine ou graisse
+ * animale (marqueurs effectifs, REPERES_DE_VIANDE : un plat de la mer se mange tel quel par un profil qui ne mange pas
+ * de viande) et au moins un ingrédient marqué `poisson` ou `fruits_de_mer` qui n'est pas un assaisonnement
+ * (CONDIMENTS_MER, CONDIMENTS_MER_PARTOUT). `familles` : celles de ses
  * produits de la mer (FAMILLES_MER) ; un produit d'aucune famille compte seulement pour « Peu importe ».
  */
 export function lireMer(plat) {
@@ -413,10 +419,10 @@ export function lireMer(plat) {
   for (const ingredient of plat.ingredients) {
     if (!estObjet(ingredient)) continue;
     const marqueurs = marqueursEffectifs(ingredient);
-    if (marqueurs.has('viande')) return rien;
+    if (REPERES_DE_VIANDE.some((m) => marqueurs.has(m))) return rien;
     if (!marqueurs.has('poisson') && !marqueurs.has('fruits_de_mer')) continue;
     const mots = motsCles(ingredient.produit);
-    if (!mots.length || CONDIMENTS_MER.includes(mots[0]) || mots.includes('anchoi')) continue;
+    if (!mots.length || CONDIMENTS_MER.includes(mots[0]) || CONDIMENTS_MER_PARTOUT.some((m) => mots.includes(m))) continue;
     marin = true;
     for (const famille of FAMILLES_MER) if (famille.mots.some((suite) => contientLaSuite(mots, suite))) trouvees.add(famille.id);
   }
@@ -837,8 +843,10 @@ export function autreIdee(tousLesPlats, platId, {
   const groupe = vu.rejet ? null : vu.groupe;
   const rang = rangsDeDepartage(ctx.candidats, graine ?? `${graineProposition(cible, semaines)}|autre`);
   const presents = presentsDeLaCible(ctx, type);
+  // Un plat de la mer est pour toute la famille : jamais un plat que quelqu'un ne mange pas (palier 3).
+  const paliers = voulu ? [1, 2] : [1, 2, 3];
   const chercher = (liste) => {
-    for (const palier of [1, 2, 3]) {
+    for (const palier of paliers) {
       if (palier === 3 && ctx.ecartesCible >= ECARTES_MAX) break;
       const duPalier = liste.filter((c) => c.palier === palier);
       const retenu = meilleur(duPalier.filter((c) => c.groupe === groupe), palier, presents, rang)
@@ -857,12 +865,12 @@ export function autreIdee(tousLesPlats, platId, {
 /**
  * « Par quoi ? » de « 🔄 Changer des plats » → { total, familles: [{ id, nom, nombre }] } : les plats de la mer
  * (lireMer) qui pourraient entrer dans la cible (filtre dur des propositions, type `plat`, plats de la cible et
- * refusés exclus, tous paliers), `total` en tout et `familles` dans l'ordre de FAMILLES_MER, sans famille vide. Un
+ * refusés exclus ; paliers 1 et 2 seulement, comme autreIdee avec `mer` : tout le monde en mange), `total` en tout et `familles` dans l'ordre de FAMILLES_MER, sans famille vide. Un
  * plat compte dans chacune de ses familles. Cible illisible : { total: 0, familles: [] }.
  */
 export function choixDeLaMer(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
   const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type: 'plat', refuses });
-  const marins = ctx ? ctx.candidats.filter((c) => c.mer.deLaMer) : [];
+  const marins = ctx ? ctx.candidats.filter((c) => c.mer.deLaMer && c.palier < 3) : [];
   const familles = FAMILLES_MER.map((f) => ({ id: f.id, nom: f.nom, nombre: marins.filter((c) => c.mer.familles.includes(f.id)).length }))
     .filter((f) => f.nombre > 0);
   return { total: marins.length, familles };
@@ -951,7 +959,7 @@ export const TEXTES_PROPOSER = Object.freeze({
     emoji: '🔄',
     libelle: 'Changer des plats',
     titre: 'Changer des plats',
-    quels: 'Quels plats\u00A0?',
+    quels: 'Quels plats remplacer\u00A0?',
     parQuoi: 'Par quoi\u00A0?',
     app: 'Ce que l’app propose',
     merEmoji: '🐟',
@@ -960,6 +968,8 @@ export const TEXTES_PROPOSER = Object.freeze({
     peuImporte: 'Peu importe',
     aucunCoche: 'Cochez au moins un plat.',
     sansMer: 'Pas encore de plat de la mer à proposer.',
+    autrePlat: 'Un plat précis en tête\u00A0? Ajoutez-le par «\u00A0Choisir d’autres plats\u00A0», puis «\u00A0Nouveau plat\u00A0».',
+    faites: 'Les courses sont faites\u00A0: les plats ne se changent plus.',
     fermer: 'Fermer',
     echec: 'Les plats n’ont pas pu être changés. Réessayez.',
     echecRemise: 'Les plats n’ont pas pu être remis. Réessayez.',
@@ -1005,9 +1015,10 @@ export function libelleChanger(nombre) {
   return n === 1 ? 'Remplacer un plat' : `Remplacer ${n}\u00A0plats`;
 }
 
-/** Puce d'une famille de la mer (choixDeLaMer) : « Saumon · 3 ». */
+/** Puce d'une famille de la mer (choixDeLaMer) : « Saumon · 3 plats », « Crevettes · 1 plat » (le nombre jamais seul à la ligne). */
 export function libelleFamille(famille) {
-  return `${reduire(famille?.nom)} · ${Number.isInteger(famille?.nombre) ? famille.nombre : 0}`;
+  const n = Number.isInteger(famille?.nombre) && famille.nombre > 0 ? famille.nombre : 0;
+  return `${reduire(famille?.nom)}\u00A0· ${n}\u00A0plat${n > 1 ? 's' : ''}`;
 }
 
 /** « au saumon », « de la mer » (« tout ») ; null sans choix de la mer. */
@@ -1026,15 +1037,17 @@ export function texteAucunChangement(mer = null) {
  * Annonce de « Changer des plats », courte (elle passe sur les cartes changées) : « 2 plats changés. », « Un plat
  * changé. » ; moins que voulu : « Un plat changé sur 2 : pas d’autre plat au saumon pour l’instant. » (« … de la mer… »,
  * sans choix de la mer « … pas d’autre idée pour l’instant. »). Ni noms ni dates : les cartes changées sont à l'écran.
+ * `reglages` (un plat changé avait des invités ou des repas écrits, partis avec lui) : « … Invités et repas sont à
+ * régler de nouveau. », comme « 🔄 Une autre idée ».
  */
-export function annonceChangement({ remplaces = 0, voulus = 0, mer = null } = {}) {
+export function annonceChangement({ remplaces = 0, voulus = 0, mer = null, reglages = false } = {}) {
   const n = Number.isInteger(remplaces) && remplaces > 0 ? remplaces : 0;
   const total = Number.isInteger(voulus) && voulus > n ? voulus : n;
   const combien = n === 1 ? 'Un plat changé' : `${n}\u00A0plats changés`;
-  if (total === n) return `${combien}.`;
   const tournure = tournureMer(mer);
   const suite = tournure ? `pas d’autre plat ${tournure} pour l’instant.` : 'pas d’autre idée pour l’instant.';
-  return `${combien} sur ${total}\u00A0: ${suite}`;
+  const phrase = total === n ? `${combien}.` : `${combien} sur ${total}\u00A0: ${suite}`;
+  return reglages && n > 0 ? `${phrase} ${TEXTES_PROPOSER.autreIdee.reglages}` : phrase;
 }
 
 /**

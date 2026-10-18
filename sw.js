@@ -9,10 +9,10 @@
 //   et le cache est réparé à chaque ouverture en ligne si un autre site l'a effacé.
 
 const PREFIXE = 'repas-courses-';
-const VERSION = '06a65e4f5428';
+const VERSION = '2de46da616af';
 const VERSION_SDK = '12.19.0';
 // Date de publication affichée dans le panneau du profil (« Version du … ») : à changer à chaque mise en ligne.
-const PUBLIEE = '2026-10-16';
+const PUBLIEE = '2026-10-18';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
 const CACHE_EXTERNE = `${PREFIXE}externe-${VERSION_SDK}`;

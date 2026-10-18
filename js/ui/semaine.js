@@ -12,7 +12,7 @@
 // dans la liste), avec un interrupteur « Pas cette semaine » par préparation (actions.sauterPreparation).
 // T4-0 : semaine sans plat, « ✨ Proposer 4 plats » est le bouton principal de la carte (« ＋ Choisir les plats » passe
 // secondaire) ; « 🍰 Proposer des desserts » sous « ＋ Choisir d'autres plats » (D6, feuille « Combien de desserts ? »).
-// « 🔄 Changer des plats » dessous (2026-10-18, feuille « Changer des plats » : plats cochés, « Par quoi ? »).
+// « 🔄 Changer des plats » entre les deux (2026-10-18, feuille « Changer des plats » : plats cochés, « Par quoi ? »).
 // Rien n'est écrit à l'ouverture : chaque section se met à jour en place (`maj`), la liste de courses suit.
 import { el, enteteVue, pastille, ecrireTexte, montrerAuDessusDeLAnnonce, reconcilier, vibrer } from './dom.js';
 import { prenomDe } from './profil.js';
@@ -754,9 +754,10 @@ function creerSectionPlats(choisir, ouvrir, desserts, changer) {
   const boutonDesserts = el('button', { class: 'bouton bouton-secondaire bouton-plein bouton-desserts', type: 'button', hidden: true, 'data-action': 'desserts' },
     el('span', { 'aria-hidden': 'true' }, TEXTES_PROPOSER.desserts.emoji), TEXTES_PROPOSER.desserts.libelle);
   boutonDesserts.addEventListener('click', () => desserts(boutonDesserts));
-  // « 🔄 Changer des plats » (2026-10-18) : sous les plats, tant que la semaine montrée a un plat qu'on peut changer
-  // (plat avec sa recette, avant les courses faites) ; feuille « Changer des plats ».
-  const boutonChanger = el('button', { class: 'bouton bouton-secondaire bouton-plein bouton-changer', type: 'button', hidden: true, 'data-action': 'changer' },
+  // « 🔄 Changer des plats » (2026-10-18) : sous « ＋ Choisir d'autres plats », caché avec lui (les deux derniers jours,
+  // les plats vont à la semaine suivante), tant que la semaine montrée a un plat qu'on peut changer (plat avec sa
+  // recette, avant les courses faites) ; feuille « Changer des plats ».
+  const boutonChanger = el('button', { class: 'bouton bouton-secondaire bouton-plein bouton-changer-plats', type: 'button', hidden: true, 'data-action': 'changer' },
     el('span', { 'aria-hidden': 'true' }, TEXTES_PROPOSER.changer.emoji), TEXTES_PROPOSER.changer.libelle);
   boutonChanger.addEventListener('click', () => changer(boutonChanger));
   const noeud = el('section', { class: 'section section-plats-semaine', 'aria-labelledby': 'titre-plats-semaine', hidden: true },
@@ -766,8 +767,8 @@ function creerSectionPlats(choisir, ouvrir, desserts, changer) {
     horsSemaine,
     chaqueSemaine.noeud,
     boutonAutres,
-    boutonDesserts,
-    boutonChanger);
+    boutonChanger,
+    boutonDesserts);
 
   function maj(ctx) {
     const pret = ctx.semainesChargees && ctx.platsCharges !== false && ctx.profilsCharges !== false;
@@ -791,7 +792,7 @@ function creerSectionPlats(choisir, ouvrir, desserts, changer) {
     chaqueSemaine.maj(ctx, Boolean(lue) && montres.length > 0);
     boutonAutres.hidden = !montres.length || peutPreparerLaSuivante(lue, aujourdhuiDe(ctx));
     boutonDesserts.hidden = boutonAutres.hidden || !(apercuVise(ctx)?.desserts > 0);
-    boutonChanger.hidden = !lue || !montres.length || !(ctx.proposition?.changeables?.(lue.id)?.length > 0);
+    boutonChanger.hidden = boutonAutres.hidden || !(ctx.proposition?.changeables?.(lue?.id)?.length > 0);
     noeud.hidden = !montres.length && !jetes.length && enCeMoment.noeud.hidden;
     if (carteActive && !carteActive.isConnected) focusApresRetrait(ordreAvant.indexOf(carteActive), ordreAvant);
   }
@@ -1001,7 +1002,8 @@ export function creer(ctx) {
 
   /**
    * « 🔄 Changer des plats » : feuille « Changer des plats » ; après le changement, focus sur la carte du premier plat
-   * arrivé ; fermée sans rien changer, le focus revient au bouton.
+   * arrivé ; fermée sans rien changer, le focus revient au bouton, ou, s'il a disparu (courses faites sur l'autre
+   * téléphone), à l'action de la carte « prochaine action ».
    */
   function changer(depuis) {
     ouvrirChangerDesPlats(lireContexte, {
@@ -1009,6 +1011,7 @@ export function creer(ctx) {
       onFermer: (suite) => {
         if (suite?.viser) viserCarte(suite.viser);
         else if (visible(depuis)) depuis.focus();
+        else apresAnnulation(null);
       },
     });
   }

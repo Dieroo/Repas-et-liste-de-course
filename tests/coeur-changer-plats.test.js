@@ -8,8 +8,10 @@ import assert from 'node:assert/strict';
 import { ecrireRegime } from '../js/coeur/regles.js';
 import { evaluer } from '../js/coeur/compatibilite.js';
 import { appliquerChamps, ecrituresRemplacements, estDansLaSemaine } from '../js/coeur/semaine.js';
+import { DICTIONNAIRE } from '../js/coeur/dictionnaire.js';
+import { marqueursEffectifs } from '../js/coeur/vocabulaire.js';
 import {
-  CONDIMENTS_MER, FAMILLES_MER, TEXTES_PROPOSER, annonceChangement, autreIdee, changerDesPlats, choixDeLaMer,
+  CONDIMENTS_MER, CONDIMENTS_MER_PARTOUT, FAMILLES_MER, TEXTES_PROPOSER, annonceChangement, autreIdee, changerDesPlats, choixDeLaMer,
   libelleChanger, libelleFamille, lireMer, texteAucunChangement,
 } from '../js/coeur/proposition.js';
 
@@ -76,12 +78,45 @@ test('lireMer : jamais avec de la viande (charcuterie comprise), un assaisonneme
   assert.ok(CONDIMENTS_MER.includes('sauce') && CONDIMENTS_MER.includes('fumet'));
 });
 
+test('lireMer : un bouillon, une gélatine ou une graisse animale n’est jamais « de la mer » (le plat se mange tel quel sans viande)', () => {
+  const rien = { deLaMer: false, familles: [] };
+  const crevettes = ing('crevettes', ['fruits_de_mer']);
+  assert.deepEqual(lireMer(plat('r', 'R', [crevettes, ing('bouillon de volaille', ['bouillon_viande'])])), rien);
+  assert.deepEqual(lireMer(plat('g', 'G', [crevettes, ing('gélatine', ['gelatine_porc'])])), rien);
+  assert.deepEqual(lireMer(plat('c', 'C', [crevettes, ing('graisse de canard', ['graisse_animale'])])), rien);
+});
+
+test('lireMer : fonds, encre, worcestershire seule ne font pas un plat de la mer ; St-Jacques et bâtonnets de poisson ont leur famille', () => {
+  const rien = { deLaMer: false, familles: [] };
+  for (const nom of ['fond de poisson', 'court-bouillon', 'dashi', 'encre de seiche', 'worcestershire']) {
+    assert.deepEqual(lireMer(plat('x', 'X', [ing(nom, ['poisson']), LENTILLES])), rien, nom);
+  }
+  assert.ok(CONDIMENTS_MER_PARTOUT.includes('worcestershire') && CONDIMENTS_MER_PARTOUT.includes('anchoi'));
+  assert.deepEqual(lireMer(plat('s', 'S', [ing('noix de St-Jacques', ['fruits_de_mer'])])).familles, ['saint-jacques']);
+  assert.deepEqual(lireMer(plat('b', 'B', [ing('bâtonnets de poisson', ['poisson'])])).familles, ['poisson-pane']);
+});
+
+// Produits courants de la mer : seuls ces assaisonnements ne font pas un plat de la mer (un produit courant ajouté plus
+// tard est jugé ici : à ranger d'un côté ou de l'autre exprès).
+const ASSAISONNEMENTS_COURANTS = new Set(['anchoi', 'fumet-de-poisson', 'nuoc-mam', 'sauce-d-huitre', 'sauce-worcestershire', 'tarama']);
+
+test('lireMer : chaque produit courant de la mer, sous chacune de ses écritures, sauf les assaisonnements', () => {
+  for (const entree of DICTIONNAIRE) {
+    const m = marqueursEffectifs({ marqueurs: entree.marqueurs ?? [] });
+    if (!m.has('poisson') && !m.has('fruits_de_mer')) continue;
+    for (const nom of [entree.nom, ...(entree.alias ?? [])]) {
+      const lu = lireMer(plat('x', 'X', [{ produit: nom, qte: 1, unite: 'g', rayon: entree.rayon, marqueurs: entree.marqueurs }]));
+      assert.equal(lu.deLaMer, !ASSAISONNEMENTS_COURANTS.has(entree.id), `${entree.id} : ${nom}`);
+    }
+  }
+});
+
 test('FAMILLES_MER : ids uniques au format des identifiants, noms et tournures remplis, mots au format cleProduit', () => {
   const ids = FAMILLES_MER.map((f) => f.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const f of FAMILLES_MER) {
     assert.match(f.id, /^[a-z0-9-]+$/);
-    assert.ok(f.nom && /^(au |aux |à la |à l’)/.test(f.au), f.id);
+    assert.ok(f.nom && /^(au |aux |à la |à l’|avec du )/.test(f.au), f.id);
     assert.ok(Object.isFrozen(f) && f.mots.length && f.mots.every((m) => m.every((mot) => /^[a-z0-9]+$/.test(mot))), f.id);
   }
 });
@@ -132,6 +167,20 @@ test('choixDeLaMer : plats de la mer proposables par famille ; ni la cible, ni u
   assert.equal(choixDeLaMer(tous, opts({ cible, refuses: ['riz-crevettes'] })).total, 2);
   assert.deepEqual(choixDeLaMer(tous, opts({ cible: null })), { total: 0, familles: [] });
   assert.deepEqual(choixDeLaMer(NEUFS, opts({ cible })), { total: 0, familles: [] });
+});
+
+test('mer : jamais un plat que quelqu’un ne mange pas (palier 3), ni compté dans « Par quoi ? » ni proposé ; sans la mer, il peut l’être', () => {
+  const saumonJamais = { ...SAUMON, notes: { enfant: 0 } };
+  const tous = geler([NEUFS[0], saumonJamais, CREVETTES]);
+  const cible = { ...CIBLE, plats: { 'neuf-1': dans(1) } };
+  assert.deepEqual(choixDeLaMer(tous, opts({ cible })), { total: 1, familles: [{ id: 'crevette', nom: 'Crevettes', nombre: 1 }] });
+  assert.equal(autreIdee(tous, 'neuf-1', opts({ cible, mer: 'saumon' })), null);
+  assert.equal(autreIdee(tous, 'neuf-1', opts({ cible, mer: 'tout' })).platId, 'riz-crevettes');
+  const sansCrevettes = geler([NEUFS[0], saumonJamais]);
+  assert.equal(autreIdee(sansCrevettes, 'neuf-1', opts({ cible, mer: 'tout' })), null);
+  assert.equal(autreIdee(sansCrevettes, 'neuf-1', opts({ cible })).platId, 'saumon-papillote');
+  const r = changerDesPlats(sansCrevettes, ['neuf-1'], opts({ semaine: geler(semaine({ 'neuf-1': dans(1) })), mer: 'saumon' }));
+  assert.deepEqual(r, { remplacements: [], restes: ['neuf-1'] });
 });
 
 // ——— changerDesPlats ———
@@ -203,7 +252,11 @@ test('textes : libellé du bouton, puces, annonce et phrase sans plat', () => {
   assert.equal(libelleChanger(0), 'Remplacer les plats cochés');
   assert.equal(libelleChanger(1), 'Remplacer un plat');
   assert.equal(libelleChanger(3), 'Remplacer 3 plats');
-  assert.equal(libelleFamille({ nom: 'Saumon', nombre: 3 }), 'Saumon · 3');
+  assert.equal(libelleFamille({ nom: 'Saumon', nombre: 3 }), 'Saumon\u00A0· 3\u00A0plats');
+  assert.equal(libelleFamille({ nom: 'Crevettes', nombre: 1 }), 'Crevettes\u00A0· 1\u00A0plat');
+  assert.equal(annonceChangement({ remplaces: 2, voulus: 2, reglages: true }), '2\u00A0plats changés. Invités et repas sont à régler de nouveau.');
+  assert.equal(annonceChangement({ remplaces: 0, voulus: 2, reglages: true }), '0\u00A0plats changés sur 2\u00A0: pas d’autre idée pour l’instant.');
+  assert.equal(texteAucunChangement('lieu'), 'Pas d’autre plat avec du lieu pour l’instant.');
   assert.equal(annonceChangement({ remplaces: 1, voulus: 1 }), 'Un plat changé.');
   assert.equal(annonceChangement({ remplaces: 2, voulus: 2, mer: 'saumon' }), '2 plats changés.');
   assert.equal(annonceChangement({ remplaces: 1, voulus: 2, mer: 'saumon' }),

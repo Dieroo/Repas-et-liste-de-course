@@ -5,9 +5,11 @@
 // actions.changerDesPlats), l'annonce dit combien de plats ont changé, avec « Annuler » 10 s. Sans remplaçant, rien
 // n'est écrit et la feuille le dit (« Pas d’autre plat au saumon pour l’instant. »). Rien n'est écrit à l'ouverture.
 // Les produits proposés sont figés à l'ouverture (rien ne bouge sous le doigt) ; la liste des plats suit la semaine.
-import { el, ecrireTexte, reconcilier, vibrer } from './dom.js';
+// La feuille se ferme d'elle-même si l'écran montre une autre semaine, ou s'il n'y a plus de plat à changer (courses
+// faites sur l'autre téléphone : elle le dit). « Remplacer » est un simple bouton : Entrée sur une case ne remplace rien.
+import { annoncer, el, ecrireTexte, reconcilier, vibrer } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
-import { lireSemaine } from '../coeur/semaine.js';
+import { RANGS_STATUT, lireSemaine, statutSemaine } from '../coeur/semaine.js';
 import { TEXTES_PROPOSER, libelleChanger, libelleFamille, texteAucunChangement } from '../coeur/proposition.js';
 
 const TEXTES = TEXTES_PROPOSER.changer;
@@ -84,7 +86,8 @@ export function ouvrirChangerDesPlats(lireCtx, { onFermer, apresAnnulation = nul
   });
   const blocProduits = el('fieldset', { class: 'groupe-choix', hidden: true },
     el('legend', { class: 'etiquette-champ' }, TEXTES.produit),
-    el('div', { class: 'choix-souple' }, radiosProduit.map((r) => r.noeud)));
+    el('div', { class: 'choix-souple' }, radiosProduit.map((r) => r.noeud)),
+    el('p', { class: 'aide' }, TEXTES.autrePlat));
   const blocQuoi = el('fieldset', { class: 'groupe-choix' },
     el('legend', { class: 'etiquette-champ' }, TEXTES.parQuoi),
     el('div', { class: 'choix-ligne' },
@@ -92,12 +95,12 @@ export function ouvrirChangerDesPlats(lireCtx, { onFermer, apresAnnulation = nul
       mer.total > 0
         ? el('label', { class: 'choix' }, radioMer, el('span', {}, el('span', { 'aria-hidden': 'true' }, `${TEXTES.merEmoji} `), TEXTES.mer))
         : null),
-    mer.total > 0 ? null : el('p', { class: 'aide' }, TEXTES.sansMer));
+    mer.total > 0 ? null : el('p', { class: 'aide' }, `${TEXTES.sansMer} ${TEXTES.autrePlat}`));
 
   // ——— Bas de la feuille ———
 
   const libelle = el('span', {});
-  const boutonRemplacer = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' },
+  const boutonRemplacer = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'button', onclick: remplacer },
     el('span', { 'aria-hidden': 'true' }, TEXTES.emoji), libelle);
   const statut = el('p', { class: 'message-proposer', role: 'status', hidden: true });
 
@@ -124,7 +127,7 @@ export function ouvrirChangerDesPlats(lireCtx, { onFermer, apresAnnulation = nul
   }
 
   function remplacer(evenement) {
-    evenement.preventDefault();
+    evenement?.preventDefault();
     if (!coches.size) {
       dire(TEXTES.aucunCoche);
       return;
@@ -150,9 +153,18 @@ export function ouvrirChangerDesPlats(lireCtx, { onFermer, apresAnnulation = nul
   }
 
   function majListe() {
+    const lue = lireSemaine(courant?.semaine);
+    // L'écran montre une autre semaine (dates changées, semaine suivante remplie sur l'autre téléphone) : la feuille,
+    // qui changerait des plats qu'on ne voit plus, se ferme.
+    if (lue?.id !== semaineId) {
+      fermer();
+      return;
+    }
     const changeables = changeablesDe(courant, semaineId);
     if (!changeables.length) {
+      const faites = RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites;
       fermer();
+      if (faites) annoncer(TEXTES.faites);
       return;
     }
     const presents = new Set(changeables.map((c) => c.platId));
@@ -163,7 +175,7 @@ export function ouvrirChangerDesPlats(lireCtx, { onFermer, apresAnnulation = nul
   const feuille = ouvrirFeuille(TEXTES.titre, () => el('form', {
     class: 'formulaire feuille-changer',
     novalidate: true,
-    onsubmit: remplacer,
+    onsubmit: (evenement) => evenement.preventDefault(),
     onchange: (evenement) => {
       if (evenement.target?.name === nomQuoi || evenement.target?.name === nomProduit) {
         dire(null);
