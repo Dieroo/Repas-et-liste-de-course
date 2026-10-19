@@ -191,7 +191,7 @@ function nomsNotes(plats, profils, note) {
  * actif }), dans l'ordre du vocabulaire ; `monsieur_cuisine` seulement s'il est actif. Sans liste lisible ni appareil
  * actif : plaque, four, cookeo, airfryer.
  */
-function appareilsActifs(appareils) {
+export function appareilsActifs(appareils) {
   const actifs = new Set();
   for (const appareil of Array.isArray(appareils) ? appareils : []) {
     if (estObjet(appareil) && appareil.actif === false) continue;
