@@ -166,7 +166,7 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
   assert.ok(exemples.includes(texteDemandeBatch(ELEMENTS_BATCH, { semaine: SEMAINE_BATCH })), 'exemple DEMANDE-BATCH différent du texte copié');
   const empreinte = empreintePlanBatch(ELEMENTS_BATCH);
   const planBatch = JSON.parse(blocs('json').find((r) => Object.hasOwn(JSON.parse(r), 'batch'))).batch;
-  delete planBatch.etapes[9].ingredients;
+  planBatch.etapes[7].tempC = 170;
   const refuseBatch = validerPlanBatch(planBatch, { elements: ELEMENTS_BATCH, semaineId: SEMAINE_BATCH.id, empreinte });
   assert.equal(refuseBatch.plan, null);
   assert.ok(exemples.includes(texteCorrectionBatch({ erreurs: refuseBatch.erreurs, semaineId: SEMAINE_BATCH.id })), 'exemple CORRECTION d’un plan de batch différent du texte copié');

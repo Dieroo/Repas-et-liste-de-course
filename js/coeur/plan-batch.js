@@ -65,8 +65,14 @@ const ligne = (valeur) => texte(typeof valeur === 'number' ? String(valeur) : va
 
 export const TEXTES_PLAN_BATCH = Object.freeze({
   titreCarte: '👩‍🍳 Le batch de la semaine',
-  invitation: (n) => `Claude peut organiser vos ${n}\u00A0plats en un seul batch\u00A0: les cuissons en commun, l’ordre des étapes et la taille des plats.`,
+  // Sans « Claude » : la vue « Repas et courses » ne le nomme jamais (décision du 2026-10-16).
+  invitation: (n) => `Un seul plan pour cuisiner vos ${n}\u00A0plats d’un coup\u00A0: les cuissons en commun, l’ordre des étapes et la taille des plats de cuisson.`,
   invitationGestionnaire: 'Envoyez la demande à Claude, puis collez sa réponse\u00A0: le plan apparaîtra ici, prêt à suivre.',
+  // Avant « 📤 Envoyer à Claude » (comme la fiche, essai du 2026-10-15) : le menu « Partager » ne propose pas le projet.
+  guidageEnvoi: 'Dans l’app Claude, ouvrez d’abord une conversation dans votre projet de recettes\u00A0: le menu «\u00A0Partager\u00A0» ne propose pas le projet. Touchez ensuite «\u00A0Envoyer à Claude\u00A0», choisissez Claude, puis cette conversation\u00A0: la demande est jointe au message. Envoyez, puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».',
+  recopier: 'Les plats ont changé depuis la copie\u00A0: recopiez la demande.',
+  retirer: 'Retirer la demande',
+  retiree: 'Demande retirée.',
   demander: '📬 Demander le plan du batch',
   redemander: '📬 Redemander le plan',
   demande: (quand) => `📬 Demandé ${quand}. Il apparaîtra ici dès qu’il sera prêt.`,
@@ -76,11 +82,10 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   envoyer: '📤 Envoyer à Claude',
   copier: '📋 Copier la demande',
   coller: 'Coller la réponse',
-  pret: '👩‍🍳 Plan du batch prêt',
   commencer: 'Commencer le batch ›',
-  portionsChangees: 'Les portions ont changé depuis le plan\u00A0: les quantités suivent, vérifiez la taille des plats.',
+  portionsChangees: 'Les portions ont changé depuis le plan\u00A0: les quantités suivent, vérifiez la taille des plats de cuisson.',
   perime: 'Les plats ont changé depuis le plan\u00A0: il faut le redemander.',
-  notification: 'Plan de batch à préparer',
+  notification: 'Plan du batch à préparer',
   titreCarteCourt: 'Le batch de la semaine',
   planPret: (environ) => `Le plan est prêt.${environ ? ` ${environ}.` : ''}`,
   copiee: 'Demande copiée. Collez-la dans une conversation de votre projet Claude, envoyez, puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».',
@@ -98,6 +103,9 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   fin: 'Batch terminé 🎉',
   termine: 'Batch terminé ›',
   revenir: 'Revenir à la semaine',
+  pourTous: 'Pour tous les plats',
+  leJourDuRepas: 'Le jour du repas',
+  voirLaRecette: 'Voir la recette ›',
   introuvable: 'Ce plan de batch n’est plus là.',
   perimeEcran: 'Les plats de la semaine ont changé depuis ce plan. Demandez-en un nouveau depuis Semaine.',
   // Demandes (gestionnaire).
@@ -147,28 +155,81 @@ export function platsDuBatch(semaine, { tousLesPlats = [], profils = [], evaluer
     });
 }
 
-/** Parts d'un plat du batch, anonymes : « sans jambon blanc (avec thon au naturel) », dans l'ordre des versions. */
+/**
+ * Parts d'un plat du batch, anonymes, les identiques réunies : [{ texte : « sans jambon blanc (avec thon au naturel) »,
+ * portions }], dans l'ordre des versions.
+ */
 function partsAnonymes(quantites) {
   const sortie = [];
   for (const part of listeDe(quantites?.parts)) {
     const sans = part.retirer.length ? `sans ${part.retirer.join(', ')}` : '';
     const avec = part.ajouts.length ? `avec ${part.ajouts.map((a) => a.produit).join(', ')}` : '';
     const morceau = sans && avec ? `${sans} (${avec})` : sans || avec;
-    if (morceau && !sortie.includes(morceau)) sortie.push(morceau);
+    if (!morceau) continue;
+    const portions = estNombre(part.portions) ? part.portions : 0;
+    const deja = sortie.find((p) => p.texte === morceau);
+    if (deja) deja.portions = propre(deja.portions + portions);
+    else sortie.push({ texte: morceau, portions });
   }
   return sortie;
 }
 
+/** Clés des produits que la recette ne cite qu'aux étapes « le jour du repas » : donnés à part, jamais à citer. */
+function produitsAuService(plat) {
+  const auService = new Set();
+  const avant = new Set();
+  for (const etape of etapesLisibles(plat).etapes) {
+    for (const cite of listeDe(etape.ingredients)) {
+      const cle = cleProduit(typeof cite === 'string' ? cite : cite?.produit);
+      if (cle) (etape.auService ? auService : avant).add(cle);
+    }
+  }
+  return new Set([...auService].filter((cle) => !avant.has(cle)));
+}
+
 /**
- * Empreinte d'un plan de batch (6 caractères), ou null sans plat : les plats (identifiant), leurs recettes
- * (realisation.js › empreinteEtapes : portions de la recette, produits et repères, étapes, cuisson) et leurs parts
- * (ce qu'elles retirent et ajoutent), jamais les portions de la semaine : un invité de plus garde le plan (les
- * quantités suivent). Un ordre différent des plats donne la même empreinte.
+ * Ingrédients d'un plat du batch, comme la demande les donne → { aCiter: Map clé → nom (quelqu'un en mange, pas
+ * seulement au service : chacun doit être cité), lignes (celles de `ingrédients:`), auService (celles de `au service:`),
+ * connus: Map clé → nom (tous les ingrédients de la fiche : une citation retrouvée parmi eux est gardée) }.
+ */
+function ingredientsDuPlat(element) {
+  const service = produitsAuService(element.plat);
+  const aCiter = new Map();
+  const connus = new Map();
+  const lignes = [];
+  const auService = [];
+  for (const l of listeDe(element.quantites?.lignes)) {
+    const cle = cleProduit(l.produit);
+    if (!cle) continue;
+    if (!connus.has(cle)) connus.set(cle, l.produit);
+    if (l.personne) continue;
+    if (service.has(cle)) {
+      auService.push(l);
+      continue;
+    }
+    lignes.push(l);
+    if (!aCiter.has(cle)) aCiter.set(cle, l.produit);
+  }
+  return { aCiter, connus, lignes, auService };
+}
+
+/**
+ * Empreinte d'un plan de batch (6 caractères), ou null sans plat : ce que la demande donne à Claude, sans quantités ni
+ * portions (2026-10-19, relecture) : par plat, son identifiant, les ingrédients à citer et ceux du service, les étapes
+ * (titre, détail, texte), la cuisson et les parts. Un invité de plus, une quantité ou un repère changé gardent le plan ;
+ * un plat ajouté ou retiré, une étape changée, un ingrédient que plus personne ne mange (ou de nouveau), une autre
+ * version servie le périment. Un ordre différent des plats donne la même empreinte.
  */
 export function empreintePlanBatch(elements) {
-  const lignes = listeDe(elements).filter((e) => estObjet(e) && typeof e.platId === 'string').map((e) => [
-    e.platId, empreinteEtapes(e.plat), partsAnonymes(e.quantites).join(';'),
-  ].join('|')).sort();
+  const lignes = listeDe(elements).filter((e) => estObjet(e) && typeof e.platId === 'string' && estObjet(e.plat)).map((e) => {
+    const { aCiter, auService } = ingredientsDuPlat(e);
+    const etapes = etapesLisibles(e.plat).etapes.filter((x) => !x.auService)
+      .map((x) => [ligne(x.titre), detailEtape(x), ligne(x.texte)].join('~'));
+    return [
+      e.platId, [...aCiter.keys()].sort().join(','), [...new Set(auService.map((l) => cleProduit(l.produit)))].sort().join(','),
+      etapes.join('/'), cuissonEnTexte(e.plat.cuisson), partsAnonymes(e.quantites).map((p) => p.texte).join(';'),
+    ].join('|');
+  }).sort();
   return lignes.length ? empreinteDeTexte(lignes.join('\n')) : null;
 }
 
@@ -181,7 +242,7 @@ export function portionsDuBatch(elements) {
 
 // ——— Demande pour Claude ———
 
-const CONSIGNE_BATCH = '(Organise le batch de ces plats pour une seule personne, selon la section « Le plan de batch » : regroupe ce qui se prépare et cuit de la même façon pour plusieurs plats, fais avancer les plats en même temps selon les appareils, et donne le récipient de chaque plat et sa taille pour ses portions. Ne change ni les ingrédients, ni les quantités, ni la manière de cuire. Nomme chaque ingrédient exactement comme dans sa ligne `ingrédients:`, avec l\'`id` de son plat. Rends seulement { "format", "instructions", "batch": { "semaine", "empreinte", "dureeTotale", "travail", "recipients", "etapes" } }, `semaine` et `empreinte` recopiées telles quelles, en un seul bloc.)';
+const CONSIGNE_BATCH = '(Organise le batch de ces plats pour une seule personne, selon la section « DEMANDE-BATCH » : regroupe ce qui se prépare et cuit de la même façon pour plusieurs plats, fais avancer les plats en même temps selon les appareils, et donne le récipient de chaque plat et sa taille pour ses portions, et celui d\'une part qui cuit à part. Ne change ni les ingrédients, ni les quantités, ni la manière de cuire. Cite chaque ingrédient de la ligne `ingrédients:` de chaque plat, écrit exactement comme elle, avec l\'`id` de son plat ; jamais ceux de `au service:`. Rends seulement { "format", "instructions", "batch": { "semaine", "empreinte", "dureeTotale", "travail", "recipients", "etapes" } }, `semaine` et `empreinte` recopiées telles quelles, en un seul bloc.)';
 
 /** « 600 g pâtes courtes », « 3 oignon jaune » (pièces sans unité), « sel fin » sans mesure. */
 function quantitePourClaude(ligneQte) {
@@ -190,7 +251,9 @@ function quantitePourClaude(ligneQte) {
   return [qte, unite, ligne(ligneQte.produit)].filter(Boolean).join(' ');
 }
 
-/** « 10 min dont 1 min de travail ; plaque, feu vif ; ingrédients : oignon jaune ; la veille » */
+const nombreCourt = (n) => nombreFr.format(n).replace(/\s/g, '');
+
+/** « 10 min dont 1 min de travail ; plaque, feu vif ; ingrédients : oignon jaune, beurre (part 0,5) ; la veille » */
 function detailEtape(etape) {
   const morceaux = [];
   if (estNombre(etape.duree)) {
@@ -200,7 +263,11 @@ function detailEtape(etape) {
   const appareil = [etape.appareil, etape.feu ? `feu ${etape.feu}` : '', estNombre(etape.tempC) ? `${etape.tempC} °C` : '', etape.mode ?? '']
     .filter(Boolean).join(', ');
   if (appareil) morceaux.push(appareil);
-  const cites = listeDe(etape.ingredients).map((i) => ligne(i.produit)).filter(Boolean);
+  const cites = listeDe(etape.ingredients).map((i) => {
+    const produit = ligne(typeof i === 'string' ? i : i?.produit);
+    const part = estObjet(i) && estNombre(i.part) && i.part > 0 && i.part < 1 ? i.part : null;
+    return produit && part !== null ? `${produit} (part ${nombreCourt(part)})` : produit;
+  }).filter(Boolean);
   if (cites.length) morceaux.push(`ingrédients : ${cites.join(', ')}`);
   if (listeDe(etape.ustensiles).length) morceaux.push(`ustensiles : ${etape.ustensiles.map(ligne).join(', ')}`);
   if (etape.veille) morceaux.push('la veille');
@@ -212,9 +279,10 @@ function detailEtape(etape) {
  * Texte copié pour demander à Claude le plan de batch d'une semaine (DEMANDE-BATCH) : semaine (identifiant, que Claude
  * recopie), empreinte (empreintePlanBatch, recopiée), appareils actifs (claude.js › appareilsActifs), nombre de plats,
  * consigne, puis pour chaque plat du batch (platsDuBatch, dans l'ordre de la semaine) : `id`, `nom`, `portions à
- * cuisiner` (de la semaine, congélation comprise), `ingrédients:` (quantités de la semaine, arrondies ; un ingrédient que
- * toutes les parts retirent est omis), `étapes:` (une ligne par étape de la recette, « le jour du repas » exclues),
- * `cuisson:`, `se garde:`, `parts à mettre de côté:` (anonymes). Rien sur les personnes : ni profil, ni prénom.
+ * cuisiner` (de la semaine, « (dont 2 à congeler) »), `ingrédients:` (quantités de la semaine, arrondies ; un ingrédient
+ * que toutes les parts retirent est omis ; ceux qui ne servent qu'au service vont dans `au service:`), `étapes:` (une
+ * ligne par étape de la recette, « le jour du repas » exclues, parts d'ingrédient comprises), `cuisson:`, `se garde:`,
+ * `parts à mettre de côté:` (anonymes, avec leurs portions). Rien sur les personnes : ni profil, ni prénom.
  */
 export function texteDemandeBatch(elements, { semaine = null, appareils = null } = {}) {
   const lue = lireSemaine(semaine);
@@ -229,12 +297,15 @@ export function texteDemandeBatch(elements, { semaine = null, appareils = null }
     CONSIGNE_BATCH,
     'plats:',
   ];
-  for (const { platId, plat, quantites } of plats) {
+  for (const element of plats) {
+    const { platId, plat, quantites } = element;
     lignes.push(`- id: ${ligne(platId)}`);
     lignes.push(`  nom: ${ligne(plat.nom)}`);
-    lignes.push(`  portions à cuisiner: ${nombreFr.format(propre(quantites.portions)).replace(/\s/g, '')}`);
-    const ingredients = listeDe(quantites.lignes).filter((l) => !l.personne && texte(l.produit)).map(quantitePourClaude);
-    lignes.push(`  ingrédients: ${ingredients.join(' ; ')}`);
+    const aCongeler = estNombre(element.element?.aCongeler) ? element.element.aCongeler : 0;
+    lignes.push(`  portions à cuisiner: ${nombreCourt(propre(quantites.portions))}${aCongeler > 0 ? ` (dont ${nombreCourt(propre(aCongeler))} à congeler)` : ''}`);
+    const { lignes: aCiter, auService } = ingredientsDuPlat(element);
+    lignes.push(`  ingrédients: ${aCiter.map(quantitePourClaude).join(' ; ')}`);
+    if (auService.length) lignes.push(`  au service: ${auService.map(quantitePourClaude).join(' ; ')}`);
     const etapes = etapesLisibles(plat).etapes.filter((e) => !e.auService);
     if (etapes.length) {
       lignes.push('  étapes:');
@@ -252,7 +323,11 @@ export function texteDemandeBatch(elements, { semaine = null, appareils = null }
     else if (plat.conservation?.congelable === true) garde.push('se congèle');
     if (garde.length) lignes.push(`  se garde: ${garde.join(' ; ')}`);
     const parts = partsAnonymes(quantites);
-    if (parts.length) lignes.push(`  parts à mettre de côté: ${parts.join(' ; ')}`);
+    if (parts.length) {
+      // Texte copié pour Claude : espaces ordinaires (le document des instructions n'en a pas d'autres).
+      const portions = (n) => `${nombreCourt(n)} ${n > 1 ? 'portions' : 'portion'}`;
+      lignes.push(`  parts à mettre de côté: ${parts.map((p) => (p.portions > 0 ? `${p.texte} — ${portions(p.portions)}` : p.texte)).join(' ; ')}`);
+    }
   }
   return lignes.join('\n');
 }
@@ -270,38 +345,75 @@ export function planDeLaReponse(paquets) {
 /** Vrai si une réponse collée porte un plan de batch (clé `batch` à la racine d'un objet). */
 export const estReponseBatch = (paquets) => planDeLaReponse(paquets) !== null;
 
-const erreur = (message, pourClaude) => ({ message, pourClaude });
-const avertissement = (message) => ({ message });
-
-/** Ingrédients citables d'un plat du batch : Map clé produit → nom (lignes que quelqu'un mange). */
-function citables(element) {
-  const sortie = new Map();
-  for (const l of listeDe(element.quantites?.lignes)) {
-    if (l.personne) continue;
-    const cle = cleProduit(l.produit);
-    if (cle && !sortie.has(cle)) sortie.set(cle, l.produit);
-  }
-  return sortie;
-}
-
 /** Texte court d'une réponse : texte non vide de `max` caractères au plus, sinon null. */
 function texteBorne(valeur, max) {
   const lu = texte(valeur);
   return lu && [...lu].length <= max ? lu : null;
 }
 
+const erreur = (message, pourClaude) => ({ message, pourClaude });
+const avertissement = (message) => ({ message });
+/** Vrai pour `true` ou le texte « true » (une réponse de Claude peut écrire l'un ou l'autre). */
+const vrai = (valeur) => valeur === true || valeur === 'true';
+/** Entier d'une réponse : un entier, ou un texte de chiffres (« 80 ») ; sinon null. */
+const entierLu = (valeur) => {
+  if (Number.isInteger(valeur)) return valeur;
+  return typeof valeur === 'string' && /^\s*\d+\s*$/.test(valeur) ? Number(valeur) : null;
+};
+/** Texte d'une réponse, un nombre écrit sans guillemets compris (« semaine », « empreinte »). */
+const texteOuNombre = (valeur) => (typeof valeur === 'number' && Number.isFinite(valeur) ? String(valeur) : texte(valeur));
+/** Texte coupé à `max` caractères → { valeur (null si vide), coupe }. */
+function coupe(valeur, max) {
+  const lu = texte(valeur);
+  if (!lu) return { valeur: null, coupe: false };
+  const signes = [...lu];
+  return signes.length <= max ? { valeur: lu, coupe: false } : { valeur: signes.slice(0, max).join('').trim(), coupe: true };
+}
+const NOMS_APPAREILS = Object.freeze({
+  plaque: 'la plaque', four: 'le four', cookeo: 'le Cookeo', airfryer: 'l’airfryer', monsieur_cuisine: 'le Monsieur Cuisine',
+});
+
+/** Ingrédient cité retrouvé parmi `connus` (Map clé → nom) : même clé, sinon la seule clé qui la prolonge ou qu'elle prolonge (« oignon » → « oignon jaune ») → { cle, produit } | null. */
+function retrouver(nomCite, connus) {
+  const cle = cleProduit(nomCite);
+  if (!cle) return null;
+  if (connus.has(cle)) return { cle, produit: connus.get(cle) };
+  const proches = [...connus.keys()].filter((k) => k.startsWith(`${cle}-`) || cle.startsWith(`${k}-`));
+  return proches.length === 1 ? { cle: proches[0], produit: connus.get(proches[0]) } : null;
+}
+
+/** Appareils et températures des étapes de la recette (« le jour du repas » exclues), sinon de sa cuisson : Map appareil → [tempC]. */
+function appareilsDeLaRecette(plat) {
+  const sortie = new Map();
+  const noter = (appareil, tempC) => {
+    if (!VOCABULAIRES.appareil.includes(appareil)) return;
+    if (!sortie.has(appareil)) sortie.set(appareil, []);
+    if (estNombre(tempC)) sortie.get(appareil).push(tempC);
+  };
+  for (const etape of etapesLisibles(plat).etapes) if (!etape.auService && etape.appareil) noter(etape.appareil, etape.tempC);
+  if (!sortie.size) for (const c of listeDe(plat?.cuisson)) if (estObjet(c)) noter(c.appareil, c.tempC);
+  return sortie;
+}
+
 /**
  * Valide un plan de batch reçu → { plan | null, erreurs: [{ message, pourClaude }], avertissements: [{ message }],
  * refus: null | 'semaine' | 'perime' }.
- * `brut` : la valeur de `batch` ; `elements` : platsDuBatch de la semaine ; `semaineId`, `empreinte` : ceux de la
- * semaine montrée ; `appareils` : reglages.appareils (un appareil absent du foyer : avertissement).
- * Refus (rien n'est enregistrable, et rien n'est à corriger par Claude) : plan d'une autre semaine (`semaine`), ou
- * d'avant un changement des plats (`perime` : empreinte différente). Erreurs (à faire corriger : « Copier les
- * corrections pour Claude ») : forme, durées, plats inconnus ou absents des étapes, ingrédient inconnu de son plat ou
- * cité nulle part. Avertissements : champs facultatifs fautifs (retirés), récipient manquant, part sans étape, texte
- * long. Plan normalisé : { semaine, empreinte, dureeTotale, travail, recipients: [{ plat, ustensile, taille }],
- * etapes: [{ titre, texte, duree, actif, appareil, mode, tempC, feu, ustensiles, plats, ingredients: [{ produit, plat,
- * part }], aussi, pret, prechauffer, partAvant, veille }] }.
+ * `brut` : la valeur de `batch` ; `elements` : platsDuBatch de la semaine montrée ; `semaineId`, `empreinte` : les
+ * siens (sans semaine : refus `semaine`) ; `appareils` : reglages.appareils (un appareil absent du foyer : avertissement).
+ * Refus (rien n'est enregistrable, rien à corriger par Claude) : plan d'une autre semaine (`semaine`), ou d'avant un
+ * changement des plats (`perime` : empreinte différente). Erreurs (« Copier les corrections pour Claude ») : forme,
+ * durées, plat inconnu, étape sans plat, plat absent de toutes les étapes, manière de cuire changée (appareil de la
+ * recette absent des étapes de son plat, four ou airfryer à plus de 10 °C de la recette). Avertissements (le plan reste
+ * enregistrable) : ingrédient cité inconnu de son plat (retiré ; un ajout d'une part, retiré sans rien dire), ingrédient
+ * jamais cité, parts de plus de 1, étape « le jour du repas » retirée, nom de récipient raccourci, temps de travail
+ * ramené à la durée, four allumé nulle part, part sans étape, champs facultatifs fautifs (retirés), texte long.
+ * Souplesse (2026-10-19, relecture) : un nombre écrit en texte, `true` écrit « true », un ingrédient en texte sur une
+ * étape d'un seul plat, un nom approché (« oignon » pour « oignon jaune »), `partAvant: true` (les plats de l'étape qui
+ * ont une part) ou une liste, une étape sans `plats` dont les ingrédients disent le plat, ou qui allume le four (le plat
+ * de son prochain usage).
+ * Plan normalisé : { semaine, empreinte, dureeTotale, travail, recipients: [{ plat, ustensile, taille }], etapes: [{
+ * titre, texte, duree, actif, appareil, mode, tempC, feu, ustensiles, plats, ingredients: [{ produit, plat, part }],
+ * aussi, pret, prechauffer, partAvant: [platId], veille }] }.
  */
 export function validerPlanBatch(brut, { elements = [], semaineId = null, empreinte = null, appareils = null } = {}) {
   const erreurs = [];
@@ -311,23 +423,38 @@ export function validerPlanBatch(brut, { elements = [], semaineId = null, emprei
     erreurs.push(erreur('Le plan de batch est illisible.', 'batch : objet attendu'));
     return sortie(null);
   }
-  if (texte(brut.semaine) !== texte(semaineId)) {
-    if (!texte(brut.semaine)) erreurs.push(erreur('Le plan ne dit pas pour quelle semaine il est.', `batch.semaine : « ${semaineId} » attendu`));
+  if (!texte(semaineId)) return sortie(null, 'semaine');
+  const semaineLue = texteOuNombre(brut.semaine);
+  if (semaineLue !== texte(semaineId)) {
+    if (!semaineLue) erreurs.push(erreur('Le plan ne dit pas pour quelle semaine il est.', `batch.semaine : « ${semaineId} » attendu`));
     else return sortie(null, 'semaine');
   }
-  if (texte(brut.empreinte) !== texte(empreinte)) {
-    if (!texte(brut.empreinte)) erreurs.push(erreur('Le plan n’a pas recopié l’empreinte de la demande.', `batch.empreinte : « ${empreinte} » attendu`));
+  const empreinteLue = texteOuNombre(brut.empreinte);
+  if (empreinteLue !== texte(empreinte)) {
+    if (!empreinteLue) erreurs.push(erreur('Le plan n’a pas recopié l’empreinte de la demande.', `batch.empreinte : « ${empreinte} » attendu`));
     else return sortie(null, 'perime');
   }
   const parId = new Map(listeDe(elements).filter((e) => estObjet(e) && typeof e.platId === 'string').map((e) => [e.platId, e]));
   const nom = (platId) => texte(parId.get(platId)?.plat?.nom) || platId;
   const actifs = new Set(appareilsActifs(appareils));
+  const ingredients = new Map([...parId].map(([platId, e]) => [platId, ingredientsDuPlat(e)]));
+  const ajoutsDesParts = new Map([...parId].map(([platId, e]) => [platId, new Map(listeDe(e.quantites?.parts)
+    .flatMap((p) => p.ajouts).map((a) => [cleProduit(a.produit), a.produit]))]));
+  const aDesParts = (platId) => listeDe(parId.get(platId)?.quantites?.parts).length > 0;
 
-  if (!estEntier(brut.dureeTotale, 1, DUREE_MAX_MIN)) {
-    erreurs.push(erreur('La durée du batch manque.', `batch.dureeTotale : entier de 1 à ${DUREE_MAX_MIN} attendu`));
+  const dureeTotale = entierLu(brut.dureeTotale);
+  const dureeLue = dureeTotale !== null && dureeTotale >= 1 && dureeTotale <= DUREE_MAX_MIN;
+  if (!dureeLue) {
+    erreurs.push(erreur(brut.dureeTotale === undefined ? 'La durée du batch manque.' : 'La durée du batch est illisible.',
+      `batch.dureeTotale : entier de 1 à ${DUREE_MAX_MIN} attendu`));
   }
-  if (!estEntier(brut.travail, 1, estEntier(brut.dureeTotale, 1, DUREE_MAX_MIN) ? brut.dureeTotale : DUREE_MAX_MIN)) {
-    erreurs.push(erreur('Le temps de travail du batch manque.', 'batch.travail : entier de 1 à dureeTotale attendu'));
+  let travail = entierLu(brut.travail);
+  if (travail === null || travail < 1) {
+    erreurs.push(erreur(brut.travail === undefined ? 'Le temps de travail du batch manque.' : 'Le temps de travail du batch est illisible.',
+      'batch.travail : entier de 1 à dureeTotale attendu'));
+  } else if (dureeLue && travail > dureeTotale) {
+    avertissements.push(avertissement('Le temps de travail dépasse la durée du batch\u00A0: il est ramené à la durée.'));
+    travail = dureeTotale;
   }
 
   // Récipients.
@@ -345,142 +472,235 @@ export function validerPlanBatch(brut, { elements = [], semaineId = null, emprei
       erreurs.push(erreur('Un plat de cuisson est donné pour un plat qui n’est pas dans la semaine.', `${code}.plat : « ${ligne(r.plat)} » n'est pas un plat de la demande`));
       return;
     }
-    const ustensile = texteBorne(r.ustensile, RECIPIENT_MAX);
-    if (!ustensile) {
+    const ustensile = coupe(r.ustensile, RECIPIENT_MAX);
+    if (!ustensile.valeur) {
       erreurs.push(erreur(`Le plat de cuisson de ${guillemets(nom(r.plat))} n’est pas nommé.`, `${code}.ustensile : texte de 1 à ${RECIPIENT_MAX} caractères attendu`));
       return;
     }
-    const taille = texteBorne(r.taille, TAILLE_MAX);
-    if (r.taille !== undefined && !taille) avertissements.push(avertissement(`La taille du plat de cuisson de ${guillemets(nom(r.plat))} est illisible\u00A0: elle n’est pas reprise.`));
-    recipients.push({ plat: r.plat, ustensile, taille });
+    if (ustensile.coupe) avertissements.push(avertissement(`Le nom du plat de cuisson de ${guillemets(nom(r.plat))} est long\u00A0: il est raccourci.`));
+    const taille = coupe(r.taille, TAILLE_MAX);
+    if (r.taille !== undefined && !taille.valeur) avertissements.push(avertissement(`La taille du plat de cuisson de ${guillemets(nom(r.plat))} est illisible\u00A0: elle n’est pas reprise.`));
+    if (taille.coupe) avertissements.push(avertissement(`La taille du plat de cuisson de ${guillemets(nom(r.plat))} est longue\u00A0: elle est raccourcie.`));
+    recipients.push({ plat: r.plat, ustensile: ustensile.valeur, taille: taille.valeur });
   });
 
   // Étapes.
   const etapes = [];
-  if (!Array.isArray(brut.etapes) || !brut.etapes.length || brut.etapes.length > ETAPES_BATCH_MAX) {
-    erreurs.push(erreur('Le plan n’a pas d’étapes lisibles.', `batch.etapes : liste de 1 à ${ETAPES_BATCH_MAX} étapes attendue`));
-  } else {
-    brut.etapes.forEach((e, i) => {
-      const n = i + 1;
-      const code = `batch.etapes[${i}]`;
-      if (!estObjet(e)) {
-        erreurs.push(erreur(`L’étape ${n} est illisible.`, `${code} : objet attendu`));
+  if (!Array.isArray(brut.etapes) || !brut.etapes.length) {
+    erreurs.push(erreur('Le plan n’a pas d’étapes.', `batch.etapes : liste de 1 à ${ETAPES_BATCH_MAX} étapes attendue`));
+    return sortie(null);
+  }
+  if (brut.etapes.length > ETAPES_BATCH_MAX) {
+    erreurs.push(erreur(`Le plan a trop d’étapes (${ETAPES_BATCH_MAX} au plus).`, `batch.etapes : liste de 1 à ${ETAPES_BATCH_MAX} étapes attendue`));
+    return sortie(null);
+  }
+  const sansPlat = []; // étapes (index dans `etapes`) dont aucun plat n'est dit ni déduit
+  brut.etapes.forEach((e, i) => {
+    const n = i + 1;
+    const code = `batch.etapes[${i}]`;
+    if (!estObjet(e)) {
+      erreurs.push(erreur(`L’étape ${n} est illisible.`, `${code} : objet attendu`));
+      return;
+    }
+    const titre = texteBorne(e.titre, TITRE_MAX);
+    if (!titre) erreurs.push(erreur(texte(e.titre) ? `Le titre de l’étape ${n} est trop long.` : `L’étape ${n} n’a pas de titre.`, `${code}.titre : texte de 1 à ${TITRE_MAX} caractères attendu`));
+    if (vrai(e.auService)) {
+      avertissements.push(avertissement(`${guillemets(titre ?? `Étape ${n}`)} se fait le jour du repas\u00A0: elle n’est pas reprise (l’app la rappelle à la fin).`));
+      return;
+    }
+    const corps = texteBorne(e.texte, TEXTE_MAX);
+    if (!corps) erreurs.push(erreur(texte(e.texte) ? `Le texte de l’étape ${n} est trop long.` : `L’étape ${n} n’a pas de texte.`, `${code}.texte : texte de 1 à ${TEXTE_MAX} caractères attendu`));
+    else if ([...corps].length > TEXTE_LONG) avertissements.push(avertissement(`Le texte de l’étape ${n} est long.`));
+    const dureeEtape = entierLu(e.duree);
+    const duree = dureeEtape !== null && dureeEtape >= 1 && dureeEtape <= DUREE_MAX_MIN ? dureeEtape : null;
+    if (duree === null) erreurs.push(erreur(e.duree === undefined ? `L’étape ${n} n’a pas de durée.` : `La durée de l’étape ${n} est illisible.`, `${code}.duree : entier de 1 à ${DUREE_MAX_MIN} attendu`));
+    // Plats de l'étape.
+    const plats = [];
+    const platsLus = typeof e.plats === 'string' ? [e.plats] : e.plats;
+    if (platsLus !== undefined && !Array.isArray(platsLus)) {
+      erreurs.push(erreur(`Les plats de l’étape ${n} sont illisibles.`, `${code}.plats : identifiants des plats de la demande attendus`));
+    }
+    let platFautif = false;
+    for (const p of listeDe(platsLus)) {
+      if (typeof p === 'string' && parId.has(p)) {
+        if (!plats.includes(p)) plats.push(p);
+      } else {
+        platFautif = true;
+        erreurs.push(erreur(`L’étape ${n} parle d’un plat qui n’est pas dans la semaine.`, `${code}.plats : « ${ligne(p)} » n'est pas un plat de la demande`));
+      }
+    }
+    const seulPlat = plats.length === 1 ? plats[0] : null;
+    // Ingrédients cités : { produit, plat, part? }, ou le nom seul sur une étape d'un seul plat.
+    const cites = [];
+    if (e.ingredients !== undefined && !Array.isArray(e.ingredients)) {
+      erreurs.push(erreur(`Les ingrédients de l’étape ${n} sont illisibles.`, `${code}.ingredients : liste de { "produit", "plat" } attendue`));
+    }
+    listeDe(e.ingredients).forEach((c, j) => {
+      const codeC = `${code}.ingredients[${j}]`;
+      const nomCite = texte(typeof c === 'string' ? c : estObjet(c) ? c.produit : '');
+      if (!nomCite) {
+        avertissements.push(avertissement(`Un ingrédient de l’étape ${n} est illisible\u00A0: il n’est pas repris.`));
         return;
       }
-      const titre = texteBorne(e.titre, TITRE_MAX);
-      if (!titre) erreurs.push(erreur(`L’étape ${n} n’a pas de titre.`, `${code}.titre : texte de 1 à ${TITRE_MAX} caractères attendu`));
-      const corps = texteBorne(e.texte, TEXTE_MAX);
-      if (!corps) erreurs.push(erreur(`L’étape ${n} n’a pas de texte.`, `${code}.texte : texte de 1 à ${TEXTE_MAX} caractères attendu`));
-      else if ([...corps].length > TEXTE_LONG) avertissements.push(avertissement(`Le texte de l’étape ${n} est long.`));
-      if (!estEntier(e.duree, 1, DUREE_MAX_MIN)) erreurs.push(erreur(`L’étape ${n} n’a pas de durée.`, `${code}.duree : entier de 1 à ${DUREE_MAX_MIN} attendu`));
-      // Plats de l'étape.
-      const plats = [];
-      if (!Array.isArray(e.plats) || !e.plats.length) {
-        erreurs.push(erreur(`L’étape ${n} ne dit pas pour quels plats elle est.`, `${code}.plats : identifiants des plats de la demande attendus`));
-      } else {
-        for (const p of e.plats) {
-          if (typeof p === 'string' && parId.has(p)) {
-            if (!plats.includes(p)) plats.push(p);
-          } else {
-            erreurs.push(erreur(`L’étape ${n} parle d’un plat qui n’est pas dans la semaine.`, `${code}.plats : « ${ligne(p)} » n'est pas un plat de la demande`));
-          }
-        }
+      const platCite = estObjet(c) && typeof c.plat === 'string' ? c.plat : seulPlat;
+      if (!platCite) {
+        avertissements.push(avertissement(`L’étape ${n} cite ${guillemets(nomCite)} sans dire pour quel plat\u00A0: sa quantité ne s’affichera pas.`));
+        return;
       }
-      // Ingrédients cités : { produit, plat, part? } ; le plat d'un ingrédient rejoint ceux de l'étape.
-      const ingredients = [];
-      if (e.ingredients !== undefined && !Array.isArray(e.ingredients)) {
-        erreurs.push(erreur(`Les ingrédients de l’étape ${n} sont illisibles.`, `${code}.ingredients : liste de { "produit", "plat" } attendue`));
+      if (!parId.has(platCite)) {
+        erreurs.push(erreur(`L’étape ${n} cite un ingrédient d’un plat qui n’est pas dans la semaine.`, `${codeC}.plat : « ${ligne(platCite)} » n'est pas un plat de la demande`));
+        return;
       }
-      listeDe(e.ingredients).forEach((c, j) => {
-        const codeC = `${code}.ingredients[${j}]`;
-        if (!estObjet(c) || typeof c.produit !== 'string' || typeof c.plat !== 'string') {
-          erreurs.push(erreur(`Un ingrédient de l’étape ${n} est illisible.`, `${codeC} : { "produit", "plat" } attendu`));
-          return;
+      const trouve = retrouver(nomCite, ingredients.get(platCite).connus);
+      if (!trouve) {
+        // L'ajout d'une part (le thon d'une version mer) : sa quantité est dans le rappel de la part.
+        if (!retrouver(nomCite, ajoutsDesParts.get(platCite))) {
+          avertissements.push(avertissement(`L’étape ${n} cite ${guillemets(nomCite)}, qui n’est pas dans ${guillemets(nom(platCite))}\u00A0: sa quantité ne s’affichera pas.`));
         }
-        const element = parId.get(c.plat);
-        if (!element) {
-          erreurs.push(erreur(`L’étape ${n} cite un ingrédient d’un plat qui n’est pas dans la semaine.`, `${codeC}.plat : « ${ligne(c.plat)} » n'est pas un plat de la demande`));
-          return;
-        }
-        if (!citables(element).has(cleProduit(c.produit))) {
-          erreurs.push(erreur(`L’étape ${n} cite ${guillemets(texte(c.produit))}, qui n’est pas dans ${guillemets(nom(c.plat))}.`, `${codeC} : « ${ligne(c.produit)} » n'est pas un ingrédient de ${c.plat}`));
-          return;
-        }
-        const part = c.part === undefined ? 1 : (estNombre(c.part) && c.part > 0 && c.part <= 1 ? c.part : null);
-        if (part === null) avertissements.push(avertissement(`Une part d’ingrédient de l’étape ${n} est illisible\u00A0: tout l’ingrédient est compté.`));
-        ingredients.push({ produit: texte(c.produit), plat: c.plat, part: part ?? 1 });
-        if (!plats.includes(c.plat)) plats.push(c.plat);
-      });
-      // Champs facultatifs : retirés avec un avertissement s'ils sont fautifs.
-      const duree = estEntier(e.duree, 1, DUREE_MAX_MIN) ? e.duree : null;
-      let actif = null;
-      if (e.actif !== undefined) {
-        if (estEntier(e.actif, 0, duree ?? DUREE_MAX_MIN)) actif = e.actif;
-        else avertissements.push(avertissement(`Le temps de travail de l’étape ${n} est illisible\u00A0: toute l’étape compte comme du travail.`));
+        if (!plats.includes(platCite)) plats.push(platCite);
+        return;
       }
-      let appareil = null;
-      if (e.appareil !== undefined) {
-        if (VOCABULAIRES.appareil.includes(e.appareil)) {
-          appareil = e.appareil;
-          if (!actifs.has(appareil)) avertissements.push(avertissement(`L’étape ${n} utilise un appareil que vos réglages n’ont pas.`));
+      if (cites.some((x) => x.plat === platCite && cleProduit(x.produit) === trouve.cle)) return;
+      let part = 1;
+      let partDite = false;
+      if (estObjet(c) && c.part !== undefined && c.part !== null) {
+        const valeur = typeof c.part === 'string' ? Number(c.part.replace(',', '.')) : c.part;
+        if (estNombre(valeur) && valeur > 0 && valeur <= 1) {
+          part = valeur;
+          partDite = true;
         } else {
-          avertissements.push(avertissement(`L’appareil de l’étape ${n} est inconnu\u00A0: il n’est pas repris.`));
+          avertissements.push(avertissement(`Une part d’ingrédient de l’étape ${n} est illisible\u00A0: tout l’ingrédient est compté.`));
         }
       }
-      const mode = appareil && MODES.includes(appareil) ? texteBorne(e.mode, MODE_MAX) : null;
-      const tempC = appareil && APPAREILS_A_PRECHAUFFER.includes(appareil) && estEntier(e.tempC, TEMP_MIN, TEMP_MAX) ? e.tempC : null;
-      if (e.tempC !== undefined && tempC === null) avertissements.push(avertissement(`La température de l’étape ${n} est illisible\u00A0: elle n’est pas reprise.`));
-      const feu = appareil === 'plaque' && FEUX.includes(e.feu) ? e.feu : null;
-      const ustensiles = listeDe(e.ustensiles).map((u) => texteBorne(u, USTENSILE_MAX)).filter(Boolean).slice(0, USTENSILES_MAX);
-      const aussi = listeDe(e.aussi).filter((a) => typeof a === 'string' ? texte(a) : estObjet(a) && texte(a.produit)).slice(0, AUSSI_MAX)
-        .map((a) => (typeof a === 'string' ? texte(a) : { produit: texte(a.produit), ...(estNombre(a.qte) && a.qte > 0 ? { qte: a.qte } : {}), ...(typeof a.unite === 'string' ? { unite: a.unite } : {}) }));
-      const pret = e.pret === undefined ? null : texteBorne(e.pret, PRET_MAX);
-      if (e.pret !== undefined && !pret) avertissements.push(avertissement(`Le signe «\u00A0prêt\u00A0» de l’étape ${n} est illisible\u00A0: il n’est pas repris.`));
-      let prechauffer = false;
-      if (e.prechauffer === true) {
-        if (appareil && APPAREILS_A_PRECHAUFFER.includes(appareil) && tempC !== null) prechauffer = true;
-        else avertissements.push(avertissement(`L’étape ${n} allume un appareil sans dire lequel ni à quelle température.`));
-      }
-      let partAvant = null;
-      if (e.partAvant !== undefined) {
-        const element = typeof e.partAvant === 'string' ? parId.get(e.partAvant) : null;
-        if (element && listeDe(element.quantites?.parts).length) partAvant = e.partAvant;
-        else avertissements.push(avertissement(`L’étape ${n} met de côté une part qui n’existe pas\u00A0: ce n’est pas repris.`));
-      }
-      if (partAvant && !plats.includes(partAvant)) plats.push(partAvant);
-      etapes.push({
-        titre, texte: corps, duree, actif, appareil, mode, tempC, feu, ustensiles, plats, ingredients, aussi, pret,
-        prechauffer, partAvant, veille: e.veille === true,
-      });
+      cites.push({ produit: trouve.produit, plat: platCite, part, partDite });
+      if (!plats.includes(platCite)) plats.push(platCite);
     });
+    // Champs facultatifs : retirés avec un avertissement s'ils sont fautifs.
+    let actif = null;
+    if (e.actif !== undefined) {
+      const lu = entierLu(e.actif);
+      if (lu !== null && lu >= 0 && lu <= (duree ?? DUREE_MAX_MIN)) actif = lu;
+      else avertissements.push(avertissement(`Le temps de travail de l’étape ${n} est illisible\u00A0: toute l’étape compte comme du travail.`));
+    }
+    let appareil = null;
+    if (e.appareil !== undefined && e.appareil !== null) {
+      if (VOCABULAIRES.appareil.includes(e.appareil)) {
+        appareil = e.appareil;
+        if (!actifs.has(appareil)) avertissements.push(avertissement(`L’étape ${n} utilise un appareil que vos réglages n’ont pas.`));
+      } else {
+        avertissements.push(avertissement(`L’appareil de l’étape ${n} est inconnu\u00A0: il n’est pas repris.`));
+      }
+    }
+    const mode = appareil && MODES.includes(appareil) ? texteBorne(e.mode, MODE_MAX) : null;
+    const tempLue = entierLu(e.tempC);
+    const tempC = appareil && APPAREILS_A_PRECHAUFFER.includes(appareil) && tempLue !== null && tempLue >= TEMP_MIN && tempLue <= TEMP_MAX ? tempLue : null;
+    if (e.tempC !== undefined && e.tempC !== null && tempC === null) avertissements.push(avertissement(`La température de l’étape ${n} est illisible\u00A0: elle n’est pas reprise.`));
+    const feu = appareil === 'plaque' && FEUX.includes(e.feu) ? e.feu : null;
+    const ustensiles = listeDe(e.ustensiles).map((u) => texteBorne(u, USTENSILE_MAX)).filter(Boolean).slice(0, USTENSILES_MAX);
+    const aussi = listeDe(e.aussi).filter((a) => (typeof a === 'string' ? texte(a) : estObjet(a) && texte(a.produit))).slice(0, AUSSI_MAX)
+      .map((a) => (typeof a === 'string' ? texte(a) : { produit: texte(a.produit), ...(estNombre(a.qte) && a.qte > 0 ? { qte: a.qte } : {}), ...(typeof a.unite === 'string' ? { unite: a.unite } : {}) }));
+    const pret = e.pret === undefined || e.pret === null ? null : texteBorne(e.pret, PRET_MAX);
+    if (e.pret !== undefined && e.pret !== null && !pret) avertissements.push(avertissement(`Le signe «\u00A0prêt\u00A0» de l’étape ${n} est illisible\u00A0: il n’est pas repris.`));
+    let prechauffer = false;
+    if (vrai(e.prechauffer)) {
+      if (appareil && APPAREILS_A_PRECHAUFFER.includes(appareil) && tempC !== null) prechauffer = true;
+      else avertissements.push(avertissement(`L’étape ${n} allume un appareil sans dire lequel ni à quelle température.`));
+    }
+    // Parts mises de côté avant cette étape : `true` (les plats de l'étape qui ont une part), un identifiant, une liste.
+    let partAvant = [];
+    if (e.partAvant !== undefined && e.partAvant !== null && e.partAvant !== false) {
+      const lus = vrai(e.partAvant) ? plats.filter(aDesParts) : (typeof e.partAvant === 'string' ? [e.partAvant] : listeDe(e.partAvant));
+      partAvant = [...new Set(lus.filter((p) => typeof p === 'string' && aDesParts(p)))];
+      if (!partAvant.length) avertissements.push(avertissement(`L’étape ${n} met de côté une part qui n’existe pas\u00A0: ce n’est pas repris.`));
+    }
+    for (const p of partAvant) if (!plats.includes(p)) plats.push(p);
+    if (!plats.length && !prechauffer && !platFautif) sansPlat.push(i);
+    etapes.push({
+      n, titre, texte: corps, duree, actif, appareil, mode, tempC, feu, ustensiles, plats, ingredients: cites, aussi, pret,
+      prechauffer, partAvant, veille: vrai(e.veille),
+    });
+  });
 
-    // Chaque plat est dans une étape ; chaque ingrédient de chaque plat est cité.
-    for (const [platId, element] of parId) {
-      if (!etapes.some((e) => e.plats.includes(platId))) {
-        erreurs.push(erreur(`${guillemets(nom(platId))} n’apparaît dans aucune étape.`, `batch.etapes : le plat ${platId} n'apparaît dans aucune étape`));
+  // Une étape qui allume un appareil sans dire pour quel plat : celui de son prochain usage.
+  etapes.forEach((etape, i) => {
+    if (!etape.prechauffer || etape.plats.length) return;
+    const usage = etapes.slice(i + 1).find((x) => x.appareil === etape.appareil && !x.prechauffer && x.plats.length);
+    if (usage) etape.plats = [...usage.plats];
+    else avertissements.push(avertissement(`L’étape ${etape.n} allume ${NOMS_APPAREILS[etape.appareil]} pour aucun plat\u00A0: elle n’est pas reprise.`));
+  });
+  for (const i of sansPlat) {
+    erreurs.push(erreur(`L’étape ${i + 1} ne dit pas pour quels plats elle est.`, `batch.etapes[${i}].plats : identifiants des plats de la demande attendus`));
+  }
+  const gardees = etapes.filter((e) => e.plats.length);
+  const travaux = gardees.filter((e) => !e.prechauffer);
+
+  for (const [platId, element] of parId) {
+    const siennes = travaux.filter((e) => e.plats.includes(platId));
+    if (!siennes.length) {
+      erreurs.push(erreur(`${guillemets(nom(platId))} n’apparaît dans aucune étape.`, `batch.etapes : le plat ${platId} n'apparaît dans aucune étape`));
+      continue;
+    }
+    // Ingrédients jamais cités, parts de plus de 1.
+    const citations = new Map();
+    for (const e of siennes) {
+      for (const c of e.ingredients.filter((x) => x.plat === platId)) {
+        const cle = cleProduit(c.produit);
+        if (!citations.has(cle)) citations.set(cle, []);
+        citations.get(cle).push(c);
+      }
+    }
+    for (const [cle, produit] of ingredients.get(platId).aCiter) {
+      const vues = citations.get(cle) ?? [];
+      if (!vues.length) {
+        avertissements.push(avertissement(`${guillemets(majuscule(produit))} de ${guillemets(nom(platId))} n’est cité dans aucune étape\u00A0: il est seulement dans «\u00A0Sortir tout ce qu’il faut\u00A0».`));
+      } else if (vues.some((c) => c.partDite) && vues.reduce((somme, c) => somme + c.part, 0) > 1 + 1e-6) {
+        avertissements.push(avertissement(`Les parts de ${guillemets(produit)} de ${guillemets(nom(platId))} font plus que la quantité de la recette.`));
+      }
+    }
+    // Manière de cuire : chaque appareil de la recette, et la température du four ou de l'airfryer à 10 °C près.
+    for (const [app, temperatures] of appareilsDeLaRecette(element.plat)) {
+      const avecLui = siennes.filter((e) => e.appareil === app);
+      if (!avecLui.length) {
+        erreurs.push(erreur(`${guillemets(nom(platId))} ne passe plus par ${NOMS_APPAREILS[app]} de sa recette.`,
+          `batch.etapes : l'appareil ${app} de ${platId} n'apparaît dans aucune étape`));
         continue;
       }
-      const cites = new Set(etapes.flatMap((e) => e.ingredients.filter((c) => c.plat === platId).map((c) => cleProduit(c.produit))));
-      for (const [cle, produit] of citables(element)) {
-        if (!cites.has(cle)) {
-          erreurs.push(erreur(`${guillemets(majuscule(produit))} de ${guillemets(nom(platId))} n’est cité dans aucune étape.`, `batch.etapes : « ${ligne(produit)} » de ${platId} n'est cité dans aucune étape`));
-        }
+      if (!APPAREILS_A_PRECHAUFFER.includes(app) || !temperatures.length) continue;
+      const lues = avecLui.map((e) => e.tempC).filter(estNombre);
+      const loin = lues.find((t) => !temperatures.some((r) => Math.abs(t - r) <= 10));
+      if (loin !== undefined) {
+        erreurs.push(erreur(`${guillemets(nom(platId))} cuit à ${loin}\u00A0°C au lieu de ${temperatures[0]}\u00A0°C.`,
+          `batch.etapes : ${app} de ${platId} à ${loin} °C au lieu de ${temperatures[0]} °C`));
       }
-      if (!recipients.some((r) => r.plat === platId)) {
-        avertissements.push(avertissement(`Pas de plat de cuisson donné pour ${guillemets(nom(platId))}.`));
-      }
-      if (listeDe(element.quantites?.parts).length && !etapes.some((e) => e.partAvant === platId)) {
+    }
+    if (!recipients.some((r) => r.plat === platId)) {
+      avertissements.push(avertissement(`Pas de plat de cuisson donné pour ${guillemets(nom(platId))}.`));
+    }
+    // Part : à l'étape `partAvant`, sinon à la première étape qui cite un ingrédient qu'elle retire (comme l'écran).
+    const parts = listeDe(element.quantites?.parts);
+    if (parts.length && !gardees.some((e) => e.partAvant.includes(platId))) {
+      const retires = new Set(parts.flatMap((p) => p.retirer.map(cleProduit)));
+      if (!siennes.some((e) => e.ingredients.some((c) => c.plat === platId && retires.has(cleProduit(c.produit))))) {
         avertissements.push(avertissement(`La part à mettre de côté de ${guillemets(nom(platId))} n’a pas d’étape\u00A0: elle se prépare à part.`));
       }
+    }
+  }
+  // Four ou airfryer jamais allumé avant son premier usage : l'écran le rappellera à l'étape d'avant.
+  for (const app of APPAREILS_A_PRECHAUFFER) {
+    const premier = gardees.findIndex((e) => e.appareil === app && !e.prechauffer && estNombre(e.tempC));
+    if (premier > 0 && !gardees.slice(0, premier).some((e) => e.prechauffer && e.appareil === app)) {
+      avertissements.push(avertissement(`Le plan n’allume pas ${NOMS_APPAREILS[app]} avant ${guillemets(gardees[premier].titre)}\u00A0: l’app le rappellera à l’étape d’avant.`));
     }
   }
   return sortie({
     semaine: texte(semaineId),
     empreinte: texte(empreinte),
-    dureeTotale: brut.dureeTotale,
-    travail: brut.travail,
+    dureeTotale,
+    travail,
     recipients,
-    etapes,
+    etapes: gardees.map(({ n: _n, ingredients: cites, ...reste }) => ({
+      ...reste, ingredients: cites.map(({ partDite: _p, ...c }) => c),
+    })),
   });
 }
 
@@ -560,10 +780,6 @@ export function phraseDemandeBatch(demande, { profils = [], moi = null, avecAute
   return qui ? TEXTES_PLAN_BATCH.demandePar(qui, quand) : TEXTES_PLAN_BATCH.demandeSansAuteur(quand);
 }
 
-/** Vrai si une demande de plan reste à traiter (écran Demandes, compte du gestionnaire). */
-export function demandeBatchATraiter({ doc = null, elements = [], semaine = null } = {}) {
-  return etatCarteBatch({ doc, elements, semaine }).etat === 'demande';
-}
 
 /** « Environ 2 h 30, dont 1 h 10 de travail » ; « Environ 2 h 30 » ; null. */
 export function texteEnviron(total, travail) {
@@ -573,11 +789,6 @@ export function texteEnviron(total, travail) {
     : `Environ ${texteDuree(total)}`;
 }
 
-/** Statut de la semaine assez avancé pour que le plan soit l'action du moment (courses faites). */
-export const coursesFaites = (semaine) => {
-  const lue = lireSemaine(semaine);
-  return Boolean(lue) && RANGS_STATUT[statutSemaine(lue)] >= RANGS_STATUT.courses_faites;
-};
 
 /** Dates de la semaine pour l'écran Demandes : « Semaine du 24 au 30 octobre ». */
 export function texteSemaineDuPlan(semaine) {
@@ -597,25 +808,36 @@ function aCuireACoeur(ingredient) {
 const FAMILLES_UNITES = Object.freeze({ g: ['masse', 1], kg: ['masse', 1000], ml: ['volume', 1], cl: ['volume', 10], l: ['volume', 1000] });
 
 /**
- * Total de plusieurs mesures d'un même produit → { qte, unite } (en kg au-delà de 1 000 g, en litres au-delà de
- * 1 000 ml, en cl au-delà de 100 ml), ou null si elles ne s'additionnent pas (unités de familles différentes,
- * mesure absente). Même unité hors familles (pièces, c. à soupe) : la somme dans cette unité.
+ * Total de plusieurs mesures d'un même produit → [{ qte, unite }] : masses additionnées (en kg dès 1 000 g), volumes
+ * additionnés (en litres dès 1 000 ml, en cl dès 100 ml), chaque autre unité à part (pièces, c. à soupe), dans l'ordre
+ * de leur première apparition ; une mesure illisible est ignorée.
  */
-function totalDesMesures(mesures) {
-  if (!mesures.every((m) => estNombre(m.qte) && m.qte > 0 && m.unite)) return null;
-  const unite = mesures[0].unite;
-  if (mesures.every((m) => m.unite === unite) && !FAMILLES_UNITES[unite]) {
-    return { qte: propre(mesures.reduce((s, m) => s + m.qte, 0)), unite };
+function totalDesMesures(mesures, produit) {
+  const groupes = new Map();
+  for (const m of mesures) {
+    if (!estNombre(m?.qte) || m.qte <= 0 || !m.unite) continue;
+    const famille = FAMILLES_UNITES[m.unite];
+    const cle = famille ? famille[0] : m.unite;
+    const deja = groupes.get(cle) ?? 0;
+    groupes.set(cle, deja + m.qte * (famille ? famille[1] : 1));
   }
-  const familles = mesures.map((m) => FAMILLES_UNITES[m.unite]);
-  if (familles.some((f) => !f) || familles.some((f) => f[0] !== familles[0][0])) return null;
-  const base = propre(mesures.reduce((s, m, i) => s + m.qte * familles[i][1], 0));
-  if (familles[0][0] === 'masse') return base >= 1000 ? { qte: propre(base / 1000), unite: 'kg' } : { qte: base, unite: 'g' };
-  if (base >= 1000) return { qte: propre(base / 1000), unite: 'l' };
-  return base >= 100 ? { qte: propre(base / 10), unite: 'cl' } : { qte: base, unite: 'ml' };
+  return [...groupes].map(([cle, total]) => {
+    const base = propre(total);
+    let mesure;
+    if (cle === 'masse') mesure = base >= 1000 ? { qte: propre(base / 1000), unite: 'kg' } : { qte: base, unite: 'g' };
+    else if (cle === 'volume') mesure = base >= 1000 ? { qte: propre(base / 1000), unite: 'l' } : (base >= 100 ? { qte: propre(base / 10), unite: 'cl' } : { qte: base, unite: 'ml' });
+    else mesure = { qte: base, unite: cle };
+    return { qte: arrondiCuisine(mesure.qte, mesure.unite, produit), unite: mesure.unite };
+  });
 }
 
-/** Quantités d'une étape du plan, ingrédients de plusieurs plats réunis par produit : « Pomme de terre · 1 kg (600 g pour Gratin, 400 g pour Salade) ». */
+const texteDesMesures = (mesures) => mesures.map((m) => texteQuantiteCuisine(m.qte, m.unite)).join(' + ');
+
+/**
+ * Quantités d'une étape du plan, ingrédients de plusieurs plats réunis par produit : « Pomme de terre · 1,6 kg (1 kg
+ * pour Gratin, 600 g pour Salade) » ; toutes les mesures de chaque plat (« Beurre · 50 g + 1 c. à soupe (30 g + 1 c. à
+ * soupe pour Poulet, 20 g pour Gratin) ») ; un plat dont aucune part ne prend l'ingrédient : « pas cette fois pour … ».
+ */
 function quantitesDuPlan(etape, parId) {
   const parProduit = new Map();
   const ordre = [];
@@ -635,21 +857,28 @@ function quantitesDuPlan(etape, parId) {
     const lues = parProduit.get(cle);
     if (lues.length === 1) return { produit: lues[0].produit, texte: lues[0].texte };
     const nom = majuscule(lues[0].produit);
-    const detail = lues.map((l) => `${estNombre(l.qte) && l.qte > 0 ? `${texteQuantiteCuisine(l.qte, l.unite)} ` : ''}pour ${l.plat}`).join(', ');
-    const total = totalDesMesures(lues);
-    return total
-      ? { produit: lues[0].produit, texte: `${nom} · ${texteQuantiteCuisine(arrondiCuisine(total.qte, total.unite, lues[0].produit), total.unite)} (${detail})` }
-      : { produit: lues[0].produit, texte: `${nom} (${detail})` };
+    const detail = lues.map((l) => {
+      if (l.qte === 0) return `${TEXTES_CUISINE.pasCetteFois} pour ${l.plat}`;
+      return l.mesures?.length ? `${texteDesMesures(l.mesures)} pour ${l.plat}` : l.plat;
+    }).join(', ');
+    const total = totalDesMesures(lues.flatMap((l) => l.mesures ?? []), lues[0].produit);
+    return { produit: lues[0].produit, texte: total.length ? `${nom} · ${texteDesMesures(total)} (${detail})` : `${nom} (${detail})` };
   });
 }
+
+/** Parts mises de côté avant une étape normalisée : liste d'identifiants (un identifiant seul d'avant : en liste). */
+const partsAvant = (etape) => (Array.isArray(etape.partAvant) ? etape.partAvant : (typeof etape.partAvant === 'string' ? [etape.partAvant] : []));
 
 /**
  * Modèle de l'écran du batch (#/batch/<semaine>) → { etat: 'ok' | 'introuvable', titrePage, duree, avant: { plats:
  * [texte], recipients: [texte], hygiene: [texte], enfant: [ligne 🧸], parts: [texte], veille: [étape], reunir: [{ platId,
  * nom, ingredients: [{ cle, texte }] }], aussi: texte | null, ustensiles: [{ cle, nom }] }, etapes: [{ cle, n, rang,
  * titre, texte, pret, duree, actif, ligneDuree, ligneAppareil, plats: [nom], pour, quantites: [{ produit, texte }],
- * aussi: [texte], ustensiles: [nom], rappels, conseils: [texte], pendant }], total, fin: { titre, plats: [{ nom,
- * portions, partFragile, congeler }], conseils: [texte] } }. Rien n'est écrit.
+ * aussi: [texte], ustensiles: [nom], rappels, conseils: [texte], pendant }], total, fin: { titre, plats: [{ platId,
+ * nom, portions, partFragile, congeler, service: [{ titre, texte }] }], conseils: [texte] } }. Rien n'est écrit.
+ * Une étape qui allume le four ou l'airfryer (`prechauffer`) n'a pas d'écran : son rappel « Allumez le four… » va sur
+ * l'étape qui la suit ; sans elle, le rappel va sur l'étape d'avant le premier usage. « Pendant que ça cuit » seulement
+ * quand l'étape suivante fait avancer d'autres plats.
  * `plan` : plan normalisé (validerPlanBatch) ; `elements` : platsDuBatch (une étape qui ne vise plus aucun plat de la
  * semaine n'est pas montrée) ; `aujourdhui` : jour de cuisson ('AAAA-MM-JJ' ou Date).
  */
@@ -659,7 +888,7 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
   const nomDuPlat = (platId) => texte(parId.get(platId)?.plat?.nom) || platId;
   const lues = plan.etapes.filter((e) => estObjet(e) && listeDe(e.plats).some((p) => parId.has(p)));
 
-  // Étapes affichées : la veille d'abord (dans « Avant de commencer »), puis le jour même.
+  // Étapes affichées : la veille d'abord (dans « Avant de commencer »), puis le jour même ; jamais une étape qui allume.
   const affichee = (etape, i, prefixe) => ({
     cle: `${prefixe}${i + 1}`,
     n: i + 1,
@@ -674,15 +903,18 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
     quantites: quantitesDuPlan(etape, parId),
     aussi: aussiDeLEtape(etape, 1).map((a) => a.texte),
     ustensiles: listeDe(etape.ustensiles).map((u) => majuscule(texte(u))),
-    citations: etape.ingredients.map((c) => ({ cle: cleProduit(c.produit), plat: c.plat })),
-    source: etape,
+    citations: listeDe(etape.ingredients).map((c) => ({ cle: cleProduit(c.produit), plat: c.plat })),
+    source: { ...etape, plats: listeDe(etape.plats), partAvant: partsAvant(etape) },
+    origine: etape,
   });
-  const veille = lues.filter((e) => e.veille).map((e, i) => affichee(e, i, 'v'));
-  const jour = lues.filter((e) => !e.veille).map((e, i) => affichee(e, i, 'b'));
+  const veille = lues.filter((e) => e.veille && !e.prechauffer).map((e, i) => affichee(e, i, 'v'));
+  const jour = lues.filter((e) => !e.veille && !e.prechauffer).map((e, i) => affichee(e, i, 'b'));
   jour.forEach((etape, i) => {
     etape.rang = i + 1;
     etape.pour = etape.plats.length ? TEXTES_PLAN_BATCH.pour(etape.plats.join(', ')) : null;
-    etape.pendant = Boolean(jour[i + 1] && estNombre(etape.duree) && estNombre(etape.actif) && etape.duree > etape.actif);
+    const suivante = jour[i + 1];
+    etape.pendant = Boolean(suivante && estNombre(etape.duree) && estNombre(etape.actif) && etape.duree > etape.actif
+      && !suivante.source.plats.some((p) => etape.source.plats.includes(p)));
   });
   for (const etape of veille) {
     etape.rang = null;
@@ -691,14 +923,24 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
   }
   const toutes = [...veille, ...jour];
 
-  // Rappels : four (étape « prechauffer » : il servira à la prochaine étape qui l'utilise), parts, 🧸.
+  // Rappels du four : une étape `prechauffer` le pose sur l'étape qui la suit ; un four jamais allumé avant son premier
+  // usage, sur l'étape d'avant ce premier usage (ou sur lui-même s'il ouvre la séance).
   const prechauffages = [];
-  toutes.forEach((etape, i) => {
-    const source = etape.source;
-    if (!source.prechauffer) return;
-    const servie = toutes.slice(i + 1).find((e) => e.source.appareil === source.appareil && !e.source.prechauffer);
-    prechauffages.push({ appareil: source.appareil, tempC: source.tempC, avant: etape.cle, pour: servie?.cle ?? null, titre: servie?.titre ?? null });
+  const sequence = lues.filter((e) => !(e.veille && !e.prechauffer));
+  const visible = new Map(jour.map((e) => [e.origine, e]));
+  sequence.forEach((etape, i) => {
+    if (!etape.prechauffer) return;
+    const apres = sequence.slice(i + 1).find((e) => !e.prechauffer && visible.has(e));
+    const servie = sequence.slice(i + 1).find((e) => !e.prechauffer && e.appareil === etape.appareil && visible.has(e));
+    if (!apres) return;
+    prechauffages.push({ appareil: etape.appareil, tempC: etape.tempC, avant: visible.get(apres).cle, pour: servie ? visible.get(servie).cle : null, titre: servie ? visible.get(servie).titre : null });
   });
+  for (const app of APPAREILS_A_PRECHAUFFER) {
+    const premier = jour.findIndex((e) => e.source.appareil === app && estNombre(e.source.tempC));
+    if (premier < 0 || prechauffages.some((p) => p.appareil === app)) continue;
+    const usage = jour[premier];
+    prechauffages.push({ appareil: app, tempC: usage.source.tempC, avant: jour[Math.max(0, premier - 1)].cle, pour: usage.cle, titre: usage.titre });
+  }
   const rappelsFour = rappelsDuDeroule({ sequence: toutes.map((e) => ({ cle: e.cle, titre: e.titre })), prechauffages });
   for (const etape of toutes) etape.rappels = [...(rappelsFour.get(etape.cle) ?? [])];
 
@@ -721,7 +963,7 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
     // Parts : sur l'étape `partAvant` de ce plat, sinon la première de ce plat qui cite un ingrédient que la version retire.
     for (const part of listeDe(quantites.parts)) {
       const retires = new Set(part.retirer.map(cleProduit));
-      const etape = toutes.find((e) => e.source.partAvant === platId)
+      const etape = toutes.find((e) => e.source.partAvant.includes(platId))
         ?? toutes.find((e) => e.citations.some((c) => c.plat === platId && retires.has(c.cle))) ?? null;
       const qui = laPart(part.profil, moi);
       const consigne = part.consigne ? `\u00A0: ${sansPoint(part.consigne)}` : '';
@@ -747,20 +989,33 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
       precautions, role, moi,
     });
     for (const etape of toutes) etape.rappels.push(...(rappelsEnfant.get(etape.cle) ?? []).filter((r) => r.genre === 'enfant'));
-    // Sortir tout ce qu'il faut : les ingrédients de ce plat (quantités de la semaine), puis les ajouts de ses parts.
-    const ingredients = listeDe(quantites.lignes).filter((l) => !l.personne && texte(l.produit))
-      .map((l) => ({ cle: `ing:${platId}:${cleProduit(l.produit)}`, texte: l.texte }));
-    const vues = new Set();
-    const uniques = ingredients.filter((i) => (vues.has(i.cle) ? false : vues.add(i.cle)));
+    // Sortir tout ce qu'il faut : les ingrédients de ce plat (quantités de la semaine, un produit présent deux fois
+    // additionné), sauf ceux du seul jour du repas et ceux que seules les étapes de la veille utilisent ; puis les
+    // ajouts de ses parts.
+    const service = produitsAuService(plat);
+    const citesLeJour = new Set(jour.flatMap((e) => e.citations.filter((c) => c.plat === platId).map((c) => c.cle)));
+    const citesLaVeille = new Set(veille.flatMap((e) => e.citations.filter((c) => c.plat === platId).map((c) => c.cle)));
+    const cles = [];
+    for (const l of listeDe(quantites.lignes)) {
+      const cle = cleProduit(l.produit);
+      if (!cle || l.personne || cles.includes(cle) || service.has(cle) || (citesLaVeille.has(cle) && !citesLeJour.has(cle))) continue;
+      cles.push(cle);
+    }
+    const uniques = cles.map((cle) => {
+      const produit = listeDe(quantites.lignes).find((l) => cleProduit(l.produit) === cle).produit;
+      const [lue] = quantitesDeLEtape({ ingredients: [{ produit }] }, quantites);
+      return { cle: `ing:${platId}:${cle}`, texte: lue?.texte ?? majuscule(produit) };
+    });
     for (const part of listeDe(quantites.parts)) {
       const qui = estMoi(part.profil, moi) ? 'votre part' : `part ${deNom(nomDe(part.profil))}`;
       part.ajouts.forEach((ajout, i) => uniques.push({ cle: `part:${platId}:${part.profilId}:${i}`, texte: `${ajout.texte} (${qui})` }));
     }
     reunir.push({ platId, nom, ingredients: uniques });
-    // Fin : portions au frigo et au congélateur, date limite, part la plus fragile.
+    // Fin : portions au frigo et au congélateur, date limite, part la plus fragile, et le jour du repas.
     const finDuPlat = finDeCuisson(plat, element.element, jourCuisson, { finSemaine: element.element?.semaine?.fin ?? null, reglages });
     const phrases = phrasesDeFin(finDuPlat, { moi });
-    fin.push({ platId, nom, portions: phrases.portions, partFragile: phrases.partFragile, congeler: phrases.congeler });
+    const leJour = etapesLisibles(plat).etapes.filter((e) => e.auService).map((e) => ({ titre: e.titre, texte: e.texte ?? '' }));
+    fin.push({ platId, nom, portions: phrases.portions, partFragile: phrases.partFragile, congeler: phrases.congeler, service: leJour });
     for (const c of phrases.conseils) if (!conseilsFin.includes(c)) conseilsFin.push(c);
   }
   // Rappels d'une étape : four, part, 🧸 (comme « Cuisiner pas à pas »).
@@ -796,7 +1051,7 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
   }
   const recipients = listeDe(plan.recipients).filter((r) => parId.has(r.plat))
     .map((r) => TEXTES_PLAN_BATCH.recipient(nomDuPlat(r.plat), majuscule(r.ustensile), r.taille));
-  const nettoyer = ({ citations: _c, source: _s, ...etape }) => etape;
+  const nettoyer = ({ citations: _c, source: _s, origine: _o, ...etape }) => etape;
   return {
     etat: 'ok',
     titrePage: TEXTES_PLAN_BATCH.titrePage(parId.size),

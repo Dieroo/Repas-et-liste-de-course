@@ -37,7 +37,7 @@ import {
   semaineVisee, texteDates, texteErreurDates, texteJour, validerDates,
 } from '../coeur/semaine.js';
 import { TEXTES_PROPOSER, texteSansProposition } from '../coeur/proposition.js';
-import { TEXTES_PLAN_BATCH, phraseDemandeBatch, texteDemandeBatch } from '../coeur/plan-batch.js';
+import { TEXTES_PLAN_BATCH, empreintePlanBatch, phraseDemandeBatch, texteDemandeBatch } from '../coeur/plan-batch.js';
 import {
   TEXTES_T3D, carteProchaineAction, grouperParRayon, ordreRayons, texteChaqueSemaineAussi,
 } from '../coeur/liste.js';
@@ -312,9 +312,11 @@ function creerCarteBatch(ctx) {
   let courant = ctx;
   let message = ''; // issue de la dernière copie ou du dernier envoi (cette visite)
   let copiee = false; // demande copiée ou envoyée pendant la visite : « Coller la réponse » devient l'étape suivante
+  let empreinteCopiee = null; // plats de la demande copiée : s'ils changent, la copie ne vaut plus
   let principalPermis = false;
   const titre = el('h2', { id: 'titre-batch' }, TEXTES_PLAN_BATCH.titreCarteCourt);
-  const phrase = el('p', {});
+  // Focalisable : après « Demander », le bouton disparaît et la phrase « 📬 Demandé… » prend le focus.
+  const phrase = el('p', { tabindex: '-1', class: 'phrase-batch' });
   const note = el('p', { class: 'aide' });
   const ligneMessage = el('p', { class: 'aide', role: 'status' });
   const boutonDemander = el('button', { type: 'button', 'data-action': 'demander-batch', onclick: demander });
@@ -337,11 +339,18 @@ function creerCarteBatch(ctx) {
   });
 
   function demander() {
-    courant.actions?.demanderPlanBatch?.({
+    const resultat = courant.actions?.demanderPlanBatch?.({
       apresAnnulation: () => {
         if (!boutonDemander.hidden && boutonDemander.isConnected) boutonDemander.focus();
       },
     });
+    if (resultat?.code === 'ok' && phrase.isConnected) phrase.focus({ preventScroll: true });
+  }
+
+  /** Copie ou envoi réussi : « Coller la réponse » devient l'étape suivante, pour ces plats-là. */
+  function noterCopie() {
+    copiee = true;
+    empreinteCopiee = empreintePlanBatch(courant.batch?.elements ?? []);
   }
 
   async function copierDemande() {
@@ -349,7 +358,7 @@ function creerCarteBatch(ctx) {
     // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
     const reussi = await copier(texteDeLaDemande());
     message = reussi ? TEXTES_PLAN_BATCH.copiee : TEXTES_PLAN_BATCH.copieRatee;
-    copiee = copiee || reussi;
+    if (reussi) noterCopie();
     maj(courant, { principal: principalPermis });
   }
 
@@ -363,7 +372,7 @@ function creerCarteBatch(ctx) {
     if (issue === 'partage') message = TEXTES_PLAN_BATCH.envoyee;
     else if (issue === 'annule') message = TEXTES_PLAN_BATCH.envoiAnnule;
     else message = reussie ? TEXTES_PLAN_BATCH.copiee : TEXTES_PLAN_BATCH.envoiRate;
-    copiee = copiee || issue === 'partage' || reussie;
+    if (issue === 'partage' || reussie) noterCopie();
     maj(courant, { principal: principalPermis });
   }
 
@@ -382,6 +391,13 @@ function creerCarteBatch(ctx) {
     if (noeud.hidden) return;
     const gestionnaire = c.role === 'gestionnaire';
     const { etat } = carte;
+    // Plats changés depuis la copie (l'autre téléphone) : la réponse de Claude serait refusée ; on le dit.
+    if (copiee && empreinteCopiee !== empreintePlanBatch(c.batch.elements)) {
+      copiee = false;
+      empreinteCopiee = null;
+      message = TEXTES_PLAN_BATCH.recopier;
+    }
+    const partageDispo = gestionnaire && etat !== 'pret' && partageDUnTextePossible();
     let textePhrase = '';
     let texteNote = '';
     if (etat === 'pret') {
@@ -399,6 +415,8 @@ function creerCarteBatch(ctx) {
       textePhrase = TEXTES_PLAN_BATCH.invitation(carte.nombre);
       texteNote = gestionnaire ? TEXTES_PLAN_BATCH.invitationGestionnaire : '';
     }
+    // Avant « 📤 Envoyer à Claude » : ouvrir d'abord la conversation dans le projet (le partage ne le propose pas).
+    if (partageDispo && texteNote === TEXTES_PLAN_BATCH.invitationGestionnaire) texteNote = TEXTES_PLAN_BATCH.guidageEnvoi;
     const vuePhrase = JSON.stringify(textePhrase);
     if (phrase.dataset.vue !== vuePhrase) {
       phrase.dataset.vue = vuePhrase;
@@ -410,7 +428,7 @@ function creerCarteBatch(ctx) {
     const pret = etat === 'pret';
     const demandeur = !gestionnaire && (etat === 'aDemander' || etat === 'perime');
     const pourClaude = gestionnaire && !pret;
-    const partage = pourClaude && partageDUnTextePossible();
+    const partage = pourClaude && partageDispo;
     regler(lienCommencer, pret, principal);
     if (pret) {
       const lien = `#/batch/${encodeURIComponent(c.batch.semaineId)}`;
@@ -1185,8 +1203,16 @@ export function creer(ctx) {
     const carte = carteDuMoment(c);
     carteAction.maj(carte);
     sectionPlats.maj(c);
-    // Un seul bouton principal à l'écran : celui du batch seulement quand la carte « prochaine action » n'en a pas.
-    carteBatch.maj(c, { principal: !(carte.boutons ?? []).some((b) => b.principal) });
+    // Un seul bouton principal à l'écran : celui du batch seulement quand la carte « prochaine action » n'en a pas
+    // (courses faites) ; la carte du batch remonte alors juste sous elle, pour que l'action du moment soit en haut.
+    const principal = !(carte.boutons ?? []).some((b) => b.principal);
+    carteBatch.maj(c, { principal });
+    const apres = principal ? carteAction.noeud : sectionPlats.noeud;
+    if (apres.nextElementSibling !== carteBatch.noeud) {
+      const focus = carteBatch.noeud.contains(document.activeElement) ? document.activeElement : null;
+      apres.after(carteBatch.noeud);
+      focus?.focus({ preventScroll: true });
+    }
   }
   majSemaine(ctx);
   majChoixDesPlats(ctx);

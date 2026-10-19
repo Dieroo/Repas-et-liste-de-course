@@ -105,7 +105,7 @@ export function planExemple(empreinte) {
   return {
     semaine: '2026-10-24',
     empreinte,
-    dureeTotale: 80,
+    dureeTotale: 85,
     travail: 50,
     recipients: [
       { plat: G, ustensile: 'plat à gratin', taille: '25 × 20 cm, pour 4 parts' },
@@ -120,7 +120,7 @@ export function planExemple(empreinte) {
       { titre: 'Faire revenir les lardons', texte: 'Faites dorer les lardons à la poêle, sans matière grasse.', duree: 6, appareil: 'plaque', feu: 'moyen', ustensiles: ['poêle'], plats: [G], ingredients: [{ produit: 'lardons', plat: G }] },
       { titre: 'Couper les pommes de terre', texte: 'Égouttez les pommes de terre. Coupez celles du gratin en rondelles et celles de la salade en dés.', duree: 5, ustensiles: ['passoire', 'planche', 'couteau'], plats: [G, S] },
       { titre: 'Monter le gratin', texte: 'Alternez pommes de terre, lardons et crème dans le plat, puis couvrez de gruyère.', duree: 5, ustensiles: ['plat à gratin'], plats: [G], ingredients: [{ produit: 'crème fraîche épaisse', plat: G }, { produit: 'gruyère râpé', plat: G }], partAvant: G },
-      { titre: 'Cuire le gratin', texte: 'Enfournez au milieu du four.', duree: 25, actif: 1, appareil: 'four', tempC: 200, plats: [G], pret: 'Le dessus est doré.' },
+      { titre: 'Cuire le gratin', texte: 'Enfournez au milieu du four.', duree: 30, actif: 1, appareil: 'four', tempC: 200, plats: [G], pret: 'Le dessus est doré.' },
       { titre: 'Ouvrir le Cookeo', texte: 'Laissez sortir toute la vapeur avant d\'ouvrir le couvercle, puis goûtez et rectifiez.', duree: 2, plats: [P] },
       { titre: 'Assaisonner la salade', texte: 'Pendant la cuisson du gratin, ajoutez l\'échalote émincée et la moutarde aux pommes de terre tièdes.', duree: 8, ustensiles: ['saladier'], plats: [S], ingredients: [{ produit: 'échalote', plat: S }, { produit: 'moutarde', plat: S }] },
       { titre: 'Sortir le gratin', texte: 'Sortez le plat du four avec des maniques.', duree: 1, plats: [G], pret: 'Le gratin est sorti, le four peut être éteint.' },

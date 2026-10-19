@@ -279,6 +279,16 @@ export function annulerDemandePlanBatch(semaineId) {
 }
 
 /**
+ * « Annuler » de « Retirer la demande » du plan (gestionnaire, écran Demandes) : `update` du statut, rouverte ; auteur et
+ * date gardés. → promesse de l'envoi.
+ */
+export function remettreDemandePlanBatch(semaineId) {
+  const lot = writeBatch(db);
+  lot.update(referencePlanBatch(semaineId), { 'demande.statut': 'ouverte', 'demande.traiteeLe': deleteField() });
+  return lot.commit();
+}
+
+/**
  * Plan de batch collé par le gestionnaire (coeur/plan-batch.js › validerPlanBatch) : `set` des seuls champs du plan,
  * de son empreinte, des portions de la semaine au moment de l'enregistrement, de la version des instructions, de
  * l'auteur et de l'heure du serveur (`mergeFields` : chacun remplacé en entier, jamais fusionné avec celui d'un plan

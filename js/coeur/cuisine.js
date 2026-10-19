@@ -242,8 +242,8 @@ function arrondiDeLaPart(qte, unite, ingredient, seulePart) {
 }
 
 /**
- * Quantités d'une étape → [{ produit, texte, qte, unite }] (une entrée par produit cité ; plusieurs unités : « Beurre ·
- * 30 g + 1 c. à soupe »). `part` appliquée avant l'arrondi ; un produit présent deux fois dans la fiche : quantités
+ * Quantités d'une étape → [{ produit, texte, qte, unite, mesures: [{ qte, unite }] }] (une entrée par produit cité ;
+ * plusieurs unités : « Beurre · 30 g + 1 c. à soupe », `mesures` les donne toutes, `qte` et `unite` la première). `part` appliquée avant l'arrondi ; un produit présent deux fois dans la fiche : quantités
  * additionnées (même unité). Arrondi seulement si la quantité n'est pas celle de la recette (facteur ou part ≠ 1 ;
  * seule la part : arrondiDeLaPart).
  * Produit introuvable ou sans quantité : son nom seul ; retiré par toutes les parts : « … · pas cette fois ».
@@ -253,9 +253,9 @@ export function quantitesDeLEtape(etape, quantites) {
   return citations(etape).map(({ produit, part, cle }) => {
     const memes = lignes.filter((l) => cleProduit(l.produit) === cle);
     const nom = memes[0]?.produit || produit;
-    if (!memes.length) return { produit: nom, texte: majuscule(nom), qte: null, unite: null };
+    if (!memes.length) return { produit: nom, texte: majuscule(nom), qte: null, unite: null, mesures: [] };
     if (memes.every((l) => l.personne)) {
-      return { produit: nom, texte: `${majuscule(nom)} · ${TEXTES_CUISINE.pasCetteFois}`, qte: 0, unite: memes[0].unite };
+      return { produit: nom, texte: `${majuscule(nom)} · ${TEXTES_CUISINE.pasCetteFois}`, qte: 0, unite: memes[0].unite, mesures: [] };
     }
     const parUnite = new Map();
     for (const ligne of memes) {
@@ -267,7 +267,7 @@ export function quantitesDeLEtape(etape, quantites) {
       if (ligne.arrondie) deja.seulePart = false;
       parUnite.set(unite, deja);
     }
-    if (!parUnite.size) return { produit: nom, texte: majuscule(nom), qte: null, unite: null };
+    if (!parUnite.size) return { produit: nom, texte: majuscule(nom), qte: null, unite: null, mesures: [] };
     const mesures = [...parUnite].map(([unite, { qte, arrondie, seulePart, ingredient }]) => ({
       unite, qte: arrondie ? arrondiDeLaPart(qte, unite, ingredient, seulePart) : propre(qte),
     }));
@@ -276,6 +276,7 @@ export function quantitesDeLEtape(etape, quantites) {
       texte: `${majuscule(nom)} · ${mesures.map((m) => texteQuantiteCuisine(m.qte, m.unite)).join(' + ')}`,
       qte: mesures[0].qte,
       unite: mesures[0].unite,
+      mesures,
     };
   });
 }

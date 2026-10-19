@@ -340,6 +340,8 @@ export function creer(ctx) {
   const ficheDOrigine = () => (retourFiche ? tousLesPlats().find((plat) => plat.id === retourFiche) ?? null : null);
   // Ouvert depuis l'écran Demandes (« Coller la réponse de Claude », T2e) : le retour, et l'enregistrement, y ramènent.
   const depuisDemandes = () => !cible && courant.routePrecedente === 'demandes';
+  // Ouvert depuis Semaine (« Coller la réponse » du plan du batch, « Idées de plats ») : le retour y ramène.
+  const depuisSemaine = () => !cible && !retourFiche && courant.routePrecedente === 'semaine';
 
   function revenir(evenement) {
     // Venu de cet écran-là : retour dans l'historique, pour que le geste retour d'Android reste naturel.
@@ -347,6 +349,7 @@ export function creer(ctx) {
     if (cible || retourFiche) attendu = 'plat';
     else if (depuisReglages()) attendu = 'reglages';
     else if (depuisDemandes()) attendu = 'demandes';
+    else if (depuisSemaine()) attendu = 'semaine';
     if (courant.routePrecedente === attendu && history.length > 1) {
       evenement.preventDefault();
       history.back();
@@ -370,6 +373,9 @@ export function creer(ctx) {
     } else if (depuisDemandes()) {
       retour.href = '#/demandes';
       retour.querySelector('.retour-texte').textContent = 'Demandes';
+    } else if (depuisSemaine()) {
+      retour.href = '#/semaine';
+      retour.querySelector('.retour-texte').textContent = 'Semaine';
     } else {
       retour.href = '#/plats';
       retour.querySelector('.retour-texte').textContent = 'Plats';
@@ -634,16 +640,16 @@ export function creer(ctx) {
   }
 
   /**
-   * Plan de batch collé (2026-10-19) : jugé face à la semaine qu'il nomme (coeur/plan-batch.js › validerPlanBatch :
-   * plats, recettes et parts au moment du collage), sinon face à la semaine montrée. → chargement | refusBatch
-   * (autre semaine, plats changés depuis la demande) | erreursBatch (à faire corriger par Claude) | batch (aperçu).
+   * Plan de batch collé (2026-10-19) : jugé face à la semaine montrée (coeur/plan-batch.js › validerPlanBatch : plats,
+   * recettes et parts au moment du collage ; sans semaine montrée, refusé). → chargement | refusBatch (autre semaine,
+   * plats changés depuis la demande) | erreursBatch (à faire corriger par Claude) | batch (aperçu).
    */
   function calculerBatch(extrait) {
     const { batch: brut, instructions: version } = planDeLaReponse(extrait.paquets);
-    const semaineId = typeof brut?.semaine === 'string' && brut.semaine ? brut.semaine : null;
-    const lu = courant.actions?.lireBatch?.(semaineId ?? courant.semaine?.id ?? '') ?? { code: 'chargement' };
-    if (lu.code === 'chargement') return { type: 'chargement' };
-    const reference = lu.code === 'ok' ? lu.batch : (semaineId ? null : courant.batch);
+    // Jugé face à la semaine montrée seulement : c'est elle dont Semaine montre le plan (une réponse pour une autre
+    // semaine, même connue, est refusée).
+    if (!courant.semainesChargees || (courant.semaine && !courant.batch)) return { type: 'chargement' };
+    const reference = courant.batch;
     const validation = validerPlanBatch(brut, {
       elements: reference?.elements ?? [],
       semaineId: reference?.semaineId ?? null,
@@ -651,9 +657,7 @@ export function creer(ctx) {
       appareils: courant.reglages?.appareils ?? null,
     });
     if (validation.refus) return { type: 'refusBatch', refus: validation.refus };
-    if (!validation.plan) {
-      return { type: 'erreursBatch', erreurs: validation.erreurs, semaineId: semaineId ?? reference?.semaineId ?? null };
-    }
+    if (!validation.plan) return { type: 'erreursBatch', erreurs: validation.erreurs, semaineId: reference?.semaineId ?? null };
     const semaine = (courant.semaines ?? []).find((s) => s?.id === reference.semaineId) ?? null;
     return {
       type: 'batch',
@@ -1283,14 +1287,16 @@ export function creer(ctx) {
    */
   function renduBatch(etat) {
     const { plan } = etat;
+    // Comme l'écran du batch : une étape qui allume le four n'est pas une étape à suivre.
+    const aSuivre = plan.etapes.filter((etape) => !etape.prechauffer);
     const plats = [...new Set(plan.etapes.flatMap((etape) => etape.plats))].map((id) => etat.noms[id] ?? id);
     return el('section', { class: 'carte resultat-pret' },
-      titreResultat(TEXTES_PLAN_BATCH.apercuTitre),
+      titreResultat([el('span', { 'aria-hidden': 'true' }, '👩‍🍳\u00A0'), TEXTES_PLAN_BATCH.apercuTitre.replace(/^\S+\s*/u, '')]),
       etat.avertissements.length
         ? el('ul', { class: 'liste-avertissements' }, etat.avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
         : null,
       etat.dates ? el('p', {}, etat.dates) : null,
-      el('p', {}, TEXTES_PLAN_BATCH.apercuEtapes(plan.etapes.length, texteEnviron(plan.dureeTotale, plan.travail))),
+      el('p', {}, TEXTES_PLAN_BATCH.apercuEtapes(aSuivre.length, texteEnviron(plan.dureeTotale, plan.travail))),
       el('p', { class: 'texte-doux' }, TEXTES_PLAN_BATCH.apercuPlats(listeNoms(plats))),
       plan.recipients.length
         ? el('div', {},
@@ -1300,7 +1306,7 @@ export function creer(ctx) {
         : null,
       el('details', { class: 'depliable apercu-titres' },
         el('summary', {}, TEXTES_PLAN_BATCH.voirLesEtapes),
-        el('ol', { class: 'liste-titres-etapes' }, plan.etapes.map((etape) => el('li', {}, etape.titre)))),
+        el('ol', { class: 'liste-titres-etapes' }, aSuivre.map((etape) => el('li', {}, etape.titre)))),
       etat.remplace ? el('p', { class: 'texte-doux' }, TEXTES_PLAN_BATCH.remplace) : null,
       messageEnvoi ? el('p', { class: 'message-erreur', role: 'alert' }, messageEnvoi) : null,
       el('button', {

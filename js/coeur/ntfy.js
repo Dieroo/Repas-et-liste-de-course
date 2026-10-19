@@ -50,12 +50,12 @@ function nomCourt(nomPlat) {
 /**
  * Corps du message. `type` : 'recette' | 'variante' | 'essai' | 'batch' ; '' si inconnu. Nom du plat réduit (espaces),
  * coupé à NOM_PLAT_MAX (« … ») ; nom vide : « Recette à ajouter », « Version à ajouter », sans deux-points. Plan du
- * batch (2026-10-19) : « Plan de batch à préparer », sans plat ni date. Jamais de prénom (décision 1 de T2e) : tout
+ * batch (2026-10-19) : « Plan du batch à préparer », sans plat ni date. Jamais de prénom (décision 1 de T2e) : tout
  * autre champ reçu est ignoré.
  */
 export function texteNotification({ type, nomPlat = '' } = {}) {
   if (type === 'essai') return 'Essai\u00A0: les demandes arriveront ici.';
-  if (type === 'batch') return 'Plan de batch à préparer';
+  if (type === 'batch') return 'Plan du batch à préparer';
   const debut = { recette: 'Recette à ajouter', variante: 'Version à ajouter' }[type];
   if (typeof debut !== 'string') return '';
   const nom = nomCourt(nomPlat);

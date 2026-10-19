@@ -222,7 +222,8 @@ export function creer(ctx) {
       });
       resultat = { ...resultat, portionsChangees: batch.carte.portionsChangees };
     } else {
-      resultat = { etat: batch.carte.etat === 'perime' ? 'perime' : 'introuvable' };
+      // Un plan d'avant un changement des plats, même redemandé depuis (carte « demandé ») : périmé, pas absent.
+      resultat = { etat: batch.doc?.plan ? 'perime' : 'introuvable' };
     }
     memo.cles = cles;
     memo.resultat = resultat;
@@ -452,9 +453,14 @@ export function creer(ctx) {
         ...avant.reunir.filter((p) => p.ingredients.length).map((p) => el('div', { class: 'batch-reunir' },
           el('h3', {}, p.nom),
           el('ul', { class: 'liste-cases' }, p.ingredients.map(caseDe)))),
-        avant.aussi ? el('p', { class: 'cuisiner-aussi' }, avant.aussi) : null,
-        avant.ustensiles.length
-          ? el('ul', { class: 'liste-cases' }, avant.ustensiles.map(({ cle, nom }) => caseDe({ cle, texte: nom })))
+        // Ustensiles et « Et aussi » : pour tous les plats, sous leur propre titre (jamais rangés sous le dernier plat).
+        avant.aussi || avant.ustensiles.length
+          ? el('div', { class: 'batch-reunir' },
+            el('h3', {}, TEXTES_PLAN_BATCH.pourTous),
+            avant.aussi ? el('p', { class: 'cuisiner-aussi' }, avant.aussi) : null,
+            avant.ustensiles.length
+              ? el('ul', { class: 'liste-cases' }, avant.ustensiles.map(({ cle, nom }) => caseDe({ cle, texte: nom })))
+              : null)
           : null),
     ].filter(Boolean));
     if (focus) corpsAvant.querySelector(`[data-cle="${CSS.escape(focus)}"]`)?.focus({ preventScroll: true });
@@ -470,7 +476,15 @@ export function creer(ctx) {
         el('h2', {}, p.nom),
         p.portions ? el('p', { class: 'cuisiner-phrase' }, p.portions) : null,
         p.partFragile ? el('p', { class: 'cuisiner-phrase' }, avecPictogramme(p.partFragile)) : null,
-        p.congeler ? el('p', { class: 'cuisiner-phrase' }, p.congeler) : null)),
+        p.congeler ? el('p', { class: 'cuisiner-phrase' }, p.congeler) : null,
+        // Le jour du repas (réchauffer, ce qu'on ajoute au moment de servir), puis la recette entière.
+        p.service?.length
+          ? el('div', { class: 'batch-service' },
+            el('h3', {}, TEXTES_PLAN_BATCH.leJourDuRepas),
+            el('ol', { class: 'liste-compacte' }, p.service.map((etape) => etapeCompacte(etape, () => null))))
+          : null,
+        el('a', { class: 'lien-fiche', href: `#/plat/${encodeURIComponent(p.platId)}`, 'aria-label': `Voir la recette\u00A0: ${p.nom}` },
+          TEXTES_PLAN_BATCH.voirLaRecette.replace(/\s*›$/u, ''), el('span', { 'aria-hidden': 'true' }, '\u00A0›')))),
       fin.conseils.length
         ? el('section', { class: 'cuisiner-bloc' },
           el('h2', {}, TEXTES_CUISINE.pourBienConserver),

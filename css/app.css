@@ -3416,7 +3416,8 @@ body.sans-onglets:has(.message-barre:not([hidden])) .annonce {
 .carte-batch > .aide { margin: 0; }
 
 /* Écran du batch : « Sortir tout ce qu’il faut », un petit titre par plat ; portions changées depuis le plan. */
-.batch-reunir h3 {
+.batch-reunir h3,
+.batch-service h3 {
   margin: 8px 0 4px;
   font-size: calc(var(--taille-cuisine) * 0.75);
   overflow-wrap: anywhere;
