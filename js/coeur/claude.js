@@ -21,10 +21,10 @@ export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE };
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 10;
+export const VERSION_INSTRUCTIONS = 11;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = 'f91bd06dd97d';
+export const EMPREINTE_INSTRUCTIONS = '180484aa62d6';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;

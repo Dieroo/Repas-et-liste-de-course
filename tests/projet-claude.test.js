@@ -14,6 +14,10 @@ import { empreinteEtapes } from '../js/coeur/realisation.js';
 import { GATEAU, GRATIN, REALISATION_GRATIN } from './donnees/exemples-etapes.js';
 import { ecrireRegime } from '../js/coeur/regles.js';
 import { slug } from '../js/coeur/slug.js';
+import {
+  empreintePlanBatch, platsDuBatch, texteCorrectionBatch, texteDemandeBatch, validerPlanBatch,
+} from '../js/coeur/plan-batch.js';
+import { PLATS as PLATS_BATCH, PROFILS as PROFILS_BATCH, SEMAINE as SEMAINE_BATCH } from './donnees/plan-batch.js';
 
 const doc = await readFile(new URL('../docs/projet-claude.md', import.meta.url), 'utf8');
 
@@ -27,6 +31,10 @@ const profils = [
 function blocs(langage) {
   return [...doc.matchAll(/```([a-z]*)\n([\s\S]*?)```/g)].filter((m) => m[1] === langage).map((m) => m[2].trimEnd());
 }
+
+/** Blocs `json` de fiches (clé `plats`) ; le plan de batch (clé `batch`) a son propre test. */
+const blocsDeFiches = () => blocs('json').filter((r) => !Object.hasOwn(JSON.parse(r), 'batch'));
+const ELEMENTS_BATCH = platsDuBatch(SEMAINE_BATCH, { tousLesPlats: PLATS_BATCH, profils: PROFILS_BATCH });
 
 const ing = (produit, qte, unite, marqueurs = [], extra = {}) => ({ produit, qte, unite, rayon: 'divers', marqueurs, ...extra });
 
@@ -59,12 +67,13 @@ test('les en-têtes des demandes produites par l’app figurent dans les instruc
     texteDemandeIdees({ profils }).split('\n')[0],
     texteDemandePrecautions([plat]).split('\n')[0],
     texteDemandeEtapes([plat]).split('\n')[0],
+    texteDemandeBatch(ELEMENTS_BATCH, { semaine: SEMAINE_BATCH }).split('\n')[0],
   ];
-  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1', 'DEMANDE-PRECAUTIONS paquet@1', 'DEMANDE-ETAPES paquet@1']);
+  assert.deepEqual([...new Set(enTetes)], ['DEMANDE-RECETTE paquet@1', 'DEMANDE-VARIANTES paquet@1', 'CORRECTION paquet@1', 'DEMANDE-IDEES paquet@1', 'DEMANDE-PRECAUTIONS paquet@1', 'DEMANDE-ETAPES paquet@1', 'DEMANDE-BATCH paquet@1']);
   for (const enTete of enTetes) assert.ok(doc.includes(`\`${enTete}\``), `« ${enTete} » absent`);
   // Chaque code DEMANDE-… cité est connu.
   const cites = new Set(doc.match(/DEMANDE-[A-Z]+/g));
-  assert.deepEqual([...cites].sort(), ['DEMANDE-ETAPES', 'DEMANDE-IDEES', 'DEMANDE-PRECAUTIONS', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
+  assert.deepEqual([...cites].sort(), ['DEMANDE-BATCH', 'DEMANDE-ETAPES', 'DEMANDE-IDEES', 'DEMANDE-PRECAUTIONS', 'DEMANDE-RECETTE', 'DEMANDE-VARIANTES']);
 });
 
 test('les exemples de demandes sont ceux que l’app copie', () => {
@@ -153,12 +162,21 @@ test('les exemples de demandes sont ceux que l’app copie', () => {
   assert.equal(refuse.valide, false);
   assert.ok(exemples.includes(texteCorrectionPourClaude(refuse)), 'exemple CORRECTION d’un message d’étapes différent du texte copié');
 
+  // Plan de batch (2026-10-19) : la demande d'une semaine de trois plats, et la correction d'un plan refusé.
+  assert.ok(exemples.includes(texteDemandeBatch(ELEMENTS_BATCH, { semaine: SEMAINE_BATCH })), 'exemple DEMANDE-BATCH différent du texte copié');
+  const empreinte = empreintePlanBatch(ELEMENTS_BATCH);
+  const planBatch = JSON.parse(blocs('json').find((r) => Object.hasOwn(JSON.parse(r), 'batch'))).batch;
+  delete planBatch.etapes[9].ingredients;
+  const refuseBatch = validerPlanBatch(planBatch, { elements: ELEMENTS_BATCH, semaineId: SEMAINE_BATCH.id, empreinte });
+  assert.equal(refuseBatch.plan, null);
+  assert.ok(exemples.includes(texteCorrectionBatch({ erreurs: refuseBatch.erreurs, semaineId: SEMAINE_BATCH.id })), 'exemple CORRECTION d’un plan de batch différent du texte copié');
+
   // Une demande recollée par erreur n'est jamais prise pour une réponse.
   for (const exemple of exemples) assert.equal(extrairePaquet(exemple).erreur, 'demande');
 });
 
 test('l’exemple de réponse à DEMANDE-ETAPES s’enregistre contre les fiches de la demande, sans avertissement', () => {
-  const reponse = blocs('json').map((r) => JSON.parse(r)).find((p) => p.plats.every((plat) => 'empreinte' in plat && 'realisation' in plat));
+  const reponse = blocsDeFiches().map((r) => JSON.parse(r)).find((p) => p.plats.every((plat) => 'empreinte' in plat && 'realisation' in plat));
   assert.ok(reponse, 'exemple de réponse à DEMANDE-ETAPES absent');
   const validation = validerPaquet([reponse], { profils });
   assert.equal(validation.lotDEtapes, true);
@@ -169,7 +187,7 @@ test('l’exemple de réponse à DEMANDE-ETAPES s’enregistre contre les fiches
   ]);
   assert.equal(prep.ecritures.length, 2);
   // La fiche du §2 porte la même réalisation que la réponse (les mêmes étapes, deux fois montrées).
-  const fiche = blocs('json').map((r) => JSON.parse(r)).find((p) => p.plats[0].id === GRATIN.id && p.plats[0].ingredients).plats[0];
+  const fiche = blocsDeFiches().map((r) => JSON.parse(r)).find((p) => p.plats[0].id === GRATIN.id && p.plats[0].ingredients).plats[0];
   assert.deepEqual(fiche.realisation, reponse.plats[0].realisation);
   assert.deepEqual(fiche.etapes, reponse.plats[0].realisation.map((e) => e.titre));
 });
@@ -189,7 +207,7 @@ test('la section 2 bis tient les règles de l’essai du 2026-10-12 : geste de f
 });
 
 test('l’exemple de fiche de DEMANDE-IDEES est une idée de Claude, au statut brouillon, avec ses versions', () => {
-  const idees = blocs('json').map((r) => JSON.parse(r)).filter((p) => p.plats.some((plat) => plat.source === 'Idée de Claude'));
+  const idees = blocsDeFiches().map((r) => JSON.parse(r)).filter((p) => p.plats.some((plat) => plat.source === 'Idée de Claude'));
   assert.equal(idees.length, 1, 'un exemple de fiche rendue à DEMANDE-IDEES');
   for (const plat of idees[0].plats) {
     // L'identifiant d'une idée est le slug de son nom (section 5), comme Claude doit le créer.
@@ -200,8 +218,23 @@ test('l’exemple de fiche de DEMANDE-IDEES est une idée de Claude, au statut b
   }
 });
 
+test('l’exemple de plan de batch s’enregistre contre les plats de la demande, sans erreur ni avertissement', () => {
+  const blocsBatch = blocs('json').filter((r) => Object.hasOwn(JSON.parse(r), 'batch'));
+  assert.equal(blocsBatch.length, 1, 'un exemple de réponse à DEMANDE-BATCH');
+  const extrait = extrairePaquet(`Voici le plan.\n\n\`\`\`json\n${blocsBatch[0]}\n\`\`\``);
+  assert.ok(extrait.paquets);
+  assert.equal(controlerInstructions(extrait.paquets), null);
+  const resultat = validerPlanBatch(extrait.paquets[0].batch, {
+    elements: ELEMENTS_BATCH, semaineId: SEMAINE_BATCH.id, empreinte: empreintePlanBatch(ELEMENTS_BATCH),
+  });
+  assert.deepEqual([resultat.erreurs, resultat.avertissements, resultat.refus], [[], [], null]);
+  assert.ok(resultat.plan.etapes.some((e) => e.plats.length > 1), 'l’exemple regroupe au moins une étape pour deux plats');
+  assert.ok(resultat.plan.etapes.some((e) => e.prechauffer), 'l’exemple allume le four');
+  assert.ok(resultat.plan.etapes.some((e) => e.partAvant), 'l’exemple met une part de côté');
+});
+
 test('les exemples de réponses s’ajoutent sans erreur ni avertissement', () => {
-  const reponses = blocs('json');
+  const reponses = blocsDeFiches();
   assert.ok(reponses.length >= 3, 'au moins un exemple de fiche, de recette demandée et de versions');
   for (const reponse of reponses) {
     const extrait = extrairePaquet(`Voici la fiche.\n\n\`\`\`json\n${reponse}\n\`\`\``);

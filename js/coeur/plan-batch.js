@@ -51,13 +51,13 @@ const estEntier = (valeur, min, max) => Number.isInteger(valeur) && valeur >= mi
 const listeDe = (valeur) => (Array.isArray(valeur) ? valeur : []);
 const propre = (valeur) => Math.round(valeur * 1e6) / 1e6;
 const majuscule = (valeur) => (valeur ? `${valeur.charAt(0).toLocaleUpperCase('fr-FR')}${valeur.slice(1)}` : valeur);
-const guillemets = (valeur) => `« ${valeur} »`;
+const guillemets = (valeur) => `«\u00A0${valeur}\u00A0»`;
 const nomDe = (profil) => texte(profil?.nom) || 'Sans prénom';
 const estMoi = (profil, moi) => Boolean(moi) && typeof moi.id === 'string' && moi.id === profil?.id;
 const laPart = (profil, moi) => (estMoi(profil, moi) ? 'votre part' : `la part ${deNom(nomDe(profil))}`);
 const sansPoint = (valeur) => texte(valeur).replace(/[\s.!…;,:]+$/u, '');
 const nombreFr = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 });
-const portionsEnMots = (n) => `${nombreFr.format(n)} ${n > 1 ? 'portions' : 'portion'}`;
+const portionsEnMots = (n) => `${nombreFr.format(n)}\u00A0${n > 1 ? 'portions' : 'portion'}`;
 /** Une ligne de texte copié : sans retour à la ligne (un nom saisi ne casse jamais la forme du texte). */
 const ligne = (valeur) => texte(typeof valeur === 'number' ? String(valeur) : valeur);
 
@@ -65,8 +65,8 @@ const ligne = (valeur) => texte(typeof valeur === 'number' ? String(valeur) : va
 
 export const TEXTES_PLAN_BATCH = Object.freeze({
   titreCarte: '👩‍🍳 Le batch de la semaine',
-  invitation: (n) => `Claude peut organiser vos ${n} plats en un seul batch : les cuissons en commun, l’ordre des étapes et la taille des plats.`,
-  invitationGestionnaire: 'Envoyez la demande à Claude, puis collez sa réponse : le plan apparaîtra ici, prêt à suivre.',
+  invitation: (n) => `Claude peut organiser vos ${n}\u00A0plats en un seul batch\u00A0: les cuissons en commun, l’ordre des étapes et la taille des plats.`,
+  invitationGestionnaire: 'Envoyez la demande à Claude, puis collez sa réponse\u00A0: le plan apparaîtra ici, prêt à suivre.',
   demander: '📬 Demander le plan du batch',
   redemander: '📬 Redemander le plan',
   demande: (quand) => `📬 Demandé ${quand}. Il apparaîtra ici dès qu’il sera prêt.`,
@@ -77,15 +77,15 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   coller: 'Coller la réponse',
   pret: '👩‍🍳 Plan du batch prêt',
   commencer: 'Commencer le batch ›',
-  portionsChangees: 'Les portions ont changé depuis le plan : les quantités suivent, vérifiez la taille des plats.',
-  perime: 'Les plats ont changé depuis le plan : il faut le redemander.',
+  portionsChangees: 'Les portions ont changé depuis le plan\u00A0: les quantités suivent, vérifiez la taille des plats.',
+  perime: 'Les plats ont changé depuis le plan\u00A0: il faut le redemander.',
   notification: 'Plan de batch à préparer',
   // Écran #/batch/<semaine>.
-  titrePage: (n) => `Batch : ${n} plats`,
+  titrePage: (n) => `Batch\u00A0: ${n}\u00A0plats`,
   lesPlats: 'Les plats',
   recipients: 'Les plats de cuisson',
-  recipient: (nom, ustensile, taille) => `${nom} : ${ustensile}${taille ? ` · ${taille}` : ''}`,
-  pour: (noms) => `Pour : ${noms}`,
+  recipient: (nom, ustensile, taille) => `${nom}\u00A0: ${ustensile}${taille ? ` · ${taille}` : ''}`,
+  pour: (noms) => `Pour\u00A0: ${noms}`,
   fin: 'Batch terminé 🎉',
   revenir: 'Revenir à la semaine',
   introuvable: 'Ce plan de batch n’est plus là.',
@@ -679,7 +679,7 @@ export function pasAPasBatch(plan, { elements = [], profils = [], moi = null, ro
       const etape = toutes.find((e) => e.source.partAvant === platId)
         ?? toutes.find((e) => e.citations.some((c) => c.plat === platId && retires.has(c.cle))) ?? null;
       const qui = laPart(part.profil, moi);
-      const consigne = part.consigne ? ` : ${sansPoint(part.consigne)}` : '';
+      const consigne = part.consigne ? `\u00A0: ${sansPoint(part.consigne)}` : '';
       const coeur = part.ajouts.length && versions.some((v) => v.profil.id === part.profilId && listeDe(v.variante.ajouter).some(aCuireACoeur))
         ? ` ${CONSEILS.coeur.texte}` : '';
       if (etape) {

@@ -221,7 +221,7 @@ test('etatCarteBatch : visible avec au moins 2 plats ; à demander, demandé, pr
   // Prêt : plan à l'empreinte de la semaine ; la demande est alors traitée, même restée ouverte.
   const { plan } = valider(planExemple(EMPREINTE));
   const pret = etatCarteBatch({ doc: { demande, plan, empreinte: EMPREINTE, portions: portionsDuBatch(ELEMENTS) }, elements: ELEMENTS, semaine: SEMAINE });
-  assert.deepEqual([pret.etat, pret.duree, pret.portionsChangees, pret.demande], ['pret', 'Environ 1 h 20, dont 50 min de travail', false, null]);
+  assert.deepEqual([pret.etat, pret.duree, pret.portionsChangees, pret.demande], ['pret', 'Environ 1\u00A0h\u00A020, dont 50\u00A0min de travail', false, null]);
   assert.ok(!demandeBatchATraiter({ doc: { demande, plan, empreinte: EMPREINTE }, elements: ELEMENTS, semaine: SEMAINE }));
   // Portions changées depuis (un invité) : toujours prêt, avec la phrase.
   const invites = elementsDe({ ...SEMAINE, plats: { ...SEMAINE.plats, 'poulet-curry': { ajouteLe: 3, invites: { adultes: 2 } } } });
@@ -247,31 +247,31 @@ const ECRAN = pasAPasBatch(valider(planExemple(EMPREINTE)).plan, { elements: ELE
 
 test('pasAPasBatch : avant de commencer (plats, plats de cuisson, hygiène, parts, ce qu’il faut sortir)', () => {
   assert.equal(ECRAN.etat, 'ok');
-  assert.equal(ECRAN.titrePage, 'Batch : 3 plats');
-  assert.equal(ECRAN.duree, 'Environ 1 h 20, dont 50 min de travail');
+  assert.equal(ECRAN.titrePage, 'Batch\u00A0: 3\u00A0plats');
+  assert.equal(ECRAN.duree, 'Environ 1\u00A0h\u00A020, dont 50\u00A0min de travail');
   assert.equal(ECRAN.total, 11);
-  assert.deepEqual(ECRAN.avant.plats, ['Gratin de pommes de terre · 4 portions', 'Salade de pommes de terre · 4 portions', 'Poulet au curry · 4 portions']);
-  assert.equal(ECRAN.avant.recipients[0], 'Gratin de pommes de terre : Plat à gratin · 25 × 20 cm, pour 4 parts');
+  assert.deepEqual(ECRAN.avant.plats, ['Gratin de pommes de terre · 4\u00A0portions', 'Salade de pommes de terre · 4\u00A0portions', 'Poulet au curry · 4\u00A0portions']);
+  assert.equal(ECRAN.avant.recipients[0], 'Gratin de pommes de terre\u00A0: Plat à gratin · 25 × 20 cm, pour 4 parts');
   assert.equal(ECRAN.avant.hygiene.length, 2);
-  assert.deepEqual(ECRAN.avant.parts, ['✂️ La part d’Adulte B de « Gratin de pommes de terre » se met de côté avant l’étape 7 : Mettez sa part dans un petit plat avant les lardons, ajoutez le thon.']);
+  assert.deepEqual(ECRAN.avant.parts, ['✂️ La part d’Adulte B de «\u00A0Gratin de pommes de terre\u00A0» se met de côté avant l’étape 7\u00A0: Mettez sa part dans un petit plat avant les lardons, ajoutez le thon.']);
   assert.deepEqual(ECRAN.avant.reunir.map((r) => r.ingredients.length), [5, 3, 3]);
-  assert.equal(ECRAN.avant.reunir[0].ingredients[4].texte, 'Thon au naturel · 100 g (part d’Adulte B)');
+  assert.equal(ECRAN.avant.reunir[0].ingredients[4].texte, 'Thon au naturel · 100\u00A0g (part d’Adulte B)');
   assert.ok(ECRAN.avant.ustensiles.some((u) => u.nom === 'Plat à gratin'));
 });
 
 test('pasAPasBatch : étapes avec leurs plats, quantités réunies, rappels du four et de la part, cuisson à cœur', () => {
   const [pdt, saisir, curry, four] = ECRAN.etapes;
-  assert.equal(pdt.pour, 'Pour : Gratin de pommes de terre, Salade de pommes de terre');
-  assert.deepEqual(pdt.quantites.map((q) => q.texte), ['Pomme de terre · 1,6 kg (1 kg pour Gratin de pommes de terre, 600 g pour Salade de pommes de terre)']);
+  assert.equal(pdt.pour, 'Pour\u00A0: Gratin de pommes de terre, Salade de pommes de terre');
+  assert.deepEqual(pdt.quantites.map((q) => q.texte), ['Pomme de terre · 1,6\u00A0kg (1\u00A0kg pour Gratin de pommes de terre, 600\u00A0g pour Salade de pommes de terre)']);
   assert.equal(pdt.pendant, true);
   assert.deepEqual(saisir.conseils, []);
   assert.equal(curry.conseils.length, 1);
   assert.equal(four.rappels[0].genre, 'four');
-  assert.match(four.rappels[0].texte, /Allumez le four à 200 °C maintenant : il servira à « Cuire le gratin »\./);
+  assert.match(four.rappels[0].texte, /Allumez le four à 200\u00A0°C maintenant\u00A0: il servira à «\u00A0Cuire le gratin\u00A0»\./);
   const monter = ECRAN.etapes[6];
   assert.equal(monter.rappels[0].genre, 'part');
   assert.equal(monter.rappels[0].case.cle, 'part:gratin-pommes-de-terre:profil-b');
-  assert.deepEqual(monter.rappels[0].ajouts, ['Thon au naturel · 100 g']);
+  assert.deepEqual(monter.rappels[0].ajouts, ['Thon au naturel · 100\u00A0g']);
   assert.equal(ECRAN.etapes.at(-1).pendant, false);
 });
 
