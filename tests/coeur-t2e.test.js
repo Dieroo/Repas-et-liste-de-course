@@ -784,6 +784,9 @@ test('texteNotification : trois textes exacts, sans prénom', () => {
   // Tout autre champ est ignoré : jamais de prénom (décision 1).
   assert.equal(texteNotification({ type: 'variante', nomPlat: 'Carbonade flamande', prenom: 'Adulte B', profilId: 'profil-b' }),
     'Version à ajouter\u00A0: Carbonade flamande');
+  // Plan du batch (2026-10-19) : ni plat, ni date, ni prénom.
+  assert.equal(texteNotification({ type: 'batch' }), 'Plan de batch à préparer');
+  assert.equal(texteNotification({ type: 'batch', nomPlat: 'Gratin', prenom: 'Adulte B' }), 'Plan de batch à préparer');
 });
 
 test('texteNotification : espaces resserrés, coupe à 80 caractères, nom vide, type inconnu', () => {

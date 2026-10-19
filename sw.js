@@ -55,6 +55,7 @@ const FICHIERS_APP = [
   './js/coeur/realisation.js',
   './js/coeur/deroule.js',
   './js/coeur/cuisine.js',
+  './js/coeur/plan-batch.js',
   './js/coeur/accueil.js',
   './js/coeur/photos-demande.js',
   './js/ui/dom.js',

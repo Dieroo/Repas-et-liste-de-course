@@ -93,6 +93,21 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   // Demandes (gestionnaire).
   sectionDemandes: 'Plan du batch',
   semaineDu: (dates) => `Semaine ${dates}`,
+  // Écran « Ajouter des recettes » (réponse de Claude collée).
+  apercuTitre: '👩‍🍳 Plan du batch reçu',
+  apercuEtapes: (n, environ) => `${n}\u00A0${n > 1 ? 'étapes' : 'étape'}${environ ? ` · ${environ}` : ''}.`,
+  apercuPlats: (noms) => `Pour\u00A0: ${noms}.`,
+  voirLesEtapes: 'Voir les étapes',
+  remplace: 'Il remplace le plan déjà enregistré pour cette semaine.',
+  enregistrer: 'Enregistrer le plan du batch',
+  enregistre: 'Plan du batch enregistré.',
+  horsLigne: 'Hors ligne\u00A0: le plan est gardé sur ce téléphone et partira au retour du réseau.',
+  echec: 'Le plan du batch n’a pas pu être enregistré. Réessayez.',
+  titreAutreSemaine: 'Plan d’une autre semaine',
+  autreSemaine: 'Ce plan est pour une autre semaine que celle de l’app. Demandez un nouveau plan depuis Semaine.',
+  titrePerime: 'Plan à redemander',
+  perimeImport: 'Les plats de la semaine ont changé depuis la demande. Recopiez la demande depuis Semaine, puis collez la nouvelle réponse de Claude.',
+  ouvrirSemaine: 'Ouvrir Semaine',
 });
 
 /** « aujourd’hui », « hier », « le 24 octobre » (jour 'AAAA-MM-JJ' de la demande, aujourd'hui en 'AAAA-MM-JJ'). */
