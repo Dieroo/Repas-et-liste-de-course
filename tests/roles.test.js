@@ -136,3 +136,15 @@ test('routes : « Cuisiner pas à pas » pour les deux rôles, identifiant du pl
   assert.equal(parametreDe('#/cuisiner/gratin-test', 'cuisiner'), 'gratin-test');
   assert.equal(parametreDe('#/cuisiner/gratin-test', 'plat'), '');
 });
+
+test('routes : le plan du batch pour les deux rôles, identifiant de la semaine obligatoire (2026-10-19)', () => {
+  for (const role of ['gestionnaire', 'courses']) {
+    assert.equal(routeAutorisee('batch', role), true, role);
+    assert.equal(resoudreRoute('#/batch/2026-10-24', role), 'batch', role);
+    // Sans identifiant valide : Semaine.
+    assert.equal(resoudreRoute('#/batch', role), 'semaine', role);
+    assert.equal(resoudreRoute('#/batch/Semaine', role), 'semaine', role);
+  }
+  assert.equal(resoudreRoute('#/batch/2026-10-24', roleEffectif('gestionnaire', true)), 'batch');
+  assert.equal(parametreDe('#/batch/2026-10-24-2', 'batch'), '2026-10-24-2');
+});

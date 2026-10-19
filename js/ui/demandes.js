@@ -17,6 +17,7 @@ import { nombrePhotos } from '../coeur/photos-demande.js';
 import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { sujetValide } from '../coeur/ntfy.js';
 import { visuelDuPlat } from '../coeur/plats.js';
+import { TEXTES_PLAN_BATCH, phraseDemandeBatch, texteDemandeBatch, texteSemaineDuPlan } from '../coeur/plan-batch.js';
 
 const MESSAGE_COPIE = 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse de Claude\u00A0».';
 const MESSAGE_ECHEC_COPIE = 'La copie n’a pas marché. Réessayez.';
@@ -61,8 +62,18 @@ function modele(ctx, plats) {
   };
   const groupes = versions.map(({ profil, elements }) => ({ profilId: profil.id, nom: nomDe(profil), lignes: elements.map(ligne) }));
   const lignesRecettes = recettes.map(ligne);
+  // Plan du batch demandé (2026-10-19) : celui de la semaine montrée (`ctx.demandeBatch`), en tête.
+  const demande = ctx.demandeBatch?.carte?.demande ?? null;
+  const batch = demande ? {
+    semaineId: ctx.demandeBatch.semaineId,
+    dates: texteSemaineDuPlan(ctx.semaine),
+    texte: phraseDemandeBatch(demande, {
+      profils: ctx.profils ?? [], moi: options.moi, avecAuteur: true, enLigne: navigator.onLine,
+    }).replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, ''),
+  } : null;
   return {
-    total: lignesRecettes.length + groupes.reduce((somme, groupe) => somme + groupe.lignes.length, 0),
+    total: (batch ? 1 : 0) + lignesRecettes.length + groupes.reduce((somme, groupe) => somme + groupe.lignes.length, 0),
+    batch,
     recettes: lignesRecettes,
     versions: groupes,
   };
@@ -78,6 +89,9 @@ export function creer(ctx) {
   // Nœuds de chaque groupe de versions affiché : { message, boutonCopier, lienColler } par profil.
   const groupesAffiches = new Map();
   let plats = new Map(); // identifiant de la demande → fiche du plat (vignette), relue à chaque mise à jour
+  // Plan du batch : { copie, message } de la dernière copie de sa demande (cette visite), et ses nœuds affichés.
+  let copieBatch = { copie: false, message: '' };
+  let noeudsBatch = null;
 
   const titre = el('h1', { tabindex: '-1' }, 'Demandes');
   const sousTitre = el('p', { class: 'sous-titre', hidden: true });
@@ -142,6 +156,45 @@ export function creer(ctx) {
     noeuds.message.hidden = !message;
   }
 
+  /** « 📋 Copier la demande » du plan du batch : DEMANDE-BATCH de la semaine montrée, calculée dans le toucher. */
+  async function copierBatch() {
+    const batch = courant.demandeBatch;
+    if (!batch) return;
+    const reussi = await copier(texteDemandeBatch(batch.elements, {
+      semaine: courant.semaine ?? null, appareils: courant.reglages?.appareils ?? null,
+    }));
+    copieBatch = { copie: copieBatch.copie || reussi, message: reussi ? MESSAGE_COPIE : MESSAGE_ECHEC_COPIE };
+    majBatch();
+  }
+
+  /** Avant la copie, l'action principale est « Copier la demande » ; ensuite, « Coller la réponse de Claude ». */
+  function majBatch() {
+    if (!noeudsBatch) return;
+    const { copie, message } = copieBatch;
+    noeudsBatch.boutonCopier.className = `bouton bouton-plein ${copie ? 'bouton-secondaire' : 'bouton-principal'}`;
+    noeudsBatch.lienColler.className = `bouton bouton-plein ${copie ? 'bouton-principal' : 'bouton-secondaire'}`;
+    if (noeudsBatch.message.textContent !== message) noeudsBatch.message.textContent = message;
+    noeudsBatch.message.hidden = !message;
+  }
+
+  /** « Plan du batch » : la semaine, qui l'a demandé et quand, puis la copie pour Claude et « Coller la réponse ». */
+  function sectionBatch(batch) {
+    const message = el('p', { class: 'aide', role: 'status' });
+    const boutonCopier = el('button', {
+      class: 'bouton bouton-plein bouton-principal', type: 'button', 'data-cle': 'copier:batch', onclick: copierBatch,
+    }, el('span', { 'aria-hidden': 'true' }, '📋\u00A0'), TEXTES_PLAN_BATCH.copier.replace(/^\S+\s*/u, ''));
+    const lienColler = el('a', { class: 'bouton bouton-plein bouton-secondaire', href: '#/import', 'data-cle': 'coller:batch' },
+      'Coller la réponse de Claude');
+    noeudsBatch = { message, boutonCopier, lienColler };
+    majBatch();
+    return el('section', { class: 'section groupe-demandes', 'aria-labelledby': 'titre-batch-demande' },
+      el('h2', { id: 'titre-batch-demande' }, TEXTES_PLAN_BATCH.sectionDemandes),
+      batch.dates ? el('p', {}, batch.dates) : null,
+      el('p', { class: 'texte-doux' }, batch.texte),
+      message,
+      el('div', { class: 'actions-recette' }, boutonCopier, lienColler));
+  }
+
   /** Une demande : le plat (lien vers sa fiche), qui l'a demandée et quand, puis « Retirer la demande ». */
   function ligneDemande(ligne) {
     const plat = plats.get(ligne.id) ?? { id: ligne.platId, nom: ligne.nom };
@@ -184,6 +237,7 @@ export function creer(ctx) {
 
   function dessiner(m) {
     groupesAffiches.clear();
+    noeudsBatch = null;
     if (m.chargement) {
       ordre = [];
       contenu.replaceChildren(el('p', { class: 'texte-doux', role: 'status' }, 'Chargement…'));
@@ -205,7 +259,9 @@ export function creer(ctx) {
       contenu.replaceChildren(vide);
       return;
     }
+    if (!m.batch) copieBatch = { copie: false, message: '' };
     contenu.replaceChildren(...[
+      m.batch ? sectionBatch(m.batch) : null,
       m.recettes.length
         ? el('section', { class: 'section groupe-demandes', 'aria-labelledby': 'titre-recettes-demandees' },
           el('h2', { id: 'titre-recettes-demandees' }, 'Recettes à ajouter'),

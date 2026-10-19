@@ -259,15 +259,15 @@ function referencePlanBatch(semaineId) {
 }
 
 /**
- * « 📬 Demander le plan du batch » (vue « Repas et courses ») : `set` fusionné de la seule `demande` (ouverte, auteur,
- * `creeLe` du serveur, `traiteeLe` effacé : redemandée, elle se rouvre) ; le plan déjà là reste. Pas de transaction :
+ * « 📬 Demander le plan du batch » (vue « Repas et courses ») : `set` des seuls champs de la `demande` (`mergeFields` :
+ * ouverte, auteur, `creeLe` du serveur, `traiteeLe` effacé : redemandée, elle se rouvre) ; le plan déjà là reste. Pas de transaction :
  * la demande peut naître hors ligne et partir au retour du réseau. → promesse de l'envoi.
  */
 export function demanderPlanBatch(semaineId, { creePar } = {}) {
   const lot = writeBatch(db);
   lot.set(referencePlanBatch(semaineId), {
     demande: { statut: 'ouverte', creePar: String(creePar ?? ''), creeLe: serverTimestamp(), traiteeLe: deleteField() },
-  }, { merge: true });
+  }, { mergeFields: ['demande.statut', 'demande.creePar', 'demande.creeLe', 'demande.traiteeLe'] });
   return lot.commit();
 }
 
@@ -279,9 +279,10 @@ export function annulerDemandePlanBatch(semaineId) {
 }
 
 /**
- * Plan de batch collé par le gestionnaire (coeur/plan-batch.js › validerPlanBatch) : `set` fusionné du plan, de son
- * empreinte, des portions de la semaine au moment de l'enregistrement, de la version des instructions, de l'auteur et
- * de l'heure du serveur ; la demande passe traitée. Le plan d'avant est remplacé en entier. Hors ligne : part plus
+ * Plan de batch collé par le gestionnaire (coeur/plan-batch.js › validerPlanBatch) : `set` des seuls champs du plan,
+ * de son empreinte, des portions de la semaine au moment de l'enregistrement, de la version des instructions, de
+ * l'auteur et de l'heure du serveur (`mergeFields` : chacun remplacé en entier, jamais fusionné avec celui d'un plan
+ * d'avant) ; la demande passe traitée (son auteur et sa date restent). Hors ligne : part plus
  * tard (la dernière écriture gagne). Lève une erreur avant tout envoi si une valeur est indéfinie. → promesse de l'envoi.
  */
 export function enregistrerPlanBatch(semaineId, { plan, empreinte, portions, instructions = null } = {}, auteur) {
@@ -291,7 +292,9 @@ export function enregistrerPlanBatch(semaineId, { plan, empreinte, portions, ins
   lot.set(referencePlanBatch(semaineId), {
     ...champs, ecritLe: serverTimestamp(), ecritPar: String(auteur ?? ''),
     demande: { statut: 'traitee', traiteeLe: serverTimestamp() },
-  }, { merge: true });
+  }, {
+    mergeFields: ['plan', 'empreinte', 'portions', 'instructions', 'ecritLe', 'ecritPar', 'demande.statut', 'demande.traiteeLe'],
+  });
   return lot.commit();
 }
 

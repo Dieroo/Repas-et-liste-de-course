@@ -105,6 +105,32 @@ export function partageDuTextePossible() {
   }
 }
 
+/** Vrai si le téléphone sait partager un fichier texte seul (la demande du plan du batch, vers l'app Claude). */
+export function partageDUnTextePossible() {
+  try {
+    if (typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return false;
+    return navigator.canShare({ files: [new File(['essai'], 'essai.txt', { type: 'text/plain' })] });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Partage un texte en fichier joint (menu « Partager » d'Android, vers une conversation du projet Claude), jamais en
+ * texte : l'app Claude garde un fichier joint. `texte` : { nom, contenu }. À appeler dans le toucher.
+ * → promesse de { issue: 'partage' | 'annule' | 'impossible' }.
+ */
+export async function partagerTexte({ nom, contenu }) {
+  try {
+    const contenuPartage = { files: [new File([contenu], nom, { type: 'text/plain' })] };
+    if (typeof navigator.share !== 'function' || !navigator.canShare?.(contenuPartage)) return { issue: 'impossible' };
+    await navigator.share(contenuPartage);
+    return { issue: 'partage' };
+  } catch (erreur) {
+    return { issue: erreur?.name === 'AbortError' ? 'annule' : 'impossible' };
+  }
+}
+
 /**
  * Partage des images et, si le téléphone le permet, un texte en fichier joint (menu « Partager » d'Android, vers
  * l'app Claude) : l'app Claude garde le texte d'un partage qui porte texte et images, et laisse les images (essai du

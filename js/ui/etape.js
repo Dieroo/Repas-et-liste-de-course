@@ -1,5 +1,5 @@
-// Carte d'une étape à cuisiner (T5-1, plan §8.5), partagée par « Cuisiner pas à pas » et, plus tard, le batch guidé
-// (T5-2). Ordre fixe, lisible téléphone posé : rappels en tête (four et part sur un bandeau terracotta, avec le
+// Carte d'une étape à cuisiner (T5-1, plan §8.5), partagée par « Cuisiner pas à pas » et le plan du batch
+// (2026-10-19 : « Pour : Gratin, Salade » sous le titre). Ordre fixe, lisible téléphone posé : rappels en tête (four et part sur un bandeau terracotta, avec le
 // dessin du four ou de l'assiette : « Allumez le four… », « Mettez de côté la part… » et sa case ; sur fond ocre :
 // « 🧸 Pour Enfant : … »), titre, quantités de l'étape en gras et « Et aussi : … », texte,
 // « ✓ Prêt quand : … », puces de durée et d'appareil, ce que demande la part mise de côté (sa consigne et ses ajouts,
@@ -38,7 +38,7 @@ export function texteRappel(texte, genre, appareil) {
 function signature(etape, cases) {
   const casesVues = (etape?.rappels ?? []).filter((r) => r.case).map((r) => `${r.case.cle}:${cases.has(r.case.cle)}`);
   return JSON.stringify([
-    etape?.cle, etape?.titre, etape?.texte, etape?.pret, etape?.ligneDuree, etape?.ligneAppareil, etape?.pendant,
+    etape?.cle, etape?.titre, etape?.pour, etape?.texte, etape?.pret, etape?.ligneDuree, etape?.ligneAppareil, etape?.pendant,
     (etape?.quantites ?? []).map((q) => q.texte), etape?.aussi, etape?.conseils,
     (etape?.rappels ?? []).map((r) => [r.genre, r.texte, r.consigne, r.ajouts, r.case?.libelle]), casesVues,
   ]);
@@ -56,6 +56,7 @@ export function creerCarteEtape({ surCase = () => {}, niveauTitre = 'h1' } = {})
   const base = `etape-${compteur}`;
   const rappels = el('div', { class: 'etape-rappels', id: `${base}-rappels` });
   const titre = el(niveauTitre, { class: 'etape-cuisine-titre', tabindex: '-1', id: `${base}-titre` });
+  const pour = el('p', { class: 'etape-cuisine-pour' });
   const quantites = el('ul', { class: 'etape-cuisine-quantites' });
   const aussi = el('p', { class: 'etape-cuisine-aussi' });
   const texte = el('p', { class: 'etape-cuisine-texte' });
@@ -65,7 +66,7 @@ export function creerCarteEtape({ surCase = () => {}, niveauTitre = 'h1' } = {})
   const parts = el('div', { class: 'etape-cuisine-parts' });
   const pendant = el('p', { class: 'etape-cuisine-pendant' }, TEXTES_CUISINE.pendant);
   const noeud = el('article', { class: 'carte-etape-cuisine', 'aria-labelledby': titre.id },
-    rappels, titre, quantites, aussi, texte, pret, puces, parts, conseils, pendant);
+    rappels, titre, pour, quantites, aussi, texte, pret, puces, parts, conseils, pendant);
   let vue = null;
 
   /** Ce que demande une part mise de côté (consigne, ajouts), sous le texte de l'étape. */
@@ -104,6 +105,8 @@ export function creerCarteEtape({ surCase = () => {}, niveauTitre = 'h1' } = {})
     parts.replaceChildren(...detailsParts);
     parts.hidden = !detailsParts.length;
     titre.textContent = etape?.titre ?? '';
+    pour.textContent = etape?.pour ?? '';
+    pour.hidden = !etape?.pour;
     const qte = etape?.quantites ?? [];
     quantites.replaceChildren(...qte.map((q) => el('li', {}, q.texte)));
     quantites.hidden = !qte.length;

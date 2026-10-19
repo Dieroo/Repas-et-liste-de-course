@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ENTETE_DEMANDE_BATCH, PLATS_BATCH_MIN, TEXTES_PLAN_BATCH, cleRepriseBatch, demandeBatchATraiter, empreintePlanBatch,
-  estReponseBatch, etatCarteBatch, pasAPasBatch, planDeLaReponse, platsDuBatch, portionsDuBatch, texteCorrectionBatch,
+  estReponseBatch, etatCarteBatch, pasAPasBatch, phraseDemandeBatch, planDeLaReponse, platsDuBatch, portionsDuBatch,
+  texteCorrectionBatch,
   texteDemandeBatch, texteSemaineDuPlan, validerPlanBatch,
 } from '../js/coeur/plan-batch.js';
 import { VERSION_INSTRUCTIONS } from '../js/coeur/claude.js';
@@ -299,4 +300,21 @@ test('GRATIN et SALADE : fixtures cohérentes (recette validée)', () => {
   assert.equal(GRATIN.realisation.length, GRATIN.etapes.length);
   assert.equal(SALADE.realisation.length, SALADE.etapes.length);
   assert.deepEqual(copie(GRATIN).id, 'gratin-pommes-de-terre');
+});
+
+test('phraseDemandeBatch : quand, auteur (prénom ou « vous », jamais une adresse), hors ligne', () => {
+  const profils = [{ id: 'profil-b', nom: 'Adulte B', email: 'B@Exemple.fr ' }];
+  const demande = { par: 'b@exemple.fr', quand: 'le 24 octobre', horsLigne: false };
+  assert.equal(phraseDemandeBatch(demande), '📬 Demandé le 24 octobre. Il apparaîtra ici dès qu’il sera prêt.');
+  assert.equal(phraseDemandeBatch(demande, { profils, avecAuteur: true }), '📬 Demandé par Adulte B le 24 octobre.');
+  assert.equal(phraseDemandeBatch(demande, { profils, avecAuteur: true, moi: 'b@exemple.fr' }), '📬 Demandé par vous le 24 octobre.');
+  assert.equal(phraseDemandeBatch({ ...demande, par: 'inconnu@exemple.fr' }, { profils, avecAuteur: true }), '📬 Demandé le 24 octobre.');
+  // Pas encore datée par le serveur : « aujourd’hui » en ligne, la phrase du réseau hors ligne.
+  const enAttente = { par: 'b@exemple.fr', quand: '', horsLigne: true };
+  assert.equal(phraseDemandeBatch(enAttente), '📬 Demandé aujourd’hui. Il apparaîtra ici dès qu’il sera prêt.');
+  assert.equal(phraseDemandeBatch(enAttente, { enLigne: false }), TEXTES_PLAN_BATCH.demandeHorsLigne);
+  assert.equal(phraseDemandeBatch(null), '');
+  for (const texte of [phraseDemandeBatch(demande, { profils, avecAuteur: true }), phraseDemandeBatch(enAttente, { enLigne: false })]) {
+    assert.doesNotMatch(texte, /@/);
+  }
 });

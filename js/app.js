@@ -52,6 +52,7 @@ import * as ecranDemandes from './ui/demandes.js';
 import * as accueil from './ui/accueil.js';
 // T5-1 « Cuisiner pas à pas ».
 import * as cuisiner from './ui/cuisiner.js';
+import * as ecranBatch from './ui/batch.js';
 import { TEXTES_CUISINE } from './coeur/cuisine.js';
 import { cleAccueil, lireMarque, valeurVu, valeurOuverture, accueilAuto } from './coeur/accueil.js';
 import { telecharger } from './ui/fichier.js';
@@ -109,6 +110,8 @@ const ECRANS = {
   accueil: { titre: 'Bienvenue', module: accueil, onglet: null, sansOnglets: true },
   // Cuisiner pas à pas (T5-1) : sans onglets ni en-tête de l'app (l'écran a les siens), la barre « Suivante › » en bas.
   cuisiner: { titre: 'Cuisiner pas à pas', module: cuisiner, onglet: 'plats', sansOnglets: true },
+  // Plan du batch (2026-10-19) : comme « Cuisiner pas à pas », pour les plats de la semaine.
+  batch: { titre: 'Le batch de la semaine', module: ecranBatch, onglet: 'semaine', sansOnglets: true },
 };
 
 const NOM_APP = 'Repas & Courses';

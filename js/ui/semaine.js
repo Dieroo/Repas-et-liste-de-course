@@ -18,6 +18,7 @@ import { el, enteteVue, pastille, ecrireTexte, montrerAuDessusDeLAnnonce, reconc
 import { prenomDe } from './profil.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
+import { partageDUnTextePossible, partagerTexte } from './fichier.js';
 import { aujourdhuiDe } from './regime.js';
 import { modeDeCuisson } from './pictos.js';
 import { vignetteDuPlat } from './plats.js';
@@ -36,6 +37,7 @@ import {
   semaineVisee, texteDates, texteErreurDates, texteJour, validerDates,
 } from '../coeur/semaine.js';
 import { TEXTES_PROPOSER, texteSansProposition } from '../coeur/proposition.js';
+import { TEXTES_PLAN_BATCH, phraseDemandeBatch, texteDemandeBatch } from '../coeur/plan-batch.js';
 import {
   TEXTES_T3D, carteProchaineAction, grouperParRayon, ordreRayons, texteChaqueSemaineAussi,
 } from '../coeur/liste.js';
@@ -265,10 +267,15 @@ function creerCarteDemandes(ctx) {
 
   function maj(c) {
     const aTraiter = c?.role === 'gestionnaire' && Array.isArray(c.aTraiter) ? c.aTraiter : [];
-    const n = aTraiter.length;
+    // Plan du batch demandé (2026-10-19) : une demande de plus, nommée « Plan du batch ».
+    const batch = c?.role === 'gestionnaire' && c.demandeBatch ? 1 : 0;
+    const n = aTraiter.length + batch;
     noeud.hidden = n === 0;
     if (!n) return;
-    const noms = [...new Set(aTraiter.map((element) => nomCourt(element?.plat)).filter(Boolean))];
+    const noms = [
+      ...(batch ? [TEXTES_PLAN_BATCH.sectionDemandes] : []),
+      ...new Set(aTraiter.map((element) => nomCourt(element?.plat)).filter(Boolean)),
+    ];
     const texteTitre = n > 1 ? `${n}\u00A0demandes à traiter` : '1\u00A0demande à traiter';
     if (titre.textContent !== texteTitre) titre.textContent = texteTitre;
     const textePlats = noms.length ? nomsDesPlats(noms) : '';
@@ -276,6 +283,150 @@ function creerCarteDemandes(ctx) {
     plats.hidden = !textePlats;
     const nomAccessible = n > 1 ? `Voir les ${n} demandes à traiter` : 'Voir la demande à traiter';
     if (lien.getAttribute('aria-label') !== nomAccessible) lien.setAttribute('aria-label', nomAccessible);
+  }
+
+  maj(ctx);
+  return { noeud, maj };
+}
+
+// ——— Le batch de la semaine (2026-10-19) ———
+
+/** Texte dont le pictogramme de tête (« 📬 ») est montré sans être lu. */
+function avecEmojiDeTete(texte) {
+  const valeur = String(texte ?? '');
+  const trouve = valeur.match(/^(\p{Extended_Pictographic}\uFE0F?)\s*/u);
+  return trouve ? [el('span', { 'aria-hidden': 'true' }, `${trouve[1]}\u00A0`), valeur.slice(trouve[0].length)] : [valeur];
+}
+
+/**
+ * Carte « 👩‍🍳 Le batch de la semaine » (2026-10-19, coeur/plan-batch.js › etatCarteBatch, `ctx.batch`) : visible dès
+ * que la semaine montrée a deux plats à cuisiner. Vue « Repas et courses » : « 📬 Demander le plan du batch » (puis
+ * « 📬 Demandé aujourd’hui. … »), « 📬 Redemander le plan » quand les plats ont changé. Gestionnaire hors aperçu :
+ * « 📤 Envoyer à Claude » (la demande en fichier joint, si le téléphone sait le partager), « 📋 Copier la demande »,
+ * « Coller la réponse ». Plan prêt, pour les deux : « Le plan est prêt. Environ 2 h 30, dont 1 h de travail. » et
+ * « Commencer le batch › ». Le bouton qui fait avancer est principal seulement quand la carte « prochaine action »
+ * n'en a pas (`principal`). Nœuds gardés d'un rendu à l'autre (le focus reste sur le bouton touché).
+ * → { noeud, maj(ctx, { principal }) }
+ */
+function creerCarteBatch(ctx) {
+  let courant = ctx;
+  let message = ''; // issue de la dernière copie ou du dernier envoi (cette visite)
+  let copiee = false; // demande copiée ou envoyée pendant la visite : « Coller la réponse » devient l'étape suivante
+  let principalPermis = false;
+  const titre = el('h2', { id: 'titre-batch' }, TEXTES_PLAN_BATCH.titreCarteCourt);
+  const phrase = el('p', {});
+  const note = el('p', { class: 'aide' });
+  const ligneMessage = el('p', { class: 'aide', role: 'status' });
+  const boutonDemander = el('button', { type: 'button', 'data-action': 'demander-batch', onclick: demander });
+  const lienCommencer = el('a', { 'data-action': 'commencer-batch' }, TEXTES_PLAN_BATCH.commencer.replace(/\s*›$/u, ''),
+    el('span', { 'aria-hidden': 'true' }, '\u00A0›'));
+  const boutonEnvoyer = el('button', { type: 'button', 'data-action': 'envoyer-batch', onclick: envoyer },
+    ...avecEmojiDeTete(TEXTES_PLAN_BATCH.envoyer));
+  const boutonCopier = el('button', { type: 'button', 'data-action': 'copier-batch', onclick: copierDemande },
+    ...avecEmojiDeTete(TEXTES_PLAN_BATCH.copier));
+  const lienColler = el('a', { href: '#/import', 'data-action': 'coller-batch' }, TEXTES_PLAN_BATCH.coller);
+  const actions = el('div', { class: 'actions-carte' }, lienCommencer, boutonDemander, boutonEnvoyer, boutonCopier, lienColler);
+  const noeud = el('section', { class: 'carte carte-batch', 'aria-labelledby': 'titre-batch', hidden: true },
+    el('div', { class: 'carte-ligne' },
+      pastille('👩‍🍳', 'olive'),
+      el('div', { class: 'carte-texte' }, titre, phrase)),
+    note, actions, ligneMessage);
+
+  const texteDeLaDemande = () => texteDemandeBatch(courant.batch?.elements ?? [], {
+    semaine: courant.semaine ?? null, appareils: courant.reglages?.appareils ?? null,
+  });
+
+  function demander() {
+    courant.actions?.demanderPlanBatch?.({
+      apresAnnulation: () => {
+        if (!boutonDemander.hidden && boutonDemander.isConnected) boutonDemander.focus();
+      },
+    });
+  }
+
+  async function copierDemande() {
+    if (!courant.batch) return;
+    // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
+    const reussi = await copier(texteDeLaDemande());
+    message = reussi ? TEXTES_PLAN_BATCH.copiee : TEXTES_PLAN_BATCH.copieRatee;
+    copiee = copiee || reussi;
+    maj(courant, { principal: principalPermis });
+  }
+
+  /** « 📤 Envoyer à Claude » : la demande copiée, puis partagée en fichier joint (menu « Partager » d'Android). */
+  async function envoyer() {
+    const batch = courant.batch;
+    if (!batch) return;
+    const texte = texteDeLaDemande();
+    const reussie = await copier(texte);
+    const { issue } = await partagerTexte({ nom: TEXTES_PLAN_BATCH.nomFichier(batch.semaineId), contenu: texte });
+    if (issue === 'partage') message = TEXTES_PLAN_BATCH.envoyee;
+    else if (issue === 'annule') message = TEXTES_PLAN_BATCH.envoiAnnule;
+    else message = reussie ? TEXTES_PLAN_BATCH.copiee : TEXTES_PLAN_BATCH.envoiRate;
+    copiee = copiee || issue === 'partage' || reussie;
+    maj(courant, { principal: principalPermis });
+  }
+
+  /** Bouton montré ou caché, principal ou secondaire. */
+  function regler(noeudBouton, montre, principal = false) {
+    noeudBouton.hidden = !montre;
+    const classe = `bouton bouton-plein ${principal ? 'bouton-principal' : 'bouton-secondaire'}`;
+    if (noeudBouton.className !== classe) noeudBouton.className = classe;
+  }
+
+  function maj(c, { principal = false } = {}) {
+    courant = c;
+    principalPermis = principal;
+    const carte = c?.batch?.carte;
+    noeud.hidden = !carte?.visible;
+    if (noeud.hidden) return;
+    const gestionnaire = c.role === 'gestionnaire';
+    const { etat } = carte;
+    let textePhrase = '';
+    let texteNote = '';
+    if (etat === 'pret') {
+      textePhrase = TEXTES_PLAN_BATCH.planPret(carte.duree);
+      texteNote = carte.portionsChangees ? TEXTES_PLAN_BATCH.portionsChangees : '';
+    } else if (etat === 'demande') {
+      textePhrase = phraseDemandeBatch(carte.demande, {
+        profils: c.profils ?? [], moi: c.utilisateur?.email ?? null, avecAuteur: gestionnaire, enLigne: navigator.onLine,
+      });
+      texteNote = gestionnaire ? TEXTES_PLAN_BATCH.invitationGestionnaire : '';
+    } else if (etat === 'perime') {
+      textePhrase = TEXTES_PLAN_BATCH.perime;
+      texteNote = gestionnaire ? TEXTES_PLAN_BATCH.invitationGestionnaire : '';
+    } else {
+      textePhrase = TEXTES_PLAN_BATCH.invitation(carte.nombre);
+      texteNote = gestionnaire ? TEXTES_PLAN_BATCH.invitationGestionnaire : '';
+    }
+    const vuePhrase = JSON.stringify(textePhrase);
+    if (phrase.dataset.vue !== vuePhrase) {
+      phrase.dataset.vue = vuePhrase;
+      phrase.replaceChildren(...avecEmojiDeTete(textePhrase));
+    }
+    ecrireTexte(note, texteNote);
+    note.hidden = !texteNote;
+
+    const pret = etat === 'pret';
+    const demandeur = !gestionnaire && (etat === 'aDemander' || etat === 'perime');
+    const pourClaude = gestionnaire && !pret;
+    const partage = pourClaude && partageDUnTextePossible();
+    regler(lienCommencer, pret, principal);
+    if (pret) {
+      const lien = `#/batch/${encodeURIComponent(c.batch.semaineId)}`;
+      if (lienCommencer.getAttribute('href') !== lien) lienCommencer.setAttribute('href', lien);
+    }
+    regler(boutonDemander, demandeur, principal);
+    const libelle = etat === 'perime' ? TEXTES_PLAN_BATCH.redemander : TEXTES_PLAN_BATCH.demander;
+    if (boutonDemander.dataset.libelle !== libelle) {
+      boutonDemander.dataset.libelle = libelle;
+      boutonDemander.replaceChildren(...avecEmojiDeTete(libelle));
+    }
+    regler(boutonEnvoyer, partage, principal && !copiee);
+    regler(boutonCopier, pourClaude, principal && !copiee && !partage);
+    regler(lienColler, pourClaude, principal && copiee);
+    ecrireTexte(ligneMessage, pourClaude ? message : '');
+    ligneMessage.hidden = !pourClaude || !message;
   }
 
   maj(ctx);
@@ -1018,6 +1169,7 @@ export function creer(ctx) {
 
   const carteAction = creerCarteAction(choisir, proposer);
   const sectionPlats = creerSectionPlats(choisir, ouvrir, desserts, changer);
+  const carteBatch = creerCarteBatch(ctx);
 
   const noeud = el('div', { class: 'vue' },
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
@@ -1025,12 +1177,16 @@ export function creer(ctx) {
     demandes?.noeud ?? null,
     carteAction.noeud,
     sectionPlats.noeud,
+    carteBatch.noeud,
     ctx.role === 'gestionnaire' ? carteIdees() : null,
   );
 
   function majSemaine(c) {
-    carteAction.maj(carteDuMoment(c));
+    const carte = carteDuMoment(c);
+    carteAction.maj(carte);
     sectionPlats.maj(c);
+    // Un seul bouton principal à l'écran : celui du batch seulement quand la carte « prochaine action » n'en a pas.
+    carteBatch.maj(c, { principal: !(carte.boutons ?? []).some((b) => b.principal) });
   }
   majSemaine(ctx);
   majChoixDesPlats(ctx);

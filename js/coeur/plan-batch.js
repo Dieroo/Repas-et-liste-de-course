@@ -72,6 +72,7 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   demande: (quand) => `📬 Demandé ${quand}. Il apparaîtra ici dès qu’il sera prêt.`,
   demandeHorsLigne: '📬 Demandé. La demande partira au retour du réseau.',
   demandePar: (qui, quand) => `📬 Demandé par ${qui} ${quand}.`,
+  demandeSansAuteur: (quand) => `📬 Demandé ${quand}.`,
   envoyer: '📤 Envoyer à Claude',
   copier: '📋 Copier la demande',
   coller: 'Coller la réponse',
@@ -80,6 +81,14 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   portionsChangees: 'Les portions ont changé depuis le plan\u00A0: les quantités suivent, vérifiez la taille des plats.',
   perime: 'Les plats ont changé depuis le plan\u00A0: il faut le redemander.',
   notification: 'Plan de batch à préparer',
+  titreCarteCourt: 'Le batch de la semaine',
+  planPret: (environ) => `Le plan est prêt.${environ ? ` ${environ}.` : ''}`,
+  copiee: 'Demande copiée. Collez-la dans une conversation de votre projet Claude, envoyez, puis revenez ici et touchez «\u00A0Coller la réponse\u00A0».',
+  envoyee: 'Demande envoyée. Dans Claude, vérifiez qu’elle est jointe au message, puis envoyez. Revenez ensuite ici et touchez «\u00A0Coller la réponse\u00A0».',
+  envoiAnnule: 'Envoi annulé.',
+  envoiRate: 'L’envoi n’a pas marché. Touchez «\u00A0📋 Copier la demande\u00A0», puis collez-la dans Claude.',
+  copieRatee: 'La copie n’a pas marché. Réessayez.',
+  nomFichier: (semaineId) => `batch-${semaineId}-demande.txt`,
   // Écran #/batch/<semaine>.
   titrePage: (n) => `Batch\u00A0: ${n}\u00A0plats`,
   lesPlats: 'Les plats',
@@ -87,6 +96,7 @@ export const TEXTES_PLAN_BATCH = Object.freeze({
   recipient: (nom, ustensile, taille) => `${nom}\u00A0: ${ustensile}${taille ? ` · ${taille}` : ''}`,
   pour: (noms) => `Pour\u00A0: ${noms}`,
   fin: 'Batch terminé 🎉',
+  termine: 'Batch terminé ›',
   revenir: 'Revenir à la semaine',
   introuvable: 'Ce plan de batch n’est plus là.',
   perimeEcran: 'Les plats de la semaine ont changé depuis ce plan. Demandez-en un nouveau depuis Semaine.',
@@ -528,6 +538,26 @@ export function etatCarteBatch({ doc = null, elements = [], semaine = null, aujo
     duree: aJour ? texteEnviron(plan.dureeTotale, plan.travail) : null,
     portionsChangees, demande,
   };
+}
+
+const adresse = (valeur) => (typeof valeur === 'string' ? valeur.trim().toLowerCase() : '');
+
+/**
+ * Phrase d'une demande de plan (`etatCarteBatch().demande` ; carte de Semaine, écran Demandes) : « 📬 Demandé
+ * aujourd’hui. Il apparaîtra ici dès qu’il sera prêt. » ; avec l'auteur (`avecAuteur`, gestionnaire) : « 📬 Demandé par
+ * Adulte B le 24 octobre. » (« vous », ou le prénom du profil qui porte l'adresse ; jamais une adresse ; auteur
+ * inconnu : « 📬 Demandé le 24 octobre. ») ; pas encore reçue par le serveur et `enLigne` faux : « 📬 Demandé. La
+ * demande partira au retour du réseau. ». `moi` : adresse de la personne connectée. '' sans demande.
+ */
+export function phraseDemandeBatch(demande, { profils = [], moi = null, avecAuteur = false, enLigne = true } = {}) {
+  if (!estObjet(demande)) return '';
+  if (demande.horsLigne && !enLigne) return TEXTES_PLAN_BATCH.demandeHorsLigne;
+  const quand = demande.quand || 'aujourd’hui';
+  if (!avecAuteur) return TEXTES_PLAN_BATCH.demande(quand);
+  const par = adresse(demande.par);
+  const qui = par && par === adresse(moi) ? 'vous'
+    : texte(listeDe(profils).find((p) => estObjet(p) && par && adresse(p.email) === par)?.nom);
+  return qui ? TEXTES_PLAN_BATCH.demandePar(qui, quand) : TEXTES_PLAN_BATCH.demandeSansAuteur(quand);
 }
 
 /** Vrai si une demande de plan reste à traiter (écran Demandes, compte du gestionnaire). */
