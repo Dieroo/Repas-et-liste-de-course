@@ -461,6 +461,8 @@ const HORS_FIXTURES = new Map([
   ['pate', 'homographe exprès (T3a : clé de repli)'], ['the', 'thé sans accent, exprès (T3a : clé de repli)'],
   ['pate brisee', 'pâte brisée sans accents, exprès (T3a : clé de repli)'],
   ['tofu fumé maison', 'produit du foyer inconnu exprès (T3d : nom gardé avec le placard)'],
+  ['noix de St-Jacques', 'autre écriture exprès (Changer des plats : famille lue sur la clé, sans produit courant)'],
+  ['bâtonnets de poisson', 'autre écriture exprès (Changer des plats : famille lue sur la clé, sans produit courant)'],
 ]);
 
 /**

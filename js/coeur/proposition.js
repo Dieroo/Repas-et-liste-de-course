@@ -18,8 +18,9 @@
 //   l'ancien plat était le seul à en avoir. Jamais pour les desserts.
 // - Aucune écriture ici : semaine.js › ecrituresAjoutGroupe, ecrituresRetraitGroupe, ecrituresRemplacement.
 import {
-  RANGS_STATUT, aDesPlats, ajouterJours, ecartJours, estDansLaSemaine, jourDeDerniereFois, jourValide, lireSemaine,
-  mangeParDefaut, peutAllerDansLaSemaine, platsDeLaSemaine, statutSemaine, texteDates,
+  RANGS_STATUT, aDesPlats, ajouterJours, appliquerChamps, ecartJours, ecrituresRemplacement, estDansLaSemaine,
+  jourDeDerniereFois, jourValide, lireSemaine, mangeParDefaut, peutAllerDansLaSemaine, platsDeLaSemaine, statutSemaine,
+  texteDates,
 } from './semaine.js';
 import { estNote, melanger, noteDe, noteRetenue } from './notes.js';
 import { aSaRecette, categorieDuPlat, typeDe } from './plats.js';
@@ -94,6 +95,55 @@ export const POIDS_PIECE_LEGUMES = Object.freeze({
   'chou-de-bruxelle': 15, 'celeri-rave': 600, potimarron: 1000, courge: 1000, artichaut: 300,
   endive: 100, laitue: 300, champignon: 20, radi: 15, 'radi-noir': 250, asperge: 20,
 });
+
+/**
+ * Produits de la mer (« 🔄 Changer des plats », 2026-10-18) : familles proposées dans « Quel produit ? », dans cet
+ * ordre. `mots` : suites de mots d'une clé de produit (cleProduit, au pluriel près) qui disent la famille, où qu'elles
+ * soient dans la clé (« pavé de saumon », « dos de cabillaud », « noix de Saint-Jacques ») ; `au` : la famille dans une
+ * phrase (« Pas d’autre plat au saumon pour l’instant. » ; « avec du lieu », « avec du bar » : « au lieu » se lirait
+ * « à la place »). Données génériques, sans rien du foyer.
+ */
+export const FAMILLES_MER = Object.freeze([
+  { id: 'saumon', nom: 'Saumon', au: 'au saumon', mots: [['saumon']] },
+  { id: 'cabillaud', nom: 'Cabillaud', au: 'au cabillaud', mots: [['cabillaud']] },
+  { id: 'thon', nom: 'Thon', au: 'au thon', mots: [['thon']] },
+  { id: 'crevette', nom: 'Crevettes', au: 'aux crevettes', mots: [['crevette'], ['gamba']] },
+  { id: 'colin', nom: 'Colin', au: 'au colin', mots: [['colin']] },
+  { id: 'lieu', nom: 'Lieu', au: 'avec du lieu', mots: [['lieu']] },
+  { id: 'merlu', nom: 'Merlu', au: 'au merlu', mots: [['merlu']] },
+  { id: 'poisson-blanc', nom: 'Poisson blanc', au: 'au poisson blanc', mots: [['poisson', 'blanc']] },
+  { id: 'truite', nom: 'Truite', au: 'à la truite', mots: [['truite']] },
+  { id: 'sardine', nom: 'Sardines', au: 'aux sardines', mots: [['sardine']] },
+  { id: 'maquereau', nom: 'Maquereau', au: 'au maquereau', mots: [['maquereau']] },
+  { id: 'dorade', nom: 'Dorade', au: 'à la dorade', mots: [['dorade'], ['daurade']] },
+  { id: 'bar', nom: 'Bar', au: 'avec du bar', mots: [['bar'], ['loup', 'de', 'mer']] },
+  { id: 'sole', nom: 'Sole', au: 'à la sole', mots: [['sole']] },
+  { id: 'lotte', nom: 'Lotte', au: 'à la lotte', mots: [['lotte']] },
+  { id: 'poisson-pane', nom: 'Poisson pané', au: 'au poisson pané', mots: [['poisson', 'pane'], ['batonnet', 'de', 'poisson']] },
+  { id: 'saint-jacques', nom: 'Saint-Jacques', au: 'aux saint-jacques', mots: [['saint', 'jacque'], ['st', 'jacque']] },
+  { id: 'moule', nom: 'Moules', au: 'aux moules', mots: [['moule']] },
+  { id: 'calamar', nom: 'Calamars', au: 'aux calamars', mots: [['calamar'], ['calmar'], ['encornet']] },
+  { id: 'seiche', nom: 'Seiche', au: 'à la seiche', mots: [['seiche']] },
+  { id: 'poulpe', nom: 'Poulpe', au: 'au poulpe', mots: [['poulpe']] },
+  { id: 'fruits-de-mer', nom: 'Fruits de mer', au: 'aux fruits de mer', mots: [['fruit', 'de', 'mer']] },
+  { id: 'crabe', nom: 'Crabe', au: 'au crabe', mots: [['crabe']] },
+  { id: 'langoustine', nom: 'Langoustines', au: 'aux langoustines', mots: [['langoustine']] },
+  { id: 'surimi', nom: 'Surimi', au: 'au surimi', mots: [['surimi']] },
+  { id: 'haddock', nom: 'Haddock', au: 'au haddock', mots: [['haddock']] },
+  { id: 'morue', nom: 'Morue', au: 'à la morue', mots: [['morue']] },
+  { id: 'hareng', nom: 'Hareng', au: 'au hareng', mots: [['hareng']] },
+  { id: 'espadon', nom: 'Espadon', au: 'à l’espadon', mots: [['espadon']] },
+].map((famille) => Object.freeze({ ...famille, mots: Object.freeze(famille.mots.map((m) => Object.freeze([...m]))) })));
+/**
+ * Produits de la mer qui ne font pas un plat de la mer (premier mot de la clé) : un assaisonnement, un fond de sauce
+ * ou une garniture (sauce nuoc-mâm, fumet, fond de poisson, court-bouillon, dashi, encre de seiche, œufs de lump).
+ * CONDIMENTS_MER_PARTOUT : où que soit le mot (« filet d'anchois » d'une pizza, « worcestershire » seul) : lireMer.
+ */
+export const CONDIMENTS_MER = Object.freeze(['nuoc', 'sauce', 'fumet', 'bouillon', 'anchoi', 'huile', 'pate', 'creme', 'oeuf', 'tarama',
+  'fond', 'court', 'dashi', 'bonite', 'garum', 'colatura', 'encre']);
+export const CONDIMENTS_MER_PARTOUT = Object.freeze(['anchoi', 'worcestershire', 'worcester']);
+/** Repères qu'un profil « Pas de viande » ne mange pas (comme regles.js) : un plat qui en a n'est jamais « de la mer ». */
+const REPERES_DE_VIANDE = Object.freeze(['viande', 'bouillon_viande', 'gelatine_animale', 'graisse_animale']);
 
 const ID_SUR = /^[a-z0-9-]+$/;
 /** Mots d'un produit qui ne disent pas le légume (couleur, état) : jamais cherchés dans le nom du plat. */
@@ -343,6 +393,52 @@ export function aDesLegumes(plat) {
   return portionsLues && arrondi(grammes / portions) >= PORTION_LEGUMES_G;
 }
 
+// ——— Plats de la mer (2026-10-18) ———
+
+/** Vrai si la suite de mots `suite` se trouve d'un bloc dans `mots`. */
+function contientLaSuite(mots, suite) {
+  for (let i = 0; i + suite.length <= mots.length; i += 1) {
+    if (suite.every((mot, j) => mots[i + j] === mot)) return true;
+  }
+  return false;
+}
+
+/**
+ * Plat de la mer, pour « 🔄 Changer des plats » → { deLaMer, familles: [id de FAMILLES_MER, dans leur ordre] }, sur la
+ * recette seule (jamais ses versions). `deLaMer` : un plat qui a sa recette, ni viande, ni bouillon, gélatine ou graisse
+ * animale (marqueurs effectifs, REPERES_DE_VIANDE : un plat de la mer se mange tel quel par un profil qui ne mange pas
+ * de viande) et au moins un ingrédient marqué `poisson` ou `fruits_de_mer` qui n'est pas un assaisonnement
+ * (CONDIMENTS_MER, CONDIMENTS_MER_PARTOUT). `familles` : celles de ses
+ * produits de la mer (FAMILLES_MER) ; un produit d'aucune famille compte seulement pour « Peu importe ».
+ */
+export function lireMer(plat) {
+  const rien = { deLaMer: false, familles: [] };
+  if (!aSaRecette(plat)) return rien;
+  const trouvees = new Set();
+  let marin = false;
+  for (const ingredient of plat.ingredients) {
+    if (!estObjet(ingredient)) continue;
+    const marqueurs = marqueursEffectifs(ingredient);
+    if (REPERES_DE_VIANDE.some((m) => marqueurs.has(m))) return rien;
+    if (!marqueurs.has('poisson') && !marqueurs.has('fruits_de_mer')) continue;
+    const mots = motsCles(ingredient.produit);
+    if (!mots.length || CONDIMENTS_MER.includes(mots[0]) || CONDIMENTS_MER_PARTOUT.some((m) => mots.includes(m))) continue;
+    marin = true;
+    for (const famille of FAMILLES_MER) if (famille.mots.some((suite) => contientLaSuite(mots, suite))) trouvees.add(famille.id);
+  }
+  return marin ? { deLaMer: true, familles: FAMILLES_MER.filter((f) => trouvees.has(f.id)).map((f) => f.id) } : rien;
+}
+
+/** Choix « Par quoi ? » lisible : 'tout' (« 🐟 Un plat de la mer », peu importe le produit), une famille connue, sinon null. */
+function choixMer(mer) {
+  if (mer === 'tout') return 'tout';
+  return FAMILLES_MER.some((f) => f.id === mer) ? mer : null;
+}
+
+/** Vrai si le candidat convient au choix de la mer (null : tout convient). */
+const convientALaMer = (candidat, mer) => mer === null
+  || (candidat.mer.deLaMer && (mer === 'tout' || candidat.mer.familles.includes(mer)));
+
 const ancienneteDe = (ecart) => (ecart === null ? BONUS_JAMAIS
   : Math.min(Math.floor(ecart / 7), SEMAINES_MAX) * BONUS_PAR_SEMAINE);
 const estRecent = (ecart) => ecart !== null && ecart <= JOURS_RECENTS;
@@ -382,7 +478,8 @@ function analyserPlat(plat, { profils, evaluer, passages, cible }) {
   return {
     platId: plat.id, plat, palier: ecartes.length ? 3 : recent ? 2 : 1, groupe, jamaisAuMenu, moyenne,
     mangeurs: mangeurs.map((p) => p.id), ecartes, ecart, recent, aimePar,
-    proteine: proteineDe(plat), forme: formeDe(plat), legumes: aDesLegumes(plat), base: arrondi(moyenne + ancienneteDe(ecart)),
+    proteine: proteineDe(plat), forme: formeDe(plat), legumes: aDesLegumes(plat), mer: lireMer(plat),
+    base: arrondi(moyenne + ancienneteDe(ecart)),
   };
 }
 
@@ -423,7 +520,8 @@ function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refus
 /**
  * Plats proposables pour la cible (filtre dur), avec palier, groupe et score de base → [{ platId, plat, palier: 1|2|3,
  * groupe: 'aime'|'decouvrir'|'autre', jamaisAuMenu, moyenne, mangeurs: [profilId], ecartes: [{ profilId, raison:
- * 'version'|'age'|'jamaisEnfant' }], ecart: n|null, recent, aimePar: [profilId], proteine, forme, legumes, base }], triés par
+ * 'version'|'age'|'jamaisEnfant' }], ecart: n|null, recent, aimePar: [profilId], proteine, forme, legumes, mer (lireMer),
+ * base }], triés par
  * identifiant. `type` : 'plat' | 'dessert' ; `refuses` : ids écartés pendant la visite (ancien plat d'un 🔄).
  */
 export function candidats(tousLesPlats, { cible, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [] } = {}) {
@@ -725,13 +823,18 @@ export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], 
  * Variété face aux plats de la cible sans l'ancien. `graine` : graineProposition(cible) + '|autre' par défaut.
  * Légumes : un plat qui en avait, seul de la cible sans lui, est remplacé d'abord par un plat avec des légumes (même
  * ordre de recherche), sinon par n'importe lequel.
+ * `mer` (« 🔄 Changer des plats », 2026-10-18) : 'tout' (un plat de la mer, lireMer) ou l'id d'une famille de
+ * FAMILLES_MER (un plat de la mer de cette famille) ; seulement pour un plat (jamais un dessert) ; aucun plat qui
+ * convient → null, jamais un autre plat à la place. Une valeur inconnue → null.
  */
 export function autreIdee(tousLesPlats, platId, {
-  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, graine = null, refuses = [],
+  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, graine = null, refuses = [], mer = null,
 } = {}) {
   const ancien = listeDe(tousLesPlats).find((p) => estObjet(p) && p.id === platId) ?? null;
   const type = typeDe(ancien);
   if (!ancien || (type !== 'plat' && type !== 'dessert')) return null;
+  const voulu = mer === null || mer === undefined ? null : choixMer(mer);
+  if ((mer !== null && mer !== undefined && !voulu) || (voulu && type !== 'plat')) return null;
   const ctx = contexte(tousLesPlats, {
     cible, semaines, profils, evaluer, type, refuses: [...listeDe(refuses), platId], exclure: platId,
   });
@@ -740,8 +843,10 @@ export function autreIdee(tousLesPlats, platId, {
   const groupe = vu.rejet ? null : vu.groupe;
   const rang = rangsDeDepartage(ctx.candidats, graine ?? `${graineProposition(cible, semaines)}|autre`);
   const presents = presentsDeLaCible(ctx, type);
+  // Un plat de la mer est pour toute la famille : jamais un plat que quelqu'un ne mange pas (palier 3).
+  const paliers = voulu ? [1, 2] : [1, 2, 3];
   const chercher = (liste) => {
-    for (const palier of [1, 2, 3]) {
+    for (const palier of paliers) {
       if (palier === 3 && ctx.ecartesCible >= ECARTES_MAX) break;
       const duPalier = liste.filter((c) => c.palier === palier);
       const retenu = meilleur(duPalier.filter((c) => c.groupe === groupe), palier, presents, rang)
@@ -750,10 +855,60 @@ export function autreIdee(tousLesPlats, platId, {
     }
     return null;
   };
+  const possibles = ctx.candidats.filter((c) => convientALaMer(c, voulu));
   // Légumes : l'ancien plat était le seul de la cible à en avoir → un plat avec des légumes d'abord, sinon tous.
   const garderDesLegumes = type === 'plat' && aDesLegumes(ancien) && legumesDeLaCible(ctx) < LEGUMES_MIN;
-  const retenu = (garderDesLegumes ? chercher(ctx.candidats.filter((c) => c.legumes)) : null) ?? chercher(ctx.candidats);
+  const retenu = (garderDesLegumes ? chercher(possibles.filter((c) => c.legumes)) : null) ?? chercher(possibles);
   return retenu ? { platId: retenu.platId, groupe: retenu.groupe, palier: retenu.palier, raison: raisonDe(retenu) } : null;
+}
+
+/**
+ * « Par quoi ? » de « 🔄 Changer des plats » → { total, familles: [{ id, nom, nombre }] } : les plats de la mer
+ * (lireMer) qui pourraient entrer dans la cible (filtre dur des propositions, type `plat`, plats de la cible et
+ * refusés exclus ; paliers 1 et 2 seulement, comme autreIdee avec `mer` : tout le monde en mange), `total` en tout et `familles` dans l'ordre de FAMILLES_MER, sans famille vide. Un
+ * plat compte dans chacune de ses familles. Cible illisible : { total: 0, familles: [] }.
+ */
+export function choixDeLaMer(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
+  const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type: 'plat', refuses });
+  const marins = ctx ? ctx.candidats.filter((c) => c.mer.deLaMer && c.palier < 3) : [];
+  const familles = FAMILLES_MER.map((f) => ({ id: f.id, nom: f.nom, nombre: marins.filter((c) => c.mer.familles.includes(f.id)).length }))
+    .filter((f) => f.nombre > 0);
+  return { total: marins.length, familles };
+}
+
+/**
+ * « 🔄 Changer des plats » (2026-10-18) : un remplaçant pour chacun des `platIds` (plats ou desserts actifs de
+ * `semaine`, la semaine lue entière), pris l'un après l'autre dans l'ordre de la semaine (`ajouteLe`), comme autant de
+ * « 🔄 Une autre idée » : chacun voit la semaine avec les échanges déjà décidés (variété, ECARTES_MAX, légumes), et
+ * jamais un plat de `platIds` ni un remplaçant déjà choisi. `mer` : comme autreIdee (null : ce que l'app propose).
+ * → { remplacements: [{ ancienId, platId, groupe, palier, raison }], restes: [ancienId] } (restes : sans remplaçant,
+ * ils restent dans la semaine). Aucune écriture ici : semaine.js › ecrituresRemplacements.
+ */
+export function changerDesPlats(tousLesPlats, platIds, {
+  semaine = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [], mer = null,
+} = {}) {
+  const lue = lireSemaine(semaine);
+  if (!lue) return { remplacements: [], restes: [] };
+  const demandes = [...new Set(listeDe(platIds).filter((id) => typeof id === 'string' && estDansLaSemaine(lue.plats[id])))]
+    .sort((a, b) => (lue.plats[a].ajouteLe - lue.plats[b].ajouteLe) || parId(a, b));
+  const remplacements = [];
+  const restes = [];
+  let courante = lue;
+  for (const ancienId of demandes) {
+    const cible = { id: courante.id, debut: courante.debut, fin: courante.fin, plats: courante.plats };
+    const idee = autreIdee(tousLesPlats, ancienId, {
+      cible, semaines, profils, evaluer, mer,
+      refuses: [...listeDe(refuses), ...demandes, ...remplacements.map((r) => r.platId)],
+    });
+    const ecritures = idee ? ecrituresRemplacement(courante, ancienId, idee.platId) : null;
+    if (!idee || ecritures.code) {
+      restes.push(ancienId);
+      continue;
+    }
+    courante = lireSemaine({ ...appliquerChamps(courante, ecritures.champs), id: courante.id }) ?? courante;
+    remplacements.push({ ancienId, ...idee });
+  }
+  return { remplacements, restes };
 }
 
 /** Vrai si « 🔄 Une autre idée » a sa place sur la feuille du plat : plat ou dessert avec sa recette, semaine avant les courses faites. */
@@ -799,6 +954,26 @@ export const TEXTES_PROPOSER = Object.freeze({
     aide: 'Ils s’ajoutent aux plats de la semaine.',
     fermer: 'Fermer',
   }),
+  // « 🔄 Changer des plats » (2026-10-18), sous les plats de la semaine.
+  changer: Object.freeze({
+    emoji: '🔄',
+    libelle: 'Changer des plats',
+    titre: 'Changer des plats',
+    quels: 'Quels plats remplacer\u00A0?',
+    parQuoi: 'Par quoi\u00A0?',
+    app: 'Ce que l’app propose',
+    merEmoji: '🐟',
+    mer: 'Un plat de la mer',
+    produit: 'Avec quel produit\u00A0?',
+    peuImporte: 'Peu importe',
+    aucunCoche: 'Cochez au moins un plat.',
+    sansMer: 'Pas encore de plat de la mer à proposer.',
+    autrePlat: 'Un plat précis en tête\u00A0? Ajoutez-le par «\u00A0Choisir d’autres plats\u00A0», puis «\u00A0Nouveau plat\u00A0».',
+    faites: 'Les courses sont faites\u00A0: les plats ne se changent plus.',
+    fermer: 'Fermer',
+    echec: 'Les plats n’ont pas pu être changés. Réessayez.',
+    echecRemise: 'Les plats n’ont pas pu être remis. Réessayez.',
+  }),
 });
 
 const nomDe = (profil) => reduire(profil?.nom) || 'Sans prénom';
@@ -831,6 +1006,48 @@ export function sousTitreDesserts(cible, aujourdhui) {
 /** Nom accessible de « 🔄 Une autre idée » : « Remplacer « Gratin de pâtes » par une autre idée ». */
 export function nomAutreIdee(nom) {
   return `Remplacer «\u00A0${reduire(nom)}\u00A0» par une autre idée`;
+}
+
+/** Bouton principal de « Changer des plats » : « Remplacer 2 plats », « Remplacer un plat », « Remplacer les plats cochés ». */
+export function libelleChanger(nombre) {
+  const n = Number.isInteger(nombre) && nombre > 0 ? nombre : 0;
+  if (!n) return 'Remplacer les plats cochés';
+  return n === 1 ? 'Remplacer un plat' : `Remplacer ${n}\u00A0plats`;
+}
+
+/** Puce d'une famille de la mer (choixDeLaMer) : « Saumon · 3 plats », « Crevettes · 1 plat » (le nombre jamais seul à la ligne). */
+export function libelleFamille(famille) {
+  const n = Number.isInteger(famille?.nombre) && famille.nombre > 0 ? famille.nombre : 0;
+  return `${reduire(famille?.nom)}\u00A0· ${n}\u00A0plat${n > 1 ? 's' : ''}`;
+}
+
+/** « au saumon », « de la mer » (« tout ») ; null sans choix de la mer. */
+function tournureMer(mer) {
+  if (mer === 'tout') return 'de la mer';
+  return FAMILLES_MER.find((f) => f.id === mer)?.au ?? null;
+}
+
+/** « Pas d’autre plat au saumon pour l’instant. », « … de la mer … » ; sans choix de la mer : « Plus d’autre idée pour l’instant. ». */
+export function texteAucunChangement(mer = null) {
+  const tournure = tournureMer(mer);
+  return tournure ? `Pas d’autre plat ${tournure} pour l’instant.` : TEXTES_PROPOSER.autreIdee.aucune;
+}
+
+/**
+ * Annonce de « Changer des plats », courte (elle passe sur les cartes changées) : « 2 plats changés. », « Un plat
+ * changé. » ; moins que voulu : « Un plat changé sur 2 : pas d’autre plat au saumon pour l’instant. » (« … de la mer… »,
+ * sans choix de la mer « … pas d’autre idée pour l’instant. »). Ni noms ni dates : les cartes changées sont à l'écran.
+ * `reglages` (un plat changé avait des invités ou des repas écrits, partis avec lui) : « … Invités et repas sont à
+ * régler de nouveau. », comme « 🔄 Une autre idée ».
+ */
+export function annonceChangement({ remplaces = 0, voulus = 0, mer = null, reglages = false } = {}) {
+  const n = Number.isInteger(remplaces) && remplaces > 0 ? remplaces : 0;
+  const total = Number.isInteger(voulus) && voulus > n ? voulus : n;
+  const combien = n === 1 ? 'Un plat changé' : `${n}\u00A0plats changés`;
+  const tournure = tournureMer(mer);
+  const suite = tournure ? `pas d’autre plat ${tournure} pour l’instant.` : 'pas d’autre idée pour l’instant.';
+  const phrase = total === n ? `${combien}.` : `${combien} sur ${total}\u00A0: ${suite}`;
+  return reglages && n > 0 ? `${phrase} ${TEXTES_PROPOSER.autreIdee.reglages}` : phrase;
 }
 
 /**

@@ -12,6 +12,7 @@
 // dans la liste), avec un interrupteur « Pas cette semaine » par préparation (actions.sauterPreparation).
 // T4-0 : semaine sans plat, « ✨ Proposer 4 plats » est le bouton principal de la carte (« ＋ Choisir les plats » passe
 // secondaire) ; « 🍰 Proposer des desserts » sous « ＋ Choisir d'autres plats » (D6, feuille « Combien de desserts ? »).
+// « 🔄 Changer des plats » entre les deux (2026-10-18, feuille « Changer des plats » : plats cochés, « Par quoi ? »).
 // Rien n'est écrit à l'ouverture : chaque section se met à jour en place (`maj`), la liste de courses suit.
 import { el, enteteVue, pastille, ecrireTexte, montrerAuDessusDeLAnnonce, reconcilier, vibrer } from './dom.js';
 import { prenomDe } from './profil.js';
@@ -21,6 +22,7 @@ import { aujourdhuiDe } from './regime.js';
 import { modeDeCuisson } from './pictos.js';
 import { vignetteDuPlat } from './plats.js';
 import { ouvrirChoixDesPlats, ouvrirDesserts, majChoixDesPlats, prendreChoixDemande } from './choisir-plats.js';
+import { ouvrirChangerDesPlats, majChangerDesPlats } from './changer-plats.js';
 import {
   creerConservation, creerVersions, listeCourante, majPlatsDeLaSemaine, nomDuPlat, ouvrirPlatDeLaSemaine,
   platsDeLaSemaineDe,
@@ -722,7 +724,7 @@ function creerChaqueSemaine() {
  * alors « Préparer la semaine du … »).
  * → { noeud, maj(ctx) }
  */
-function creerSectionPlats(choisir, ouvrir, desserts) {
+function creerSectionPlats(choisir, ouvrir, desserts, changer) {
   const dates = el('p', { id: 'texte-dates-semaine' });
   const boutonDates = el('button', {
     class: 'bouton bouton-texte bouton-changer-dates',
@@ -752,6 +754,12 @@ function creerSectionPlats(choisir, ouvrir, desserts) {
   const boutonDesserts = el('button', { class: 'bouton bouton-secondaire bouton-plein bouton-desserts', type: 'button', hidden: true, 'data-action': 'desserts' },
     el('span', { 'aria-hidden': 'true' }, TEXTES_PROPOSER.desserts.emoji), TEXTES_PROPOSER.desserts.libelle);
   boutonDesserts.addEventListener('click', () => desserts(boutonDesserts));
+  // « 🔄 Changer des plats » (2026-10-18) : sous « ＋ Choisir d'autres plats », caché avec lui (les deux derniers jours,
+  // les plats vont à la semaine suivante), tant que la semaine montrée a un plat qu'on peut changer (plat avec sa
+  // recette, avant les courses faites) ; feuille « Changer des plats ».
+  const boutonChanger = el('button', { class: 'bouton bouton-secondaire bouton-plein bouton-changer-plats', type: 'button', hidden: true, 'data-action': 'changer' },
+    el('span', { 'aria-hidden': 'true' }, TEXTES_PROPOSER.changer.emoji), TEXTES_PROPOSER.changer.libelle);
+  boutonChanger.addEventListener('click', () => changer(boutonChanger));
   const noeud = el('section', { class: 'section section-plats-semaine', 'aria-labelledby': 'titre-plats-semaine', hidden: true },
     el('div', { class: 'section-titre' }, el('h2', { id: 'titre-plats-semaine' }, 'Les plats de la semaine'), blocDates),
     enCeMoment.noeud,
@@ -759,6 +767,7 @@ function creerSectionPlats(choisir, ouvrir, desserts) {
     horsSemaine,
     chaqueSemaine.noeud,
     boutonAutres,
+    boutonChanger,
     boutonDesserts);
 
   function maj(ctx) {
@@ -783,6 +792,7 @@ function creerSectionPlats(choisir, ouvrir, desserts) {
     chaqueSemaine.maj(ctx, Boolean(lue) && montres.length > 0);
     boutonAutres.hidden = !montres.length || peutPreparerLaSuivante(lue, aujourdhuiDe(ctx));
     boutonDesserts.hidden = boutonAutres.hidden || !(apercuVise(ctx)?.desserts > 0);
+    boutonChanger.hidden = boutonAutres.hidden || !(ctx.proposition?.changeables?.(lue?.id)?.length > 0);
     noeud.hidden = !montres.length && !jetes.length && enCeMoment.noeud.hidden;
     if (carteActive && !carteActive.isConnected) focusApresRetrait(ordreAvant.indexOf(carteActive), ordreAvant);
   }
@@ -990,8 +1000,24 @@ export function creer(ctx) {
     });
   }
 
+  /**
+   * « 🔄 Changer des plats » : feuille « Changer des plats » ; après le changement, focus sur la carte du premier plat
+   * arrivé ; fermée sans rien changer, le focus revient au bouton, ou, s'il a disparu (courses faites sur l'autre
+   * téléphone), à l'action de la carte « prochaine action ».
+   */
+  function changer(depuis) {
+    ouvrirChangerDesPlats(lireContexte, {
+      apresAnnulation,
+      onFermer: (suite) => {
+        if (suite?.viser) viserCarte(suite.viser);
+        else if (visible(depuis)) depuis.focus();
+        else apresAnnulation(null);
+      },
+    });
+  }
+
   const carteAction = creerCarteAction(choisir, proposer);
-  const sectionPlats = creerSectionPlats(choisir, ouvrir, desserts);
+  const sectionPlats = creerSectionPlats(choisir, ouvrir, desserts, changer);
 
   const noeud = el('div', { class: 'vue' },
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
@@ -1022,6 +1048,7 @@ export function creer(ctx) {
       demandes?.maj(nouveau);
       majSemaine(nouveau);
       majChoixDesPlats(nouveau);
+      majChangerDesPlats(nouveau);
       majPlatsDeLaSemaine(nouveau);
       majDatesDeLaSemaine(nouveau);
     },

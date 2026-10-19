@@ -888,6 +888,29 @@ export function ecrituresRemplacement(semaine, ancienId, nouveauId, { inverse = 
 }
 
 /**
+ * « 🔄 Changer des plats » (2026-10-18), en UN lot → { id, champs, faites: [{ ancienId, nouveauId }] }, ou { code } :
+ * les échanges de `paires` ([{ ancienId, nouveauId }]) l'un après l'autre, chacun écrit comme ecrituresRemplacement
+ * sur la semaine où les échanges d'avant sont déjà faits. `inverse` (« Annuler ») : chaque échange défait comme
+ * ecrituresRemplacement({ inverse: true }). Un échange 'inutile' (changé sur l'autre téléphone entre-temps) est sauté ;
+ * 'invalide' ou 'faites' arrêtent tout. Aucun échange possible : { code: 'inutile' }.
+ */
+export function ecrituresRemplacements(semaine, paires, { inverse = false } = {}) {
+  let lue = lireSemaine(semaine);
+  if (!lue || !Array.isArray(paires) || !paires.length) return { code: 'invalide' };
+  const champs = {};
+  const faites = [];
+  for (const paire of paires) {
+    const ecritures = ecrituresRemplacement(lue, paire?.ancienId, paire?.nouveauId, { inverse });
+    if (ecritures.code === 'inutile') continue;
+    if (ecritures.code) return { code: ecritures.code };
+    Object.assign(champs, ecritures.champs);
+    faites.push({ ancienId: paire.ancienId, nouveauId: paire.nouveauId });
+    lue = lireSemaine({ ...appliquerChamps(lue, ecritures.champs), id: lue.id }) ?? lue;
+  }
+  return faites.length ? { id: lue.id, champs, faites } : { code: 'inutile' };
+}
+
+/**
  * Mer / Végétale pour un profil → { id, champs: { plats.<id>.styles.<p>: style | EFFACER } } : le style par défaut
  * (la mer si elle convient, sinon la seule version) efface le chemin. Avec `profils` et `tousLesPlats`, un style qui ne
  * convient pas est refusé ({ code: 'style' }) ; sans eux, seule la mer efface.
