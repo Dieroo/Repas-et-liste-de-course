@@ -248,12 +248,17 @@ test('« Ma cuisine » : sauvegardée, puis rendue chemin par chemin sans jamais
   assert.deepEqual(ecriture.donnees, { 'cuisine.cookeo': false, 'platsEtMoules.cocotte-5-l': 'Cocotte 5 l' });
   assert.deepEqual(ecriture.condition, { champsAbsents: ['cuisine.cookeo', 'platsEtMoules.cocotte-5-l'] });
   assert.equal(r.resume.cuisineRemise, 2);
-  assert.deepEqual(phrasesCoursesRemises(r.resume), ['2 réglages de « Ma cuisine » reviennent.']);
+  assert.deepEqual(phrasesCoursesRemises(r.resume), ['2\u00A0réglages de «\u00A0Ma cuisine\u00A0» reviennent.']);
   // Réponse donnée entre l'aperçu et l'envoi sur l'autre téléphone : elle reste.
   assert.deepEqual(appliquerConditions(ecriture, { cuisine: { siphon: false, cookeo: true } }).donnees, { 'platsEtMoules.cocotte-5-l': 'Cocotte 5 l' });
   const apres = appliquer({ produits: [], reglages: [{ id: 'foyer', ...actuels }] }, r.lots);
   assert.deepEqual(apres.reglages[0].cuisine, { siphon: false, cookeo: false });
   assert.deepEqual(apres.reglages[0].platsEtMoules, { 'cocotte-5-l': 'Cocotte 5 l' });
+  // Plats et moules : jamais plus de 15 avec ceux de l'app.
+  const quatorze = { gestionnaire: 'a@example.com', platsEtMoules: Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`p${i}`, `P${i}`])) };
+  const cinq = relue({ reglages: { platsEtMoules: Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`q${i}`, `Q${i}`])) } });
+  const plafond = ecrituresDe(preparerRestauration(cinq, base({ reglages: quatorze }))).filter((e) => e.collection === 'reglages');
+  assert.equal(Object.keys(plafond[0].donnees).length, 1);
   // Un objet d'une version plus récente de l'app : « Une partie du fichier… ».
   const recent = validerSauvegarde(fichier({ reglages: { cuisine: { 'objet-futur': true } } }));
   assert.ok(recent.avertissements.some((a) => /Une partie du fichier/.test(a)));

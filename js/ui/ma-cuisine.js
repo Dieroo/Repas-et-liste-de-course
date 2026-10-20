@@ -66,8 +66,9 @@ export function creer(ctx) {
     onsubmit: (evenement) => {
       evenement.preventDefault();
       const resultat = courant.actions?.ajouterPlatEtMoule?.(champ.value);
-      if (!resultat) return;
-      if (resultat.code !== 'ok') {
+      // Seule une saisie refusée se dit sous le champ (un échec d'envoi est annoncé par l'app).
+      if (!resultat || (resultat.code !== 'ok' && resultat.code !== 'erreur')) return;
+      if (resultat.code === 'erreur') {
         erreur.textContent = resultat.message ?? ERREURS_PLAT_ET_MOULE.vide;
         erreur.hidden = false;
         champ.setAttribute('aria-invalid', 'true');

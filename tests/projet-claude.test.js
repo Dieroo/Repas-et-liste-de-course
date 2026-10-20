@@ -289,3 +289,14 @@ test('version 12 : la section 1 donne les lignes de la cuisine et les noms des o
   const recette = texteDemandeRecette({ id: 'tarte', nom: 'Tarte' }, { demande: { facon: 'au four' } });
   assert.ok(recette.includes('\nnotre façon: au four\n'));
 });
+
+test('version 12 : l’exemple de DEMANDE-RECETTE avec la façon et la cuisine du foyer est le texte de l’app', () => {
+  const texte = texteDemandeRecette({ id: 'carbonade-flamande', nom: 'Carbonade flamande' }, {
+    demande: { id: 'carbonade-flamande__recette', statut: 'ouverte', facon: 'avec des lardons, au Cookeo' },
+    reglages: {
+      cuisine: { 'mixeur-plongeant': true, airfryer: false, mandoline: false },
+      platsEtMoules: { 'cocotte-5-l': 'Cocotte 5 l', 'plat-a-gratin-30-x-20-cm': 'Plat à gratin 30 × 20 cm' },
+    },
+  });
+  assert.ok(doc.includes('```\n' + texte + '\n```'), texte);
+});

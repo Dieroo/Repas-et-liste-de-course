@@ -1150,11 +1150,14 @@ test('ecarter : un plat qui demande un objet absent n’est jamais proposé, ni 
   const apercu = apercuProposition(RICHE, opts({ ecarter: (p) => p.id !== 'aime-1' }));
   assert.equal(apercu.plats, 0);
   assert.equal(apercu.cause, 'cuisine');
-  assert.equal(texteSansProposition('cuisine'), 'Vos plats demandent un objet que vous n’avez pas : choisissez-les vous-même.');
+  assert.equal(texteSansProposition('cuisine'), 'Vos plats demandent un objet que vous n’avez pas\u00A0: dites-le dans Ma cuisine si vous l’avez, sinon choisissez-les vous-même.');
   // « Changer des plats » passe l'option à chaque « Une autre idée ».
   const sem = semaine(CIBLE.id, CIBLE.debut, CIBLE.fin, { 'aime-1': dans(1) });
   const change = changerDesPlats(RICHE, ['aime-1'], { semaine: sem, semaines: [sem], profils: PROFILS, evaluer, ecarter: (p) => !['aime-1', 'aime-3'].includes(p.id) });
   assert.deepEqual(change.remplacements.map((r) => r.platId), ['aime-3']);
+  // Un plat noté « Jamais » par un adulte garde sa cause, même s'il demande un objet absent.
+  const jamais = RICHE.map((p) => ({ ...p, notes: { ...p.notes, 'profil-a': 0 } }));
+  assert.equal(apercuProposition(jamais, opts({ ecarter: () => true })).cause, 'jamais');
   // Un plat sans recette n'est jamais « écarté par la cuisine » : sa cause reste la recette.
   const sansRecette = [plat('vide', 'Vide', [])];
   assert.equal(apercuProposition(sansRecette, opts({ ecarter: () => true })).cause, 'recettes');

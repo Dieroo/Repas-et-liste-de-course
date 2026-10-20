@@ -17,7 +17,7 @@ import { estDansCorbeille } from './corbeille.js';
 import { STYLES } from './vocabulaire.js';
 import { comparerAuxReperesPres, garderReperes, reperesEnPlus, texteReperes } from './relecture.js';
 import { RECHERCHE_MAX, lireDrive } from './drive.js';
-import { cheminCuisineSur, lireCuisine, lirePlatsEtMoules } from './ma-cuisine.js';
+import { PLATS_ET_MOULES_MAX, cheminCuisineSur, lireCuisine, lirePlatsEtMoules } from './ma-cuisine.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
   validerPaquet,
@@ -1024,10 +1024,14 @@ export function preparerRestauration(validation, {
     reglagesARemettre[`cuisine.${id}`] = valeur;
     resume.cuisineRemise += 1;
   }
+  // Plats et moules : au plus ce qui reste de place (PLATS_ET_MOULES_MAX, ceux de l'app comptés), dans l'ordre du fichier.
+  let place = PLATS_ET_MOULES_MAX - lirePlatsEtMoules(reglages).length;
   for (const { id, nom } of lirePlatsEtMoules({ platsEtMoules: validation?.reglages?.platsEtMoules })) {
+    if (place <= 0) break;
     if (champPresent(reglages, `platsEtMoules.${id}`) || !cheminCuisineSur(`platsEtMoules.${id}`, nom)) continue;
     reglagesARemettre[`platsEtMoules.${id}`] = nom;
     resume.cuisineRemise += 1;
+    place -= 1;
   }
   if (Object.keys(reglagesARemettre).length) {
     ecrituresReglages.push({

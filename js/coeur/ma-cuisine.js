@@ -19,6 +19,7 @@ import { VOCABULAIRES, code, texte } from './vocabulaire.js';
 import { aSaRecette } from './plats.js';
 import { estDansCorbeille } from './corbeille.js';
 import { EFFACER } from './semaine.js';
+import { realisationAJour } from './realisation.js';
 
 // ——— Objets connus ———
 
@@ -27,23 +28,27 @@ import { EFFACER } from './semaine.js';
  * disparaît jamais) ; `groupe` : 'cuire' (appareils de cuisson du format, reconnus seulement par leur code
  * `appareil`), 'petit' (petits appareils), 'ustensile' (moules et ustensiles) ; `phrase` : le nom dans une phrase
  * (minuscule, sauf nom propre) ; `claude` : le nom que Claude écrit dans `ustensiles` (au singulier, comme les
- * ustensiles de docs/projet-claude.md ; sinon `phrase`) ; `article` : un, une ou des ; `alias` : autres écritures reconnues dans les
- * ustensiles d'une recette ; `remplacePar` : objets qui font le même travail (le mixeur plongeant d'une recette est
- * là si le blender l'est).
+ * ustensiles de docs/projet-claude.md ; le code du format pour un appareil de cuisson, comme la ligne `appareils:` ;
+ * sinon `phrase`) ; `article` : un, une ou des ; `alias` : autres écritures reconnues dans les ustensiles d'une recette
+ * (un appareil de cuisson n'est reconnu dans les ustensiles que par ses `alias` : « friteuse sans huile ») ;
+ * `remplacePar` : objets qui font le même travail (le mixeur plongeant d'une recette est là si le blender l'est).
  */
 export const OBJETS = Object.freeze([
-  { id: 'plaque', nom: 'Plaques de cuisson', phrase: 'plaques de cuisson', article: 'des', groupe: 'cuire', appareil: 'plaque' },
-  { id: 'four', nom: 'Four', phrase: 'four', article: 'un', groupe: 'cuire', appareil: 'four' },
-  { id: 'cookeo', nom: 'Cookeo', phrase: 'Cookeo', article: 'un', groupe: 'cuire', appareil: 'cookeo' },
-  { id: 'airfryer', nom: 'Airfryer', phrase: 'airfryer', article: 'un', groupe: 'cuire', appareil: 'airfryer' },
-  { id: 'monsieur-cuisine', nom: 'Monsieur Cuisine', phrase: 'Monsieur Cuisine', article: 'un', groupe: 'cuire', appareil: 'monsieur_cuisine' },
+  { id: 'plaque', nom: 'Plaques de cuisson', phrase: 'plaques de cuisson', article: 'des', groupe: 'cuire', appareil: 'plaque', claude: 'plaque' },
+  { id: 'four', nom: 'Four', phrase: 'four', article: 'un', groupe: 'cuire', appareil: 'four', claude: 'four' },
+  { id: 'cookeo', nom: 'Cookeo', phrase: 'Cookeo', article: 'un', groupe: 'cuire', appareil: 'cookeo', claude: 'cookeo' },
+  { id: 'airfryer', nom: 'Airfryer', phrase: 'airfryer', article: 'un', groupe: 'cuire', appareil: 'airfryer', claude: 'airfryer',
+    alias: ['air fryer', 'friteuse sans huile', 'friteuse à air'] },
+  { id: 'monsieur-cuisine', nom: 'Monsieur Cuisine', phrase: 'Monsieur Cuisine', article: 'un', groupe: 'cuire', appareil: 'monsieur_cuisine',
+    claude: 'monsieur_cuisine', alias: ['robot cuiseur'] },
 
   { id: 'mixeur-plongeant', nom: 'Mixeur plongeant', article: 'un', groupe: 'petit',
     alias: ['mixeur', 'mixer', 'mixeur à main', 'mixeur plongeur', 'pied mixeur'], remplacePar: ['blender', 'robot', 'monsieur-cuisine'] },
   { id: 'blender', nom: 'Blender', article: 'un', groupe: 'petit',
-    alias: ['blendeur', 'mixeur blender', 'mixeur à bol'], remplacePar: ['mixeur-plongeant', 'robot', 'monsieur-cuisine'] },
+    alias: ['blendeur', 'mixeur blender', 'mixeur à bol', 'bol mixeur', 'bol du mixeur'], remplacePar: ['mixeur-plongeant', 'robot', 'monsieur-cuisine'] },
   { id: 'robot', nom: 'Robot multifonction', article: 'un', groupe: 'petit',
-    alias: ['robot', 'robot ménager', 'robot mixeur', 'robot de cuisine', 'robot culinaire'], remplacePar: ['monsieur-cuisine'] },
+    alias: ['robot', 'robot ménager', 'robot mixeur', 'robot de cuisine', 'robot culinaire'],
+    remplacePar: ['blender', 'mixeur-plongeant', 'monsieur-cuisine'] },
   { id: 'robot-patissier', nom: 'Robot pâtissier', article: 'un', groupe: 'petit',
     alias: ['batteur sur socle'], remplacePar: ['monsieur-cuisine'] },
   { id: 'batteur-electrique', nom: 'Batteur électrique', article: 'un', groupe: 'petit',
@@ -68,7 +73,7 @@ export const OBJETS = Object.freeze([
   { id: 'poche-a-douille', nom: 'Poche à douille', article: 'une', groupe: 'ustensile', alias: ['douille', 'poche pâtissière'] },
   { id: 'thermometre', nom: 'Thermomètre de cuisson', article: 'un', groupe: 'ustensile',
     alias: ['thermomètre', 'thermomètre de cuisine', 'thermomètre à sonde', 'sonde de cuisson', 'thermomètre à sucre'] },
-  { id: 'mortier', nom: 'Mortier et pilon', article: 'un', groupe: 'ustensile', alias: ['mortier', 'pilon'] },
+  { id: 'mortier', nom: 'Mortier', article: 'un', groupe: 'ustensile', alias: ['mortier et pilon', 'pilon et mortier'] },
   { id: 'moule-a-charniere', nom: 'Moule à charnière', article: 'un', groupe: 'ustensile',
     alias: ['moule à fond amovible', 'moule démontable', 'moule à manqué à charnière'] },
   { id: 'moule-a-cake', nom: 'Moule à cake', article: 'un', groupe: 'ustensile' },
@@ -147,7 +152,8 @@ function nomPlatEtMoule(valeur) {
 
 /**
  * « Mes plats et moules » lus dans `reglages/foyer.platsEtMoules` ({ <id>: nom }) → [{ id, nom }] triés par nom ;
- * identifiants sûrs et noms lisibles seulement, PLATS_ET_MOULES_MAX au plus.
+ * identifiants sûrs et noms lisibles seulement. Tous, même au-delà de PLATS_ET_MOULES_MAX (deux téléphones qui
+ * ajoutent en même temps) : chacun reste visible, retirable et envoyé ; seul l'ajout est borné.
  */
 export function lirePlatsEtMoules(reglages) {
   const brut = estObjet(reglages?.platsEtMoules) ? reglages.platsEtMoules : {};
@@ -155,13 +161,13 @@ export function lirePlatsEtMoules(reglages) {
     .filter(([id]) => ID_SUR.test(id))
     .map(([id, valeur]) => ({ id, nom: nomPlatEtMoule(valeur) }))
     .filter((element) => element.nom)
-    .sort((a, b) => comparerNoms(a.nom, b.nom) || (a.id < b.id ? -1 : 1))
-    .slice(0, PLATS_ET_MOULES_MAX);
+    .sort((a, b) => comparerNoms(a.nom, b.nom) || (a.id < b.id ? -1 : 1));
 }
 
 /**
- * État d'un objet → 'oui' (« Je l'ai »), 'non' (« Je ne l'ai pas ») ou null (pas encore dit). Un appareil de cuisson
- * pas encore dit suit les appareils de départ ('oui' s'il en est, sinon null).
+ * État d'un objet → 'oui' (« Je l'ai »), 'non' (« Je ne l'ai pas ») ou null (pas encore dit). Pas encore dit : un
+ * objet nommé par « Mes plats et moules » (« Moule à charnière 24 cm ») est là ; un appareil de cuisson suit les
+ * appareils de départ ('oui' s'il en est, sinon null).
  */
 export function etatObjet(id, reglages) {
   const objet = OBJET_PAR_ID.get(id);
@@ -169,6 +175,7 @@ export function etatObjet(id, reglages) {
   const reponse = estObjet(reglages?.cuisine) ? reglages.cuisine[id] : undefined;
   if (reponse === true) return 'oui';
   if (reponse === false) return 'non';
+  if (lirePlatsEtMoules(reglages).some((element) => objetDUstensile(element.nom) === id)) return 'oui';
   if (objet.appareil) return appareilsActifs(reglages?.appareils).includes(objet.appareil) ? 'oui' : null;
   return null;
 }
@@ -181,13 +188,15 @@ export function aLObjet(id, reglages) {
 }
 
 /**
- * Codes des appareils de cuisson du foyer, pour Claude (`appareils:`) : ceux qui ont « Je l'ai », sinon les appareils
- * de départ ; dans l'ordre du vocabulaire. Aucun : les appareils de départ (une demande sans appareil ne se fait pas).
+ * Codes des appareils de cuisson du foyer, pour Claude (`appareils:`) : ceux qui ont « Je l'ai » (ou, pas encore dits,
+ * ceux de départ), dans l'ordre du vocabulaire ; aucun : les appareils de départ qui ne sont pas dits absents ([] si
+ * tous le sont : la demande dit alors `appareils: aucun`).
  */
 export function appareilsDuFoyer(reglages) {
   const codes = OBJETS.filter((objet) => objet.appareil && etatObjet(objet.id, reglages) === 'oui').map((o) => o.appareil);
   const ordonnes = VOCABULAIRES.appareil.filter((valeur) => codes.includes(valeur));
-  return ordonnes.length ? ordonnes : appareilsActifs(reglages?.appareils);
+  if (ordonnes.length) return ordonnes;
+  return appareilsActifs(reglages?.appareils).filter((valeur) => etatObjet(OBJET_PAR_APPAREIL.get(valeur)?.id, reglages) !== 'non');
 }
 
 /** Vrai dès que quelque chose est dit dans « Ma cuisine » (une réponse, ou un plat ou un moule de la liste). */
@@ -200,10 +209,11 @@ export function cuisineReglee(reglages) {
 /** Mots d'un nom, comme cleProduit (casse, accents, pluriel de chaque mot). */
 const motsDe = (nom) => cleProduit(nom).split('-').filter(Boolean);
 
-// Noms reconnus dans les ustensiles : les objets autres que les appareils de cuisson (reconnus par leur code), le
-// nom le plus long d'abord ; à longueur égale, l'ordre de OBJETS.
-const NOMS_RECONNUS = OBJETS.filter((objet) => objet.groupe !== 'cuire')
-  .flatMap((objet) => [objet.nom, ...objet.alias].map((nom) => ({ id: objet.id, mots: motsDe(nom) })))
+// Noms reconnus dans les ustensiles : nom et autres écritures des objets ; un appareil de cuisson (reconnu d'abord par
+// son code) seulement par ses autres écritures (« friteuse sans huile »), jamais par son nom (« plaque de four » n'est
+// pas une plaque de cuisson). Le nom le plus long d'abord ; à longueur égale, l'ordre de OBJETS.
+const NOMS_RECONNUS = OBJETS
+  .flatMap((objet) => [...(objet.groupe === 'cuire' ? [] : [objet.nom]), ...objet.alias].map((nom) => ({ id: objet.id, mots: motsDe(nom) })))
   .filter((entree) => entree.mots.length)
   .sort((a, b) => b.mots.length - a.mots.length);
 
@@ -215,14 +225,24 @@ function contientLaSuite(mots, suite) {
   return false;
 }
 
-/**
- * Objet connu d'un ustensile écrit dans une étape (« grand moule à charnière » → 'moule-a-charniere' ; « robot
- * pâtissier » → 'robot-patissier', jamais 'robot') ; null pour un ustensile courant ou inconnu.
- */
-export function objetDUstensile(nom) {
-  const mots = motsDe(texte(nom));
+/** Objet connu d'un seul nom d'ustensile, ou null. */
+function objetDUnNom(nom) {
+  const mots = motsDe(nom);
   if (!mots.length) return null;
   return NOMS_RECONNUS.find((entree) => entree.mots.length <= mots.length && contientLaSuite(mots, entree.mots))?.id ?? null;
+}
+
+/**
+ * Objet connu d'un ustensile écrit dans une étape (« grand moule à charnière » → 'moule-a-charniere' ; « robot
+ * pâtissier » → 'robot-patissier', jamais 'robot') ; null pour un ustensile courant ou inconnu. Un ustensile au choix
+ * (« mixeur plongeant ou presse-purée », « robot / batteur ») n'est un objet que si chaque possibilité en est un : la
+ * première alors (ses remplaçants comptent) ; sinon null (le presse-purée suffit).
+ */
+export function objetDUstensile(nom) {
+  const possibilites = texte(nom).replace(/[()]/g, ' ').split(/\s+ou\s+|\s*\/\s*/i).map((p) => p.trim()).filter(Boolean);
+  if (!possibilites.length) return null;
+  const objets = possibilites.map(objetDUnNom);
+  return objets.every(Boolean) ? objets[0] : null;
 }
 
 /** Objet d'un code d'appareil du format (« cookeo » → 'cookeo', « monsieur_cuisine » → 'monsieur-cuisine'), ou null. */
@@ -234,8 +254,9 @@ const memoObjets = new WeakMap();
 
 /**
  * Objets connus dont une recette a besoin, dans l'ordre de la recette, chacun une fois : l'appareil de chaque cuisson
- * (`cuisson[]`), puis, étape par étape (`realisation[]`, étapes « le jour du repas » comprises), son appareil et ses
- * ustensiles. [] pour un plat sans recette.
+ * (`cuisson[]`), puis, étape par étape (`realisation[]` à jour seulement, realisation.js › realisationAJour ; jamais
+ * les étapes « le jour du repas », où un objet n'est que pratique), son appareil et ses ustensiles. [] pour un plat
+ * sans recette.
  */
 export function objetsDuPlat(plat) {
   if (!estObjet(plat) || !aSaRecette(plat)) return [];
@@ -245,8 +266,8 @@ export function objetsDuPlat(plat) {
     if (id && !ids.includes(id)) ids.push(id);
   };
   for (const cuisson of Array.isArray(plat.cuisson) ? plat.cuisson : []) ajouter(objetDAppareil(cuisson?.appareil));
-  for (const etape of Array.isArray(plat.realisation) ? plat.realisation : []) {
-    if (!estObjet(etape)) continue;
+  for (const etape of realisationAJour(plat) ? plat.realisation : []) {
+    if (!estObjet(etape) || etape.auService === true) continue;
     ajouter(objetDAppareil(etape.appareil));
     for (const ustensile of listeDe(etape.ustensiles)) ajouter(objetDUstensile(ustensile));
   }
@@ -256,24 +277,43 @@ export function objetsDuPlat(plat) {
 }
 
 /**
- * Ce que la cuisine du foyer dit d'une recette → null (rien à dire) ou { manquants: [id], question: id | null } :
- * `manquants`, objets dits absents sans rien qui les remplace (la recette n'est plus proposée) ; `question`, le premier
- * objet pas encore dit (« Il faut un siphon. Vous l'avez ? »).
+ * Où en est un objet dont la recette a besoin → 'la' (la cuisine l'a, ou un objet qui le remplace), 'manque' (dit
+ * absent, et chaque objet qui le remplace aussi), ou { question, pour } : l'objet à demander, `question`, l'objet
+ * lui-même (pas encore dit), ou, l'objet dit absent, le premier objet qui le remplace pas encore dit (`pour` : l'objet
+ * absent ; « Pas de mixeur plongeant. Vous avez un blender ? »).
+ */
+function besoin(id, reglages) {
+  if (aLObjet(id, reglages)) return 'la';
+  if (etatObjet(id, reglages) !== 'non') return { question: id, pour: null };
+  const autre = OBJET_PAR_ID.get(id)?.remplacePar.find((r) => etatObjet(r, reglages) === null) ?? null;
+  return autre ? { question: autre, pour: id } : 'manque';
+}
+
+/**
+ * Ce que la cuisine du foyer dit d'une recette → null (rien à dire) ou { manquants: [id], question: id | null, pour:
+ * id | null } : `manquants`, objets dits absents sans rien qui les remplace (la recette n'est plus proposée) ;
+ * `question`, le premier objet à demander (« Il faut un siphon. Vous l'avez ? ») ; `pour`, l'objet absent que
+ * `question` remplacerait (« Pas de mixeur plongeant. Vous avez un blender ? »), sinon null.
  */
 export function alerteDuPlat(plat, reglages) {
   const manquants = [];
   let question = null;
+  let pour = null;
   for (const id of objetsDuPlat(plat)) {
-    if (aLObjet(id, reglages)) continue;
-    if (etatObjet(id, reglages) === 'non') manquants.push(id);
-    else if (!question) question = id;
+    const etat = besoin(id, reglages);
+    if (etat === 'la') continue;
+    if (etat === 'manque') manquants.push(id);
+    else if (!question) ({ question, pour } = etat);
   }
-  return manquants.length || question ? { manquants, question } : null;
+  return manquants.length || question ? { manquants, question, pour } : null;
 }
 
-/** Vrai si la recette demande un objet que la cuisine n'a pas (filtre des propositions). */
+/**
+ * Vrai si la recette demande un objet que la cuisine n'a pas, ni rien qui le remplace (filtre des propositions) ; un
+ * objet pas encore dit, ou dont un remplaçant n'est pas encore dit, n'écarte rien (dans le doute, on propose).
+ */
 export function manqueUnObjet(plat, reglages) {
-  return objetsDuPlat(plat).some((id) => !aLObjet(id, reglages) && etatObjet(id, reglages) === 'non');
+  return objetsDuPlat(plat).some((id) => besoin(id, reglages) === 'manque');
 }
 
 const memoRecettes = new WeakMap();
@@ -344,15 +384,20 @@ function avecArticle(objet) {
   return `${objet.article} ${objet.phrase}`;
 }
 
-/** « de siphon », « d’airfryer » (après « pas »). */
+/** « de siphon », « d’airfryer », « de yaourtière » (après « pas » ; élision devant une voyelle seulement). */
 function avecDe(objet) {
-  return /^[aeiouyàâéèêëîïôûh]/i.test(objet.phrase) ? `d’${objet.phrase}` : `de ${objet.phrase}`;
+  return /^[aeiouàâéèêëîïôû]/i.test(objet.phrase) ? `d’${objet.phrase}` : `de ${objet.phrase}`;
 }
 
-/** Question de la carte et de la fiche : « Il faut un siphon. Vous l’avez ? » (« Vous les avez ? » au pluriel). */
-export function texteQuestion(id) {
+/**
+ * Question de la carte et de la fiche : « Il faut un siphon. Vous l’avez ? » (« Vous les avez ? » au pluriel) ; avec
+ * `pour` (l'objet absent que celui-ci remplacerait) : « Pas de mixeur plongeant. Vous avez un blender ? ».
+ */
+export function texteQuestion(id, pour = null) {
   const objet = OBJET_PAR_ID.get(id);
   if (!objet) return '';
+  const absent = pour ? OBJET_PAR_ID.get(pour) : null;
+  if (absent) return `Pas ${avecDe(absent)}. Vous avez ${avecArticle(objet)}\u202F?`;
   return `Il faut ${avecArticle(objet)}. Vous ${objet.article === 'des' ? 'les ' : 'l’'}avez\u202F?`;
 }
 
@@ -421,9 +466,10 @@ export function ecrituresObjet(id, valeur) {
 }
 
 /**
- * Ajout à « Mes plats et moules » → { erreur } ou { id, nom, champs: { 'platsEtMoules.<id>': nom } } : identifiant =
- * slug du nom (deux téléphones écrivent le même chemin ; un nom déjà dans la liste, à la casse et aux accents près, est
- * refusé), PLATS_ET_MOULES_MAX au plus.
+ * Ajout à « Mes plats et moules » → { erreur } ou { id, nom, champs: { 'platsEtMoules.<id>': nom, 'cuisine.<objet>'?:
+ * true } } : identifiant = slug du nom (deux téléphones écrivent le même chemin ; un nom déjà dans la liste, à la casse
+ * et aux accents près, est refusé), PLATS_ET_MOULES_MAX au plus ; un nom qui désigne un objet connu (« Moule à
+ * charnière 24 cm ») dit aussi « Je l'ai » pour lui, dans le même lot, s'il ne l'était pas.
  */
 export function ajoutPlatEtMoule(nom, reglages) {
   const lu = texte(nom);
@@ -434,7 +480,9 @@ export function ajoutPlatEtMoule(nom, reglages) {
   const deja = liste.find((element) => element.id === id);
   if (deja) return { erreur: `«\u00A0${deja.nom}\u00A0» est déjà dans la liste.` };
   if (liste.length >= PLATS_ET_MOULES_MAX) return { erreur: ERREURS_PLAT_ET_MOULE.plein };
-  return { id, nom: lu, champs: { [`platsEtMoules.${id}`]: lu } };
+  const objet = objetDUstensile(lu);
+  const aussi = objet && lireCuisine(reglages).get(objet) !== true ? { [`cuisine.${objet}`]: true } : {};
+  return { id, nom: lu, champs: { [`platsEtMoules.${id}`]: lu, ...aussi } };
 }
 
 /** Retrait d'un plat ou d'un moule → { 'platsEtMoules.<id>': EFFACER } ; null pour un identifiant illisible. */
@@ -464,15 +512,17 @@ export function cheminCuisineSur(chemin, valeur) {
 /**
  * Lignes de la cuisine du foyer pour une demande à Claude, après `appareils:` : `dans la cuisine:` (objets peu courants
  * dits présents), `pas de:` (dits absents, appareils de cuisson compris : ils manquent déjà à `appareils:`, la ligne
- * le redit), `plats et moules:` (la liste libre, séparée par « ; »). Chaque ligne omise quand elle est vide ; [] tant
- * que rien n'est dit.
+ * le redit), `plats et moules:` (la liste libre, séparée par « ; », sans un plat dont l'objet est dit absent). Chaque
+ * ligne omise quand elle est vide ; [] tant que rien n'est dit.
  */
 export function lignesCuisine(reglages) {
   const lignes = [];
   const reponses = lireCuisine(reglages);
   const oui = OBJETS.filter((objet) => objet.groupe !== 'cuire' && reponses.get(objet.id) === true).map((o) => o.claude);
   const non = OBJETS.filter((objet) => reponses.get(objet.id) === false).map((o) => o.claude);
-  const platsEtMoules = lirePlatsEtMoules(reglages).map((element) => element.nom);
+  // Un plat ou un moule dont l'objet est dit absent depuis (« Je ne l'ai pas ») ne part pas : la dernière réponse compte.
+  const platsEtMoules = lirePlatsEtMoules(reglages)
+    .filter((element) => reponses.get(objetDUstensile(element.nom)) !== false).map((element) => element.nom);
   if (oui.length) lignes.push(`dans la cuisine: ${oui.join(', ')}`);
   if (non.length) lignes.push(`pas de: ${non.join(', ')}`);
   if (platsEtMoules.length) lignes.push(`plats et moules: ${platsEtMoules.join(' ; ')}`);

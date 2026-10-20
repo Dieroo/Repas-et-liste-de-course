@@ -25,9 +25,9 @@ import { precautionsAge, profilsAvecAge, bilanPrecautions } from './coeur/age.js
 import { marqueursSurveilles } from './coeur/regles.js';
 import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions } from './coeur/import-local.js';
 import { VERSION_INSTRUCTIONS, faconLue } from './coeur/claude.js';
-import { cleNouveautes, nouveauteAMontrer, valeurVue } from './coeur/nouveautes.js';
+import { cleNouveautes, nouveauteAMontrer, valeurMontree, valeurVue } from './coeur/nouveautes.js';
 import {
-  ajoutPlatEtMoule, annonceReponse, ecrituresObjet, lireCuisine, lirePlatsEtMoules, manqueUnObjet, retraitPlatEtMoule,
+  ajoutPlatEtMoule, annonceReponse, ecrituresObjet, etatObjet, lireCuisine, lirePlatsEtMoules, manqueUnObjet, retraitPlatEtMoule,
 } from './coeur/ma-cuisine.js';
 import {
   ecranChargement,
@@ -2376,7 +2376,22 @@ const actions = {
     } catch {
       // Stockage plein ou bloqué : la carte reviendra à la prochaine ouverture.
     }
+    // La carte s'en va et tout remonte sous le doigt : un second toucher impatient n'atteint rien (« ✨ Proposer »).
+    ignorerToucherFantome();
     rendre();
+  },
+  /**
+   * La nouveauté `numero` s'est montrée à cette ouverture de l'app (Semaine l'appelle une fois par chargement) :
+   * après OUVERTURES_NOUVEAUTE ouvertures sans geste, elle compte pour vue. Rien n'est redessiné.
+   */
+  nouveauteMontree(numero) {
+    const cle = cleNouveautes(etat.utilisateur?.uid);
+    if (!cle) return;
+    try {
+      localStorage.setItem(cle, valeurMontree(localStorage.getItem(cle), numero));
+    } catch {
+      // Stockage plein ou bloqué : rien.
+    }
   },
 
   // ——— « Ma cuisine » (2026-10-20, les deux membres, aperçu compris) ———
@@ -2387,19 +2402,24 @@ const actions = {
    * Réponse pour un objet de « Ma cuisine » (`valeur` : true « Je l'ai », false « Je ne l'ai pas », null « pas encore
    * dit », pour « Annuler ») : alerte d'une recette (carte du plat de la semaine, fiche) ou écran « Ma cuisine ».
    * `annonce` (par défaut) : « C’est noté : siphon dans Ma cuisine. » avec « Annuler » (8 s), qui remet la réponse
-   * d'avant ; `apresAnnulation()` est appelé ensuite (focus). Même réponse qu'avant : rien n'est écrit.
+   * d'avant ; `apresAnnulation()` est appelé ensuite (focus). Même réponse que celle qui se voit : rien n'est écrit.
+ * `garde` : les touchers sont ignorés 500 ms (alerte d'une recette : ce qui suit arrive sous le doigt).
    * → { code: 'ok' | 'chargement' | 'invalide' | 'echec' | 'refuse' }.
    */
-  repondreCuisine(id, valeur, { annonce = true, apresAnnulation = null } = {}) {
+  repondreCuisine(id, valeur, { annonce = true, apresAnnulation = null, garde = false } = {}) {
     if (!etat.utilisateur) return { code: 'refuse' };
     if (!etat.donnees.reglages) return { code: 'chargement' };
     const champs = ecrituresObjet(id, valeur);
     if (!champs) return { code: 'invalide' };
     const reponses = lireCuisine(etat.donnees.reglages);
     const avant = reponses.has(id) ? reponses.get(id) : null;
-    if (avant === valeur) return { code: 'ok' };
+    // Même réponse que celle qui se voit (un appareil de départ déjà « Je l'ai ») : rien n'est écrit.
+    const montre = etatObjet(id, etat.donnees.reglages);
+    if (avant === valeur || (valeur !== null && montre === (valeur ? 'oui' : 'non'))) return { code: 'ok', inchange: true };
     const echec = 'Votre réponse n’a pas pu être enregistrée. Réessayez.';
     if (!ecrireLesReglages(champs, echec)) return { code: 'echec' };
+    // Alerte d'une carte ou de la fiche (`garde`) : la question suivante, ou la carte suivante, arrive sous le doigt.
+    if (garde) ignorerToucherFantome();
     rendre();
     if (annonce && valeur !== null) {
       annoncer(annonceReponse(id, valeur), {

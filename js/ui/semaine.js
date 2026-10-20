@@ -693,12 +693,17 @@ function creerCarteAction(choisir, proposer) {
 
 /**
  * Ce qu'une mise à jour apporte à l'utilisatrice des courses (`ctx.nouveaute`, coeur/nouveautes.js ›
- * nouveauteAMontrer : vue « Repas et courses », aperçu compris), en tête de Semaine, une fois : « Voir Ma cuisine › »
+ * nouveauteAMontrer : vue « Repas et courses », aperçu compris), sous la carte « prochaine action » : « Voir Ma cuisine › »
  * (secondaire : la carte « prochaine action » garde le seul bouton principal) et « OK ». Un des deux boutons la marque
  * vue sur ce téléphone (actions.nouveauteVue) ; après « OK », le focus passe au titre de la carte « prochaine action ».
  */
+// Nouveautés déjà comptées pour cette ouverture de l'app (actions.nouveauteMontree : une fois par chargement).
+const nouveautesComptees = new Set();
+
 function creerCarteNouveaute() {
-  const titre = el('h2', { id: 'titre-nouveaute' });
+  const emoji = el('span', { 'aria-hidden': 'true' });
+  const libelle = el('span', {});
+  const titre = el('h2', { id: 'titre-nouveaute' }, emoji, libelle);
   const texte = el('p', {});
   let numero = 0;
   const vue = () => contexteSemaine?.actions?.nouveauteVue?.(numero);
@@ -715,16 +720,21 @@ function creerCarteNouveaute() {
       }
     },
   }, TEXTES_NOUVEAUTES.ok);
+  // Compacte, sans pastille : elle passe sous la carte « prochaine action », dont le bouton reste en vue.
   const noeud = el('section', { class: 'carte carte-nouveaute', 'aria-labelledby': 'titre-nouveaute', hidden: true },
-    el('div', { class: 'carte-ligne' }, pastille('✨', 'olive'), el('div', { class: 'carte-texte' }, titre, texte)),
-    el('div', { class: 'actions-carte' }, lien, ok));
+    titre, texte, el('div', { class: 'actions-carte' }, lien, ok));
 
   function maj(ctx) {
     const nouveaute = ctx?.nouveaute ?? null;
     noeud.hidden = !nouveaute;
     if (!nouveaute) return;
+    ecrireTexte(emoji, `${nouveaute.emoji}\u00A0`);
     numero = nouveaute.numero;
-    ecrireTexte(titre, nouveaute.titre);
+    if (!nouveautesComptees.has(numero)) {
+      nouveautesComptees.add(numero);
+      ctx.actions?.nouveauteMontree?.(numero);
+    }
+    ecrireTexte(libelle, nouveaute.titre);
     ecrireTexte(texte, nouveaute.texte);
     ecrireTexte(lien, `${nouveaute.lien.libelle}\u00A0›`);
     if (lien.getAttribute('href') !== nouveaute.lien.hash) lien.setAttribute('href', nouveaute.lien.hash);
@@ -798,8 +808,10 @@ function majCartePlat(noeud, element) {
     ?? avertissementCoche(element, ctx) ?? '';
   ecrireTexte(carte.exception, exception);
   carte.exception.hidden = !exception;
-  carte.alerte.maj(element.etat === 'ok' ? element.plat : null, ctx, {
-    changer: element.etat === 'ok' && peutChangerDIdee(ctx?.semaine ?? null, element.plat),
+  // Ni pour un plat dont personne ne mange ; « Touchez le plat… » seulement si sa feuille propose une autre idée.
+  carte.alerte.maj(element.etat === 'ok' && element.aCuire > 0 ? element.plat : null, ctx, {
+    changer: () => peutChangerDIdee(ctx?.semaine ?? null, element.plat)
+      && Boolean(ctx?.proposition?.autreIdee?.(ctx.semaine.id, element.platId)),
   });
   carte.versions.maj(element.etat === 'ok' ? element : null, ctx);
   carte.conservation.maj(element.etat === 'ok' ? element : null, ctx);
@@ -1246,8 +1258,8 @@ export function creer(ctx) {
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
     anniversaire?.noeud ?? null,
     demandes?.noeud ?? null,
-    carteNouveaute.noeud,
     carteAction.noeud,
+    carteNouveaute.noeud,
     sectionPlats.noeud,
     carteBatch.noeud,
     ctx.role === 'gestionnaire' ? carteIdees() : null,

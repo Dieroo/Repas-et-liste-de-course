@@ -353,4 +353,6 @@ export const AJOUTEES_AVANT = new Map([
   ['jus multifruit', 'ju-multifruit'], ['sirop', 'sirop'], ['sirop à diluer', 'sirop-a-diluer'], ['soda', 'soda'],
   ['boisson gazeuse', 'boisson-gazeuse'], ['vin', 'vin'], ['glace', 'glace'], ['crème glacée', 'creme-glacee'],
   ['capsule de café', 'capsule-de-cafe'], ['dosette de café', 'dosette-de-cafe'],
+  // 2026-10-20.
+  ['haut de cuisse de poulet désossé', 'haut-de-cuisse-de-poulet-desosse'],
 ]);

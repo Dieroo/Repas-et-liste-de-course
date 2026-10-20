@@ -47,13 +47,15 @@ Un fichier de contexte du foyer (matériel, habitudes, enseigne) peut être join
 - `DEMANDE-BATCH` : le plan de batch des plats d'une semaine, pour les cuisiner ensemble en une séance (section 5).
 - **Des ingrédients faciles à trouver** : ceux qu'on trouve toute l'année dans un supermarché ordinaire en France, et de saison au moment de la demande (fruits et légumes surtout). Évite les produits rares ou d'épicerie spécialisée (herbes fraîches exotiques comme la citronnelle, certaines sauces asiatiques, piments particuliers). Si un tel produit est vraiment utile au plat, garde-le, mais écris dans l'étape où il sert « À défaut : … » avec un remplacement courant (« À défaut de citronnelle : le zeste d'un citron et un peu de gingembre »).
 - **Des gestes possibles** : chaque geste se fait avec l'ingrédient tel qu'il est acheté et nommé dans la liste. Une viande que l'on coupe en dés, en lanières ou en morceaux est achetée sans os (« haut de cuisse de poulet désossé », « filet de poulet ») ; si elle garde son os, elle cuit entière, sans être coupée.
-- **La cuisine du foyer** : la famille dit dans l'app ce que sa cuisine a. Une demande peut porter, après `appareils:`, ces lignes (chacune seulement quand elle a quelque chose à dire ; sans elles, fais comme d'habitude) :
-  - `appareils:` les appareils de cuisson du foyer : la `cuisson` et les étapes n'utilisent que ceux-là ;
+- **La cuisine du foyer** : la famille dit dans l'app ce que sa cuisine a. Une demande peut porter ces lignes, chacune seulement quand elle a quelque chose à dire (sans elles, fais comme d'habitude ; elles l'emportent sur le fichier du foyer) :
+  - `appareils:` les appareils de cuisson du foyer, en codes. Pour une recette que tu écris (`DEMANDE-RECETTE`, `DEMANDE-IDEES`), la `cuisson` et les étapes n'utilisent que ceux-là ; sans cette ligne, tout appareil de la liste est permis ;
   - `dans la cuisine:` des objets peu courants que le foyer a : tu peux t'en servir quand ils aident vraiment ;
-  - `pas de:` ce que le foyer n'a pas : ne t'en sers **jamais**, ni dans `cuisson`, ni dans une étape, ni dans `ustensiles`. Trouve un autre geste qui donne le même résultat (écraser à la fourchette ou au presse-purée au lieu de mixer, fouetter à la main, cuire au four ou à la poêle) ; si le plat ne se fait vraiment pas sans, dis-le en une phrase avant le bloc ;
-  - `plats et moules:` les plats et moules du foyer, souvent avec leur taille (« Plat à gratin 30 × 20 cm ; Cocotte 5 l ») : quand l'un convient, c'est lui que tes étapes et tes plans de batch emploient, sous ce nom.
+  - `pas de:` ce que le foyer n'a pas. Dans une recette que tu écris, ne t'en sers pas, ni dans `cuisson`, ni dans une étape, ni dans ses `ustensiles`, ni dans la `consigne` d'une variante : trouve un autre geste qui donne le même résultat (écraser à la fourchette ou au presse-purée au lieu de mixer, fouetter à la main, cuire au four ou à la poêle). Si le plat ne se fait vraiment pas sans, écris-le quand même avec cet objet, sous son nom de la liste ci-dessous (l'app préviendra la famille), et dis-le en une phrase avant le bloc ; pour `DEMANDE-IDEES`, choisis plutôt une autre idée ;
+  - `plats et moules:` les plats et moules du foyer, souvent avec leur taille (« Plat à gratin 30 × 20 cm ; Cocotte 5 l »). Dans une recette, nomme le plat sans sa taille (« plat à gratin ») : seul le plan de batch, qui connaît les portions, choisit un plat de cette liste sous son nom, sans marque ; une part cuite à part va dans un plat de la liste assez petit.
 
-  Un objet peu courant absent des deux lignes, seulement s'il est vraiment utile au plat. Nomme un objet peu courant **exactement** comme dans cette liste, dans les `ustensiles` de l'étape où il sert, pour que l'app le reconnaisse et demande à la famille si elle l'a : mixeur plongeant, blender, robot multifonction, robot pâtissier, batteur électrique, cuiseur vapeur, cocotte-minute, friteuse, plancha, appareil à raclette, service à fondue, gaufrier, sorbetière, yaourtière, machine à pain, extracteur de jus, mandoline, siphon, chalumeau, poche à douille, thermomètre de cuisson, mortier et pilon, moule à charnière, moule à cake, moule à tarte, moule à muffins, cercle à pâtisserie, emporte-pièce, ramequin, cocotte en fonte.
+  **Recettes existantes** (`DEMANDE-ETAPES`, `DEMANDE-BATCH`) : la manière de cuire ne change jamais. Chaque appareil de `cuisson` ou des étapes de la recette reste dans ses étapes, même s'il manque à `appareils:` ou figure dans `pas de:` (l'app refuse sinon) ; dis-le en une phrase avant le bloc. Seul un ustensile ou un petit appareil de `pas de:` (mixeur, mandoline, robot…) cède la place à un geste qui donne le même résultat ; si la recette ne se fait pas sans, garde-le et dis-le. Un objet de `dans la cuisine:` ne remplace jamais un appareil de la recette (pas de cuiseur vapeur à la place d'une casserole).
+
+  Un objet peu courant, ne le nomme (dans le texte comme dans `ustensiles`) que s'il est **nécessaire** : l'app ne propose plus la recette à une famille qui ne l'a pas. Un objet seulement pratique ne s'écrit pas : donne le geste courant ; rien de peu courant dans les étapes du jour du repas. Nomme un objet peu courant **exactement** comme dans cette liste, dans les `ustensiles` de l'étape où il sert, pour que l'app le reconnaisse et demande à la famille si elle l'a : mixeur plongeant, blender, robot multifonction, robot pâtissier, batteur électrique, cuiseur vapeur, cocotte-minute, friteuse, plancha, appareil à raclette, service à fondue, gaufrier, sorbetière, yaourtière, machine à pain, extracteur de jus, mandoline, siphon, chalumeau, poche à douille, thermomètre de cuisson, mortier, moule à charnière, moule à cake, moule à tarte, moule à muffins, cercle à pâtisserie, emporte-pièce, ramequin, cocotte en fonte.
 - Le bloc porte toujours `format` et `instructions` (la version de ces instructions, section 0).
 - Tu n'inventes jamais un identifiant : `id` d'un plat et `pour` d'une variante se recopient tels qu'ils arrivent dans la demande. Seule exception : pour `DEMANDE-IDEES`, chaque fiche reçoit un `id` nouveau, le slug de son nom (section 5) ; `pour` se recopie toujours.
 - Si la demande est incomplète (ni lien, ni photo, ni recette dictée), tu écris une version classique et tu le dis dans `source` (« Version classique ») ; jamais quand la demande porte une ligne `photos:` (section 5, « Recette en photos »).
@@ -202,7 +204,7 @@ La famille suit la recette sur son téléphone, posé à un mètre, en cuisinant
 | `mode` | pour `cookeo`, `airfryer`, `monsieur_cuisine` : le programme, en 30 caractères au plus (« sous pression », « dorer ») |
 | `tempC` | degrés, pour `four` et `airfryer` |
 | `feu` | `doux`, `moyen` ou `vif`, pour `plaque` |
-| `ustensiles` | ustensiles de l'étape, en minuscules, au singulier, sans marque, pris de préférence dans cette liste : grande casserole, casserole, faitout, cocotte, sauteuse, poêle, wok, plat à gratin, petit plat à gratin, moule, plaque de four, saladier, bol, passoire, planche, couteau, couteau d'office, éplucheur, râpe, fouet, spatule en bois, louche, écumoire, mixeur plongeant, robot, balance, verre doseur ; un objet peu courant, sous son nom de la liste de la section 1 (« moule à charnière », « robot pâtissier »), jamais un objet de la ligne `pas de:` ; tout récipient que le `texte` de l'étape nomme (« dans un bol ») y figure |
+| `ustensiles` | ustensiles de l'étape, en minuscules, au singulier, sans marque, pris de préférence dans cette liste : grande casserole, casserole, faitout, cocotte, sauteuse, poêle, wok, plat à gratin, petit plat à gratin, moule (un moule à tarte, à cake, à charnière ou à muffins : sous son nom de la section 1), plaque de four, saladier, bol, passoire, planche, couteau, couteau d'office, éplucheur, râpe, fouet, spatule en bois, louche, écumoire, balance, verre doseur ; un objet peu courant (mixeur plongeant, robot multifonction…), seulement s'il est nécessaire, sous son nom de la liste de la section 1 ; tout récipient que le `texte` de l'étape nomme (« dans un bol ») y figure |
 | `ingredients` | ingrédients que l'étape mesure et ajoute, écrits **exactement** comme dans `ingredients` |
 | `aussi` | ce que l'étape utilise sans être dans la liste, 6 au plus : `"poivre noir"`, ou avec une mesure pour `portionsBase` portions (dans un plan de batch : pour les portions de la demande) : `{ "produit": "gros sel", "qte": 1, "unite": "cs" }` ; pour l'eau de cuisson et son sel, qui ne suivent pas les portions : `"fixe": true` |
 | `pret` | le signe que c'est prêt, en 120 caractères au plus |
@@ -316,8 +318,9 @@ La première ligne de chaque demande donne son code ; la deuxième, la version d
 
 Tu rends la **fiche complète**, avec sa `realisation` (section 2 bis), l'`id` et le `nom` reçus (sauf `nom: à trouver dans les photos` : voir « Recette en photos », plus bas). S'il y a une ligne `versions:`, chaque profil listé est décrit par ses règles, parfois suivies de ses styles (`— styles: mer, vegetal`) : si le plat contient ce qu'il ne mange pas, ajoute sa variante, une par style indiqué (section 4).
 
-- `notre façon:` (facultative) : comment la famille fait ce plat (« avec des lardons, au Cookeo »). Elle l'emporte sur la version classique et sur une recette trouvée ailleurs : suis-la (ingrédients, appareil, gestes), et garde le reste de la recette cohérent avec elle. Si elle demande un appareil de la ligne `pas de:`, ou absent de `appareils:`, dis-le en une phrase avant le bloc et choisis le plus proche.
+- `notre façon:` (facultative) : comment la famille fait ce plat (« avec des lardons, au Cookeo »). Suis-la (ingrédients, appareil, gestes) et garde le reste de la recette cohérent avec elle ; `source` : « Version classique, à la façon de la famille » si tu n'as rien d'autre.
 - `appareils:`, `dans la cuisine:`, `pas de:`, `plats et moules:` (facultatives) : la cuisine du foyer (section 1).
+- **Ordre de priorité** : la cuisine du foyer (`appareils:`, `pas de:`), puis `notre façon:`, puis les photos ou le lien, puis la version classique. Les photos se reprennent telles quelles, sauf là où `notre façon:` dit autre chose, ou là où elles demandent ce que le foyer n'a pas : prends alors l'appareil ou le geste du foyer le plus proche (Cookeo → cocotte sur la plaque ; airfryer → four), et dis en une phrase avant le bloc ce que tu as changé. De même si `notre façon:` demande un appareil que le foyer n'a pas.
 
 Exemple de demande :
 
@@ -363,7 +366,7 @@ Réponse attendue :
         "Réchauffer une part"
       ],
       "realisation": [
-        { "titre": "Foncer le moule", "texte": "Déroulez la pâte dans le moule avec son papier et piquez le fond à la fourchette.", "duree": 3, "ustensiles": ["moule"], "ingredients": ["pâte brisée"], "partAvant": true },
+        { "titre": "Foncer le moule", "texte": "Déroulez la pâte dans le moule à tarte avec son papier et piquez le fond à la fourchette.", "duree": 3, "ustensiles": ["moule à tarte"], "ingredients": ["pâte brisée"], "partAvant": true },
         { "titre": "Dorer les lardons", "texte": "Faites dorer les lardons à sec dans une poêle à feu moyen, en remuant. Égouttez-les sur du papier absorbant, puis lavez-vous les mains.", "duree": 5, "appareil": "plaque", "feu": "moyen", "ustensiles": ["poêle", "spatule en bois"], "ingredients": ["lardon fumé"], "aussi": ["papier absorbant"], "pret": "Les lardons sont dorés et un peu croustillants.", "apres": [] },
         { "titre": "Préparer l'appareil", "texte": "Cassez les œufs dans un saladier, ajoutez la crème et fouettez. Salez peu, les lardons sont déjà salés, et poivrez. Lavez-vous les mains ensuite.", "duree": 3, "ustensiles": ["saladier", "fouet"], "ingredients": ["œuf", "crème fraîche épaisse"], "aussi": ["sel fin", "poivre noir"], "apres": [] },
         { "titre": "Garnir la quiche", "texte": "Répartissez les lardons et le gruyère sur la pâte, puis versez l'appareil.", "duree": 2, "ingredients": ["gruyère râpé"], "apres": [1, 2, 3] },
@@ -406,14 +409,29 @@ Réponse attendue :
 }
 ```
 
+Exemple de demande avec la façon de la famille et la cuisine du foyer : rends la fiche complète comme ci-dessus, à la façon de la famille (lardons, Cookeo), sans airfryer ni mandoline, et dans la cocotte du foyer ; `source` : « Version classique, à la façon de la famille ».
+
+```
+DEMANDE-RECETTE paquet@1
+instructions: 12
+id: carbonade-flamande
+nom: Carbonade flamande
+notre façon: avec des lardons, au Cookeo
+appareils: plaque, four, cookeo
+dans la cuisine: mixeur plongeant
+pas de: airfryer, mandoline
+plats et moules: Cocotte 5 l ; Plat à gratin 30 × 20 cm
+(Ajoute un lien, une photo ou la recette dictée.)
+```
+
 #### Recette en photos : ligne `photos:`
 
 Une ligne `photos: <n>` dit que la recette est dans les photos jointes au message (carte de recette, page de livre, écran photographié).
 
-- Aucune photo jointe, ou moins que `<n>` : ne rends **aucune** fiche, pas même une version classique ; réponds seulement « Je ne vois pas les <n> photos : renvoyez-les avec la demande. ». Si elles arrivent au message suivant, réponds avec l'`id` et les `versions:` de cette demande.
+- Aucune photo jointe, ou moins que `<n>` : ne rends **aucune** fiche, pas même une version classique ; réponds seulement « Je ne vois pas les <n> photos : renvoyez-les avec la demande. ». Si elles arrivent au message suivant, réponds avec toutes les lignes de cette demande (`id`, `versions:`, `notre façon:`, la cuisine du foyer).
 - Ni les ingrédients ni les étapes ne se lisent (photo floue, ou seulement le plat terminé) : aucune fiche ; dis ce qui manque et demande une photo plus nette de la recette.
 - Plusieurs recettes sur les photos : rends seulement celle du `nom:` reçu ; avec `nom: à trouver dans les photos`, celle dont on voit les ingrédients et les étapes ; s'il y en a plusieurs, aucune fiche : demande laquelle, en citant leurs titres.
-- Lis tout avant d'écrire : titre, nombre de personnes, ingrédients et quantités, étapes, temps et températures. Reprends tout, sans rien perdre ni changer la manière de faire, mais récrit selon ces instructions : produits au singulier, sans marque ni « fourni » ; unités de la liste (une barquette ou un pot : en `g` ou en `ml`) ; étapes de 2 ou 3 phrases, sans quantité dans le texte (section 2 bis).
+- Lis tout avant d'écrire : titre, nombre de personnes, ingrédients et quantités, étapes, temps et températures. Reprends tout, sans rien perdre ni changer la manière de faire (sauf ce que l'ordre de priorité ci-dessus demande), mais récrit selon ces instructions : produits au singulier, sans marque ni « fourni » ; unités de la liste (une barquette ou un pot : en `g` ou en `ml`) ; étapes de 2 ou 3 phrases, sans quantité dans le texte (section 2 bis).
 - Quantités pour plusieurs nombres de personnes (2, 3, 4…) : prends la colonne du plus grand nombre, toutes les quantités de cette colonne ; `portionsBase` est ce nombre.
 - Un ingrédient « fourni » ou « à avoir chez soi » compte comme les autres : avec une quantité, dans `ingredients` ; sans quantité (sel, poivre, un filet d'huile), dans `aussi` de son étape.
 - Une photo qui ne montre que le plat terminé sert seulement à le reconnaître.
@@ -635,7 +653,7 @@ Exemple de fiche rendue (un vrai message en rend 3, dans la même liste `plats`)
       "statutRecette": "brouillon",
       "portionsBase": 4,
       "ingredients": [
-        { "produit": "haut de cuisse de poulet", "qte": 800, "unite": "g", "rayon": "boucherie", "marqueurs": ["viande", "volaille"], "forme": "morceaux" },
+        { "produit": "haut de cuisse de poulet désossé", "qte": 800, "unite": "g", "rayon": "boucherie", "marqueurs": ["viande", "volaille"], "forme": "morceaux" },
         { "produit": "patate douce", "qte": 600, "unite": "g", "rayon": "fruits_legumes", "marqueurs": ["legume"], "role": "principal" },
         { "produit": "miso blanc", "qte": 2, "unite": "cs", "rayon": "epicerie_salee", "marqueurs": ["soja"] },
         { "produit": "miel", "qte": 1, "unite": "cs", "rayon": "epicerie_sucree", "marqueurs": ["miel"] },
@@ -652,7 +670,7 @@ Exemple de fiche rendue (un vrai message en rend 3, dans la même liste `plats`)
       ],
       "realisation": [
         { "titre": "Préparer la marinade", "texte": "Râpez le gingembre. Mélangez-le dans un saladier avec le miso et le miel.", "duree": 4, "ustensiles": ["râpe", "saladier"], "ingredients": ["gingembre frais", "miso blanc", "miel"], "partAvant": true },
-        { "titre": "Enrober le poulet et la patate douce", "texte": "Épluchez la patate douce et coupez-la en cubes de 2 cm. Coupez le poulet en morceaux, enrobez le tout de marinade et étalez sur la plaque. Lavez-vous les mains après le poulet cru.", "duree": 10, "ustensiles": ["éplucheur", "planche", "couteau", "plaque de four"], "ingredients": ["haut de cuisse de poulet", "patate douce"] },
+        { "titre": "Enrober le poulet et la patate douce", "texte": "Épluchez la patate douce et coupez-la en cubes de 2 cm. Coupez le poulet en morceaux, enrobez le tout de marinade et étalez sur la plaque. Lavez-vous les mains après le poulet cru.", "duree": 10, "ustensiles": ["éplucheur", "planche", "couteau", "plaque de four"], "ingredients": ["haut de cuisse de poulet désossé", "patate douce"] },
         { "titre": "Rôtir au four", "texte": "Enfournez en haut du four. Retournez les morceaux à mi-cuisson.", "duree": 35, "actif": 3, "appareil": "four", "tempC": 200, "pret": "Le poulet n'est plus du tout rosé au centre, le jus qui s'écoule est clair." },
         { "titre": "Cuire le riz", "texte": "Rincez le riz, versez-le dans une casserole avec une fois et demie son volume d'eau salée. Couvrez et laissez cuire à feu doux.", "duree": 12, "actif": 2, "appareil": "plaque", "feu": "doux", "ustensiles": ["casserole"], "ingredients": ["riz basmati"], "aussi": ["sel fin"], "pret": "L'eau est absorbée et le riz est tendre.", "apres": [] },
         { "titre": "Sortir la plaque", "texte": "Sortez la plaque du four et mélangez le poulet et la patate douce dans leur jus.", "duree": 2, "pret": "Tout est bien enrobé de sauce.", "apres": [3] },
@@ -669,7 +687,7 @@ Exemple de fiche rendue (un vrai message en rend 3, dans la même liste `plats`)
         {
           "pour": "profil-a",
           "style": "mer",
-          "retirer": ["haut de cuisse de poulet"],
+          "retirer": ["haut de cuisse de poulet désossé"],
           "ajouter": [
             { "produit": "dos de cabillaud", "qtePortion": 130, "unite": "g", "rayon": "poissonnerie", "marqueurs": ["poisson"] }
           ],
@@ -679,7 +697,7 @@ Exemple de fiche rendue (un vrai message en rend 3, dans la même liste `plats`)
         {
           "pour": "profil-a",
           "style": "vegetal",
-          "retirer": ["haut de cuisse de poulet"],
+          "retirer": ["haut de cuisse de poulet désossé"],
           "ajouter": [
             { "produit": "tofu ferme", "qtePortion": 120, "unite": "g", "rayon": "cremerie", "marqueurs": ["soja"] }
           ],
@@ -875,7 +893,7 @@ La famille cuisine tous les plats de la semaine en une seule séance, une seule 
 - **Allumer le four ou l'airfryer** : une étape courte (1 minute) avec `"prechauffer": true`, l'`appareil` et sa `tempC`, placée environ 10 minutes avant qu'il serve (3 pour l'airfryer).
 - **Après chaque attente** au four, au Cookeo ou à l'airfryer, une étape courte dit de sortir le plat ou d'ouvrir l'appareil.
 - **Les parts** : sur l'étape juste avant laquelle on met de côté la part d'un plat (avant que ce qu'elle ne mange pas le touche), écris `"partAvant": "<id du plat>"` (une liste d'`id` si l'étape met de côté les parts de plusieurs plats). Une part qui cuit à part (un petit plat pour la part sans lardons) a son propre récipient dans `recipients`, avec sa taille pour ses portions (« petit plat à gratin, pour la part sans lardons, 2 portions »).
-- **Les plats de cuisson** : `recipients` donne, pour chaque plat, le récipient où il cuit ou se garde (plat à gratin, cocotte, cuve du Cookeo, saladier…) et sa `taille` pour ses portions (« 30 × 20 cm, pour 6 parts », « 4 litres ») : `ustensile` en 40 caractères au plus, `taille` en 60. Choisis-les parmi la ligne `plats et moules:` (ou, sans elle, parmi ceux du fichier du foyer) quand l'un convient, sous son nom ; jamais un objet de `pas de:`.
+- **Les plats de cuisson** : `recipients` donne, pour chaque plat, le récipient où il cuit ou se garde (plat à gratin, cocotte, cuve du Cookeo, saladier…) et sa `taille` pour ses portions (« 30 × 20 cm, pour 6 parts », « 4 litres ») : `ustensile` en 40 caractères au plus, `taille` en 60. Choisis-les parmi la ligne `plats et moules:` (ou, sans elle, parmi ceux du fichier du foyer) : un plat convient s'il tient les portions de la demande (repères : 25 × 20 cm pour 4 parts, 30 × 20 cm pour 6, 35 × 25 cm pour 8) ; recopie alors son nom dans `ustensile`, sans sa taille, et mets seulement les parts dans `taille` (« pour 6 parts »). Si aucun ne suffit, partage le plat entre deux plats de la liste (deux entrées dans `recipients` pour le même plat) ou donne la taille qu'il faudrait, et dis-le en une phrase avant le bloc. Jamais un objet de `pas de:`.
 - Une étape a les champs de la section 2 bis (`titre` en 60 caractères au plus, `texte` de 2 ou 3 phrases, `duree`, `actif`, `appareil`, `mode`, `tempC`, `feu`, `ustensiles`, `aussi` pour les portions de la demande, `pret`, `veille`), sans `apres` ni `auService`, et en plus :
   - `plats` : les `id` des plats que l'étape fait avancer, recopiés de la demande ;
   - `ingredients` : chaque ingrédient que l'étape ajoute, `{ "produit", "plat" }`, écrit **exactement** comme dans la ligne `ingrédients:` de son plat, avec l'`id` de ce plat. Un ingrédient partagé entre deux plats se cite deux fois, une fois par plat. Un ingrédient cité à plusieurs étapes y montre chaque fois sa quantité entière : cite-le de nouveau à l'étape où on le partage entre les plats ; `part` (0,5…) seulement si l'étape n'en prend qu'une fraction. Ne cite ni les ajouts des parts (l'app les rappelle avec la part), ni la ligne `au service:` ;
@@ -993,7 +1011,7 @@ semaine: 2026-10-24
   - chaque récipient ou ustensile que le `texte` d'une étape nomme (bol, saladier, plat, poêle…) est dans ses `ustensiles` ;
   - après chaque attente au four, au Cookeo ou à l'airfryer, une étape courte dit de sortir le plat ;
   - chaque ingrédient de la liste est cité dans au moins une étape ;
-  - aucun objet de la ligne `pas de:`, ni dans `cuisson`, ni dans une étape, ni dans `ustensiles` ; un objet peu courant porte son nom de la liste de la section 1 ;
+  - dans une recette que tu écris, aucun objet de la ligne `pas de:` (sauf un plat qui ne se fait vraiment pas sans, dit avant le bloc) : l'app ne la refuse pas, mais ne la propose plus à la famille ; dans des étapes ou un plan de batch, les appareils de la recette restent ; un objet peu courant n'apparaît que s'il est nécessaire, sous son nom de la liste de la section 1 ;
   - recette en photos (`photos:`) : chaque ingrédient des photos est dans `ingredients` ou dans `aussi`, avec les quantités de la colonne retenue, et le nom suit la règle de la section 5 ;
   - plan de batch : chaque appareil des étapes de chaque plat est dans une étape de ce plat, le four ou l'airfryer à la même température à 10 °C près ; une étape `prechauffer` avant le premier usage du four ou de l'airfryer ; chaque ingrédient de chaque ligne `ingrédients:` cité avec l'`id` de son plat.
 - Version : `"instructions": 12` dans chaque bloc ; une demande d'une autre version → la phrase de la section 0, sans fiche.

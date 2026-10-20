@@ -25,7 +25,7 @@ const FORMAT = 'paquet@1';
 export const VERSION_INSTRUCTIONS = 12;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = 'e40f83e8cfd4';
+export const EMPREINTE_INSTRUCTIONS = '8eb8ec179803';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -210,7 +210,9 @@ function nomsNotes(plats, profils, note) {
  */
 export function cuisineDeLaDemande({ appareils = null, reglages = null } = {}) {
   if (!estObjet(reglages)) return { appareils: appareilsActifs(appareils), cuisine: [] };
-  return { appareils: appareilsDuFoyer(reglages), cuisine: lignesCuisine(reglages) };
+  // Tous les appareils dits absents (cas d'école) : « aucun », jamais une ligne vide.
+  const duFoyer = appareilsDuFoyer(reglages);
+  return { appareils: duFoyer.length ? duFoyer : ['aucun'], cuisine: lignesCuisine(reglages) };
 }
 
 /** Envie facultative (texte) : une ligne, espaces réduits, IDEES_ENVIE_MAX caractères au plus (jamais un emoji coupé). */

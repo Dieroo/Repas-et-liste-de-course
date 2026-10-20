@@ -16,7 +16,7 @@ import {
   etatsCompat, estVous, nomDe, rangerStyles, profilsAgeDe, precautionsDe, texteSeverite, symboleGravite,
 } from './compat.js';
 import { marqueursDouteux } from '../coeur/compatibilite.js';
-import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
+import { faconLue, texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
 import { stylesAttendus, marqueursSurveilles } from '../coeur/regles.js';
 import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
@@ -329,6 +329,15 @@ function versionAttendue(etats, demandes = new Set()) {
 // Clé du bloc « 📬 Demander la recette » ; celle d'une version est `profil:<id>`. Phrase « 📬 Demandée… » :
 // plat-semaine.js › phraseDemandee (partagée avec la feuille du plat de la semaine).
 const CLE_RECETTE = 'recette';
+
+/**
+ * « Votre façon : avec des lardons, au Cookeo. » (vue « Repas et courses ») ou « Notre façon : … » (gestionnaire) :
+ * la façon du foyer jointe à la demande de recette (2026-10-20), qui part aussi à Claude ; null sans façon.
+ */
+function ligneFacon(demande, debut) {
+  const facon = faconLue(demande?.facon);
+  return facon ? el('p', { class: 'aide' }, `${debut}\u00A0: ${facon}.`) : null;
+}
 
 /** Ligne « 📬 Demandée par Adulte B le 9 octobre. » (gestionnaire) : qui a demandé, et quand ; jamais une adresse. */
 function ligneDemandee(demande, { profils, moi }) {
@@ -938,11 +947,12 @@ export function creer(ctx) {
             ? 'Envoyez la demande et ses photos à votre projet Claude, puis collez sa réponse ici.'
             : 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'),
           situationRecette?.ouverte ? ligneDemandee(situationRecette.ouverte, auteurs) : null,
+          ligneFacon(situationRecette?.ouverte, 'Notre façon'),
         ];
       } else if (situationRecette?.ouverte) {
         const bloc = blocDemande(CLE_RECETTE);
         ecrireBloc(bloc, { phrase: phraseDemandee(situationRecette.ouverte, { pourVersion: false, horsLigne }) });
-        textes = [bloc.phrase];
+        textes = [bloc.phrase, ligneFacon(situationRecette.ouverte, 'Votre façon')];
       } else if (situationRecette?.possible) {
         const bloc = blocDemande(CLE_RECETTE);
         ecrireBloc(bloc, { libelle: 'Demander la recette' });
@@ -1029,10 +1039,11 @@ export function creer(ctx) {
         ),
       ),
 
+      // « Ma cuisine » avant « ＋ Ajouter à la semaine » : la question se lit avant le geste.
+      jete ? null : alerteCuisine.noeud,
+
       // Ni sur un plat de la corbeille, ni sur un apéro (T3e) ou une préparation de chaque semaine (T3d).
       jete || !peutAllerDansLaSemaine(plat) ? null : blocSemaine,
-
-      jete ? null : alerteCuisine.noeud,
 
       jete ? carteJete : brouillon ? carteReprise : lienModifier,
 

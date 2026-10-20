@@ -513,12 +513,10 @@ function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refus
     if (vus.has(plat.id)) continue;
     vus.add(plat.id);
     if (!peutAllerDansLaSemaine(plat) || typeDe(plat) !== type || actifs.has(plat.id) || refusesSet.has(plat.id)) continue;
-    if (typeof ecarter === 'function' && aSaRecette(plat) && ecarter(plat)) {
-      rejets.push({ rejet: 'cuisine', platId: plat.id });
-      continue;
-    }
     const analyse = analyserPlat(plat, { profils: lusProfils, evaluer: evaluation, passages, cible: lue });
+    // Un objet absent de la cuisine ne cache jamais une autre raison (sans recette, « Jamais », personne).
     if (analyse.rejet) rejets.push(analyse);
+    else if (typeof ecarter === 'function' && ecarter(plat)) rejets.push({ rejet: 'cuisine', platId: plat.id });
     else candidats.push(analyse);
   }
   return { cible: lue, profils: lusProfils, evaluer: evaluation, actifs, elementsCible, passages, candidats, rejets, ecartesCible };
@@ -943,7 +941,7 @@ export const TEXTES_PROPOSER = Object.freeze({
   }),
   sansProposition: Object.freeze({
     recettes: 'L’app proposera des plats quand ils auront leur recette.',
-    cuisine: 'Vos plats demandent un objet que vous n’avez pas\u00A0: choisissez-les vous-même.',
+    cuisine: 'Vos plats demandent un objet que vous n’avez pas\u00A0: dites-le dans Ma cuisine si vous l’avez, sinon choisissez-les vous-même.',
     recents: 'Vos plats ont tous été mangés ces deux dernières semaines\u00A0: choisissez-les vous-même.',
   }),
   autreIdee: Object.freeze({

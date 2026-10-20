@@ -856,6 +856,8 @@ const ECRITURES_AJOUTEES = [
   ['vin', ['vin']],
   ['glace', ['glace', 'crème glacée']],
   ['capsule-de-cafe', ['capsule de café', 'dosette de café']],
+  // 2026-10-20 : la viande coupée s'achète désossée (instructions en version 11) : un autre produit.
+  ['haut-de-cuisse-de-poulet-desosse', ['haut de cuisse de poulet désossé']],
 ];
 /** Entrées neuves du 2026-10-11 et du 2026-10-16 (autre article acheté : autre pot, autre bouteille, herbe sèche dont le nom seul est frais). */
 const ENTREES_NEUVES = new Set(['poivre-blanc', 'paprika-fort', 'graine-de-cumin', 'baton-de-cannelle', 'piment-en-poudre',
@@ -869,6 +871,8 @@ const ENTREES_NEUVES = new Set(['poivre-blanc', 'paprika-fort', 'graine-de-cumin
   'cereale', 'biscuit', 'madeleine', 'pain-au-lait', 'chocolat', 'compote', 'bonbon', 'yaourt-au-fruit',
   'creme-dessert', 'fromage-en-portion', 'eau-minerale', 'ju-de-fruit', 'sirop', 'soda', 'vin', 'glace',
   'capsule-de-cafe',
+  // 2026-10-20 : haut de cuisse désossé (une viande coupée s'achète sans os).
+  'haut-de-cuisse-de-poulet-desosse',
 ]);
 
 test('14. écritures d’avant : chaque forme du dictionnaire au 2026-10-10 garde son idProduit (table figée)', () => {

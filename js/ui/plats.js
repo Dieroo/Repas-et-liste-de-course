@@ -566,12 +566,13 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
     el('p', { class: 'aide' }, ctx.role === 'gestionnaire'
       ? 'Il apparaîtra avec ⏳ jusqu’à l’ajout de sa recette.'
       : 'Il apparaîtra avec ⏳\u00A0: la recette sera demandée.'),
+    choix?.noeud ?? null,
+    // Après les photos : Entrée dans ce champ envoie la feuille, les photos sont déjà là.
     facon ? [
       el('label', { class: 'etiquette-champ', for: 'facon-du-plat' }, 'Comment vous la faites\u202F? (facultatif)'),
       facon,
       el('p', { class: 'aide', id: 'facon-aide' }, 'Par exemple\u00A0: avec des lardons, au Cookeo.'),
     ] : null,
-    choix?.noeud ?? null,
     erreur,
     attente,
     el('div', { class: 'actions-feuille' },

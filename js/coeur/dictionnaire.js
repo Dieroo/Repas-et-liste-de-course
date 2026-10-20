@@ -208,6 +208,8 @@ export const DICTIONNAIRE = Object.freeze([
   { id: 'emince-de-poulet', nom: 'émincé de poulet', rayon: 'boucherie', unite: 'g', marqueurs: ['viande', 'volaille'], forme: 'fine', alias: ['poulet émincé'] },
   { id: 'cuisse-de-poulet', nom: 'cuisse de poulet', rayon: 'boucherie', unite: 'pc', marqueurs: ['viande', 'volaille'], forme: 'morceaux' },
   { id: 'haut-de-cuisse-de-poulet', nom: 'haut de cuisse de poulet', rayon: 'boucherie', unite: 'pc', marqueurs: ['viande', 'volaille'], forme: 'morceaux' },
+  // Instructions en version 11 (gestes possibles) : une viande coupée s'achète désossée ; un autre produit en rayon.
+  { id: 'haut-de-cuisse-de-poulet-desosse', nom: 'haut de cuisse de poulet désossé', rayon: 'boucherie', unite: 'g', marqueurs: ['viande', 'volaille'], forme: 'morceaux' },
   { id: 'pilon-de-poulet', nom: 'pilon de poulet', rayon: 'boucherie', unite: 'pc', marqueurs: ['viande', 'volaille'], forme: 'morceaux' },
   { id: 'aile-de-poulet', nom: 'aile de poulet', rayon: 'boucherie', unite: 'pc', marqueurs: ['viande', 'volaille'], forme: 'morceaux' },
   { id: 'poule', nom: 'poule', rayon: 'boucherie', unite: 'pc', marqueurs: ['viande', 'volaille'], forme: 'morceaux' },
