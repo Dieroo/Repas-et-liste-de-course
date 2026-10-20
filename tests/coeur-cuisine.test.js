@@ -295,8 +295,8 @@ test('quantitesDeLEtape : quantités de la semaine, `part` avant l’arrondi, pr
   // Produit en double dans la fiche (beurre en g et en c. à soupe) ; produit introuvable ; citation en double.
   const etape = { ingredients: [{ produit: 'beurre', part: 1 }, 'beurres', 'gingembre'] };
   assert.deepEqual(quantitesDeLEtape(etape, quantitesACuisiner(CURRY, null)), [
-    { produit: 'beurre', texte: 'Beurre · 20\u00A0g + 1\u00A0c. à soupe', qte: 20, unite: 'g' },
-    { produit: 'gingembre', texte: 'Gingembre', qte: null, unite: null },
+    { produit: 'beurre', texte: 'Beurre · 20\u00A0g + 1\u00A0c. à soupe', qte: 20, unite: 'g', mesures: [{ unite: 'g', qte: 20 }, { unite: 'cs', qte: 1 }] },
+    { produit: 'gingembre', texte: 'Gingembre', qte: null, unite: null, mesures: [] },
   ]);
   // Toutes les parts retirent le produit.
   const sansA = semaineAvec({ 'carbonade-flamande': dans(1, { mange: { 'profil-a': false } }) });

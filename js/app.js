@@ -52,6 +52,7 @@ import * as ecranDemandes from './ui/demandes.js';
 import * as accueil from './ui/accueil.js';
 // T5-1 « Cuisiner pas à pas ».
 import * as cuisiner from './ui/cuisiner.js';
+import * as ecranBatch from './ui/batch.js';
 import { TEXTES_CUISINE } from './coeur/cuisine.js';
 import { cleAccueil, lireMarque, valeurVu, valeurOuverture, accueilAuto } from './coeur/accueil.js';
 import { telecharger } from './ui/fichier.js';
@@ -84,6 +85,8 @@ import { indexDesRecettes, ficheProduit } from './coeur/produits.js';
 import { modeleDrive, ecrituresDrive, ERREURS_DRIVE, texteMotNote } from './coeur/drive.js';
 // T5-0b « Étapes détaillées » : écriture d'un lot d'étapes (importerEtapes).
 import { TEXTES_ETAPES } from './coeur/realisation.js';
+// Plan du batch (2026-10-19).
+import { TEXTES_PLAN_BATCH, etatCarteBatch, platsDuBatch } from './coeur/plan-batch.js';
 
 // Écrans de l'app. `onglet` : onglet surligné ; `sansOnglets` : barre d'onglets masquée (pas de sortie
 // accidentelle pendant une saisie). Un module expose creer(ctx) → { noeud, maj?, detruire? } (mis à jour en direct)
@@ -107,6 +110,8 @@ const ECRANS = {
   accueil: { titre: 'Bienvenue', module: accueil, onglet: null, sansOnglets: true },
   // Cuisiner pas à pas (T5-1) : sans onglets ni en-tête de l'app (l'écran a les siens), la barre « Suivante › » en bas.
   cuisiner: { titre: 'Cuisiner pas à pas', module: cuisiner, onglet: 'plats', sansOnglets: true },
+  // Plan du batch (2026-10-19) : comme « Cuisiner pas à pas », pour les plats de la semaine.
+  batch: { titre: 'Le batch de la semaine', module: ecranBatch, onglet: 'semaine', sansOnglets: true },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -165,6 +170,11 @@ const etat = {
   produits: [],
   produitsCharges: false,
   produitsDepuisCache: false,
+  // Plans du batch (2026-10-19) : documents `plansBatch/{semaine}` bruts (demande de l'utilisatrice des courses, plan
+  // collé par le gestionnaire).
+  plansBatch: [],
+  plansBatchCharges: false,
+  plansBatchDepuisCache: false,
   apercu: false, // gestionnaire : aperçu de la vue « Repas et courses »
   // « Proposer les plats de la semaine » (T4-0), en mémoire seulement (ni Firestore, ni stockage du téléphone),
   // oubliés à la fermeture de l'app :
@@ -446,6 +456,28 @@ function semainesLues() {
 // reçoivent le même objet d'un rendu à l'autre.
 let memoSemaines = { semaines: null, aujourdhui: null, semaine: null, enCours: null };
 
+/**
+ * Plan du batch de la semaine montrée (2026-10-19) → null tant que la semaine, les plats, les profils ou les plans ne
+ * sont pas lus | { semaineId, elements, doc, carte } : plats du batch (coeur/plan-batch.js › platsDuBatch), document
+ * `plansBatch/<semaine>` (ou null), état de la carte de Semaine (etatCarteBatch).
+ */
+function batchCourant(semaine, aujourdhui = dateDuJour()) {
+  if (!semaine || !semainesLues() || !etat.plansBatchCharges) return null;
+  const elements = platsDuBatch(semaine, {
+    tousLesPlats: etat.plats, profils: etat.profils, evaluer: compat, reglages: etat.donnees.reglages,
+  });
+  const doc = etat.plansBatch.find((d) => d.id === semaine.id) ?? null;
+  return { semaineId: semaine.id, elements, doc, carte: etatCarteBatch({ doc, elements, semaine, aujourdhui }) };
+}
+
+/** Document `plansBatch/<semaine>` changé tout de suite sur ce téléphone (la demande fusionnée champ par champ) ; la copie de Firestore suit. */
+function majPlanBatchLocal(semaineId, champs) {
+  const ancien = etat.plansBatch.find((d) => d.id === semaineId) ?? { id: semaineId };
+  const nouveau = { ...ancien, ...champs, id: semaineId };
+  if (champs.demande) nouveau.demande = { ...(ancien.demande ?? {}), ...champs.demande };
+  etat.plansBatch = [...etat.plansBatch.filter((d) => d.id !== semaineId), nouveau];
+}
+
 function semainesDuJour(aujourdhui = dateDuJour()) {
   if (memoSemaines.semaines !== etat.semaines || memoSemaines.aujourdhui !== aujourdhui) {
     memoSemaines = {
@@ -707,6 +739,8 @@ function instructionsAJour() {
  * ou null), `proposition.autreIdee(semaineId, platId)` (remplaçant de « 🔄 Une autre idée », ou null) ; « 🔄 Changer
  * des plats » (2026-10-18) : `proposition.changeables(semaineId)` ([{ platId, nom }]) et
  * `proposition.choixDeLaMer(semaineId)` ({ total, familles }).
+ * Plan du batch (2026-10-19) : `batch` (batchCourant de la semaine montrée, ou null), `demandeBatch` (le même, quand
+ * sa demande reste à traiter) ; le plan d'une autre semaine par actions.lireBatch(semaineId).
  */
 function contexteCourant() {
   const { utilisateur } = etat;
@@ -717,6 +751,7 @@ function contexteCourant() {
     : [];
   const aujourdhui = dateDuJour();
   const { semaine, enCours } = semainesDuJour(aujourdhui);
+  const batch = batchCourant(semaine, aujourdhui);
   return {
     utilisateur,
     role,
@@ -733,6 +768,9 @@ function contexteCourant() {
     demandes: etat.demandes,
     demandesChargees: etat.demandesChargees,
     aTraiter,
+    // Plan du batch (2026-10-19) : celui de la semaine montrée ; `demandeBatch` : sa demande, quand elle reste à traiter.
+    batch,
+    demandeBatch: batch?.carte.etat === 'demande' ? batch : null,
     parametre,
     routePrecedente,
     instructionsAJour: instructionsAJour(),
@@ -1571,6 +1609,115 @@ const actions = {
       action: { libelle: 'Annuler', faire: () => annulerDemande(preparation.id, apresAnnulation) },
     });
     return { code: 'ok', id: preparation.id };
+  },
+  /**
+   * « 📬 Demander le plan du batch » (vue « Repas et courses », 2026-10-19) : demande ouverte dans
+   * `plansBatch/<semaine>` de la semaine montrée (hors ligne : part plus tard), affichée tout de suite, gestionnaire
+   * prévenu (« Plan du batch à préparer », prevenirPlanBatch), écran redessiné, puis « C’est demandé. » avec
+   * « Annuler » (8 s), qui la clôt, redessine et appelle `apresAnnulation()`.
+   * → { code: 'ok' } | { code } : refuse (gestionnaire hors aperçu), chargement, inutile (moins de deux plats, plan à
+   *   jour ou déjà demandé), deja (touché il y a moins de 2 s), echec (annoncé).
+   */
+  demanderPlanBatch({ apresAnnulation } = {}) {
+    if (!etat.utilisateur || roleCourant() === 'gestionnaire') return { code: 'refuse' };
+    const aujourdhui = dateDuJour();
+    const batch = batchCourant(semainesDuJour(aujourdhui).semaine, aujourdhui);
+    if (!batch) return { code: 'chargement' };
+    if (!batch.carte.visible || batch.carte.etat === 'pret' || batch.carte.etat === 'demande') return { code: 'inutile' };
+    const cle = `batch:${batch.semaineId}`;
+    if (Date.now() - (verrousDemandes.get(cle) ?? -Infinity) < DELAI_VERROU_DEMANDE_MS) return { code: 'deja' };
+    const echec = 'La demande n’a pas pu être enregistrée. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.demanderPlanBatch(batch.semaineId, { creePar: etat.utilisateur.email });
+    } catch {
+      annoncer(echec);
+      return { code: 'echec' };
+    }
+    ecrire(envoi, echec);
+    verrousDemandes.set(cle, Date.now());
+    majPlanBatchLocal(batch.semaineId, { demande: { statut: 'ouverte', creePar: etat.utilisateur.email, creeLe: null } });
+    const jeton = Symbol(cle);
+    jetonsDemandes.set(cle, jeton);
+    prevenirPlanBatch(batch.semaineId, envoi, jeton);
+    rendre();
+    annoncer('C’est demandé.', {
+      action: { libelle: 'Annuler', faire: () => annulerDemandePlanBatch(batch.semaineId, apresAnnulation) },
+    });
+    return { code: 'ok' };
+  },
+  /**
+   * « Retirer la demande » du plan du batch (gestionnaire hors aperçu, écran Demandes, 2026-10-19) : la demande de la
+   * semaine montrée passe traitée (hors ligne : part plus tard), appliqué tout de suite ; « Demande retirée. » avec
+   * « Annuler » (8 s), qui la rouvre et appelle `apresAnnulation()`. → { code } : ok, refuse, inutile, echec.
+   */
+  retirerDemandePlanBatch({ apresAnnulation } = {}) {
+    if (!etat.utilisateur || roleCourant() !== 'gestionnaire') return { code: 'refuse' };
+    const batch = batchCourant(semainesDuJour().semaine);
+    if (batch?.carte.etat !== 'demande') return { code: 'inutile' };
+    const { semaineId } = batch;
+    const echec = 'La demande n’a pas pu être retirée. Réessayez.';
+    let envoi;
+    try {
+      envoi = donnees.annulerDemandePlanBatch(semaineId);
+    } catch {
+      annoncer(echec);
+      return { code: 'echec' };
+    }
+    ecrire(envoi, echec);
+    majPlanBatchLocal(semaineId, { demande: { statut: 'traitee' } });
+    rendre();
+    annoncer(TEXTES_PLAN_BATCH.retiree, {
+      action: {
+        libelle: 'Annuler',
+        faire: () => {
+          if (roleCourant() !== 'gestionnaire') return;
+          if (etat.plansBatch.find((d) => d.id === semaineId)?.demande?.statut !== 'traitee') return;
+          const remise = 'La demande n’a pas pu être remise. Réessayez.';
+          let retour;
+          try {
+            retour = donnees.remettreDemandePlanBatch(semaineId);
+          } catch {
+            annoncer(remise);
+            return;
+          }
+          ecrire(retour, remise);
+          majPlanBatchLocal(semaineId, { demande: { statut: 'ouverte' } });
+          rendre();
+          if (typeof apresAnnulation === 'function') apresAnnulation();
+        },
+      },
+    });
+    return { code: 'ok' };
+  },
+  /**
+   * Plan du batch d'une semaine par son identifiant (écran « Ajouter des recettes », écran du batch) →
+   * { code: 'chargement' } | { code: 'inconnue' } (pas de semaine de cet identifiant) | { code: 'ok', batch }
+   * (batchCourant).
+   */
+  lireBatch(semaineId) {
+    if (!semainesLues() || !etat.plansBatchCharges) return { code: 'chargement' };
+    const semaine = etat.semaines.find((s) => s?.id === semaineId) ?? null;
+    if (!semaine) return { code: 'inconnue' };
+    return { code: 'ok', batch: batchCourant(semaine) };
+  },
+  /**
+   * Plan de batch collé par le gestionnaire (écran « Ajouter des recettes », coeur/plan-batch.js › validerPlanBatch) :
+   * écrit dans `plansBatch/<semaine>` avec son empreinte et les portions du moment (hors ligne : part plus tard), la
+   * demande close, appliqué tout de suite. → { code: 'ok' } | { code } : refuse (pas le gestionnaire), invalide, echec.
+   */
+  enregistrerPlanBatch({ semaineId, plan, empreinte, portions, instructions = null } = {}) {
+    if (!etat.utilisateur || roleDe(etat.utilisateur.email, etat.donnees.reglages) !== 'gestionnaire') return { code: 'refuse' };
+    let envoi;
+    try {
+      envoi = donnees.enregistrerPlanBatch(semaineId, { plan, empreinte, portions, instructions }, etat.utilisateur.email);
+    } catch {
+      return { code: 'invalide' };
+    }
+    ecrire(envoi, 'Le plan du batch n’a pas pu être enregistré. Réessayez.');
+    majPlanBatchLocal(semaineId, { plan, empreinte, portions, instructions, ecritPar: etat.utilisateur.email, demande: { statut: 'traitee' } });
+    rendre();
+    return { code: 'ok', envoi };
   },
   /**
    * « Retirer la demande » (gestionnaire hors aperçu, écran Demandes) : statut `traitee` (hors ligne : part plus tard),
@@ -3065,6 +3212,53 @@ function annulerDemande(id, apresAnnulation) {
   if (typeof apresAnnulation === 'function') apresAnnulation();
 }
 
+/**
+ * « Annuler » de « C’est demandé. » après « 📬 Demander le plan du batch » : clôt la demande qu'elle vient d'ouvrir,
+ * encore ouverte et créée par la personne connectée ; une notification en attente ne partira plus (jeton retiré).
+ */
+function annulerDemandePlanBatch(semaineId, apresAnnulation) {
+  if (!etat.utilisateur || roleCourant() === 'gestionnaire') return;
+  const demande = etat.plansBatch.find((d) => d.id === semaineId)?.demande;
+  if (demande?.statut !== 'ouverte' || normaliserEmail(demande.creePar) !== normaliserEmail(etat.utilisateur.email)) return;
+  const echec = 'La demande n’a pas pu être annulée. Réessayez.';
+  let envoi;
+  try {
+    envoi = donnees.annulerDemandePlanBatch(semaineId);
+  } catch {
+    annoncer(echec);
+    return;
+  }
+  ecrire(envoi, echec);
+  verrousDemandes.delete(`batch:${semaineId}`);
+  jetonsDemandes.delete(`batch:${semaineId}`);
+  majPlanBatchLocal(semaineId, { demande: { statut: 'traitee' } });
+  rendre();
+  if (typeof apresAnnulation === 'function') apresAnnulation();
+}
+
+/**
+ * Notification d'une demande de plan de batch (2026-10-19) : « Plan du batch à préparer », lien vers l'écran Demandes
+ * (ni plat, ni date, ni prénom) ; mêmes règles que prevenirDemande (au geste, puis une seule fois à l'accusé du
+ * serveur), tant que la demande reste ouverte et que le geste n'a pas été annulé.
+ */
+function prevenirPlanBatch(semaineId, envoi, jeton) {
+  const uid = etat.utilisateur?.uid;
+  const cle = `batch:${semaineId}`;
+  if (!uid) return;
+  prevenirAuGeste(() => {
+    if (etat.utilisateur?.uid !== uid || jetonsDemandes.get(cle) !== jeton) return Promise.resolve(null);
+    const sujet = sujetCourant();
+    if (!sujetValide(sujet)) return Promise.resolve(null);
+    // Encore à traiter : ouverte, et pas de plan à jour arrivé entre-temps (sinon l'écran Demandes serait vide).
+    const semaine = etat.semaines.find((s) => s?.id === semaineId) ?? null;
+    if (batchCourant(semaine)?.carte.etat !== 'demande') return Promise.resolve(null);
+    const adresse = adresseNotification(sujet, { lien: lienApp('#/demandes') });
+    const texte = texteNotification({ type: 'batch' });
+    if (!adresse || !texte) return Promise.resolve(null);
+    return envoyerNtfy(adresse, texte);
+  }, envoi);
+}
+
 /** Adresse de l'app, calculée sur le téléphone (rien dans le dépôt), suivie de `ancre` ('#/plat/<id>', '#/reglages'). */
 function lienApp(ancre) {
   return new URL('./', location.href).href + ancre;
@@ -3101,6 +3295,14 @@ function prevenirDemande(id, type, plat, envoi, jeton) {
     if (!adresse || !texte) return Promise.resolve(null);
     return envoyerNtfy(adresse, texte);
   };
+  prevenirAuGeste(tenter, envoi);
+}
+
+/**
+ * Envoi d'une notification : `tenter()` au geste s'il y a du réseau ; sinon, ou si ce premier envoi n'a pas trouvé de
+ * réseau, une seule fois de plus à l'accusé du serveur (`envoi`), copie du téléphone confirmée.
+ */
+function prevenirAuGeste(tenter, envoi) {
   const aLAccuse = () => {
     envoi.then(() => apresConfirmation(tenter), () => {});
   };
@@ -3301,7 +3503,7 @@ function ouvrirPanneauProfil() {
     instructionsAJour: ctx.instructionsAJour,
     onInstructions: () => { location.hash = '#/reglages'; },
     // Demandes à traiter (T2e) : l'entrée « 📬 Demandes · N » n'apparaît que s'il y en a (gestionnaire, hors aperçu).
-    demandes: ctx.aTraiter.length,
+    demandes: ctx.aTraiter.length + (ctx.demandeBatch ? 1 : 0),
     onDemandes: () => {
       if (panneauProfil.open) panneauProfil.close();
       location.hash = '#/demandes';
@@ -3368,6 +3570,9 @@ function oublierDonnees() {
     produits: [],
     produitsCharges: false,
     produitsDepuisCache: false,
+    plansBatch: [],
+    plansBatchCharges: false,
+    plansBatchDepuisCache: false,
     apercu: false,
     accueilDecide: false,
     accueilParRevoir: false,
@@ -3445,6 +3650,7 @@ function suivreDonnees() {
         if (maj.semaines) etat.semainesChargees = true;
         if (maj.articles) etat.articlesCharges = true;
         if (maj.produits) etat.produitsCharges = true;
+        if (maj.plansBatch) etat.plansBatchCharges = true;
         verifierConfirmation();
         rendre();
       }, (code) => {

@@ -20,6 +20,10 @@ import {
 import {
   TEXTES_ETAPES, enteteApercuEtapes, lignesApercuEtapes, platsADetailler,
 } from '../coeur/realisation.js';
+import {
+  TEXTES_PLAN_BATCH, empreintePlanBatch, estReponseBatch, planDeLaReponse, portionsDuBatch, texteCorrectionBatch,
+  texteEnviron, texteSemaineDuPlan, validerPlanBatch,
+} from '../coeur/plan-batch.js';
 
 // Écran ouvert en série d'étapes (T5-0b) : par « Coller la réponse de Claude » de la carte « 👩‍🍳 Étapes détaillées »
 // (Réglages) ou de la carte des étapes d'une fiche (`platId` : le retour y ramène). Lu une fois, à l'ouverture de
@@ -336,6 +340,8 @@ export function creer(ctx) {
   const ficheDOrigine = () => (retourFiche ? tousLesPlats().find((plat) => plat.id === retourFiche) ?? null : null);
   // Ouvert depuis l'écran Demandes (« Coller la réponse de Claude », T2e) : le retour, et l'enregistrement, y ramènent.
   const depuisDemandes = () => !cible && courant.routePrecedente === 'demandes';
+  // Ouvert depuis Semaine (« Coller la réponse » du plan du batch, « Idées de plats ») : le retour y ramène.
+  const depuisSemaine = () => !cible && !retourFiche && courant.routePrecedente === 'semaine';
 
   function revenir(evenement) {
     // Venu de cet écran-là : retour dans l'historique, pour que le geste retour d'Android reste naturel.
@@ -343,6 +349,7 @@ export function creer(ctx) {
     if (cible || retourFiche) attendu = 'plat';
     else if (depuisReglages()) attendu = 'reglages';
     else if (depuisDemandes()) attendu = 'demandes';
+    else if (depuisSemaine()) attendu = 'semaine';
     if (courant.routePrecedente === attendu && history.length > 1) {
       evenement.preventDefault();
       history.back();
@@ -366,6 +373,9 @@ export function creer(ctx) {
     } else if (depuisDemandes()) {
       retour.href = '#/demandes';
       retour.querySelector('.retour-texte').textContent = 'Demandes';
+    } else if (depuisSemaine()) {
+      retour.href = '#/semaine';
+      retour.querySelector('.retour-texte').textContent = 'Semaine';
     } else {
       retour.href = '#/plats';
       retour.querySelector('.retour-texte').textContent = 'Plats';
@@ -556,7 +566,7 @@ export function creer(ctx) {
       collageManuel.open = false;
     }
     // Une recette lue : l'explication du presse-papiers bloqué n'a plus lieu d'être.
-    if (['pret', 'erreurs', 'chargement', 'sauvegarde'].includes(etat.type) || source === 'fichier') aideBlocage.hidden = true;
+    if (['pret', 'erreurs', 'chargement', 'sauvegarde', 'batch', 'erreursBatch', 'refusBatch'].includes(etat.type) || source === 'fichier') aideBlocage.hidden = true;
 
     // Le bouton qui avait le focus (copie, enregistrement) le retrouve après la reconstruction ; sinon le titre.
     const actif = resultat.contains(document.activeElement) ? document.activeElement.dataset.action ?? 'titre' : null;
@@ -629,6 +639,43 @@ export function creer(ctx) {
     return { type: 'pret', validation, preparation: prepares, instructions: null, relecture: false, lotDEtapes: true };
   }
 
+  /**
+   * Plan de batch collé (2026-10-19) : jugé face à la semaine montrée (coeur/plan-batch.js › validerPlanBatch : plats,
+   * recettes et parts au moment du collage ; sans semaine montrée, refusé). → chargement | refusBatch (autre semaine,
+   * plats changés depuis la demande) | erreursBatch (à faire corriger par Claude) | batch (aperçu).
+   */
+  function calculerBatch(extrait) {
+    const { batch: brut, instructions: version } = planDeLaReponse(extrait.paquets);
+    // Jugé face à la semaine montrée seulement : c'est elle dont Semaine montre le plan (une réponse pour une autre
+    // semaine, même connue, est refusée).
+    if (!courant.semainesChargees || (courant.semaine && !courant.batch)) return { type: 'chargement' };
+    const reference = courant.batch;
+    const validation = validerPlanBatch(brut, {
+      elements: reference?.elements ?? [],
+      semaineId: reference?.semaineId ?? null,
+      empreinte: reference ? empreintePlanBatch(reference.elements) : null,
+      appareils: courant.reglages?.appareils ?? null,
+    });
+    if (validation.refus) return { type: 'refusBatch', refus: validation.refus };
+    if (!validation.plan) return { type: 'erreursBatch', erreurs: validation.erreurs, semaineId: reference?.semaineId ?? null };
+    const semaine = (courant.semaines ?? []).find((s) => s?.id === reference.semaineId) ?? null;
+    return {
+      type: 'batch',
+      semaineId: reference.semaineId,
+      plan: validation.plan,
+      empreinte: validation.plan.empreinte,
+      portions: portionsDuBatch(reference.elements),
+      version: Number.isInteger(version) ? version : null,
+      noms: Object.fromEntries(reference.elements.map((e) => [e.platId, e.plat?.nom ?? e.platId])),
+      dates: texteSemaineDuPlan(semaine),
+      remplace: Boolean(reference.doc?.plan),
+      avertissements: [
+        controlerInstructions(extrait.paquets)?.message ?? null,
+        ...validation.avertissements.map((a) => a.message),
+      ].filter(Boolean),
+    };
+  }
+
   function calculer() {
     if (envoi) return envoi.etat;
     if (serie.actif) return etatCarteSerie();
@@ -639,6 +686,8 @@ export function creer(ctx) {
     // Une sauvegarde passe par Réglages › Restaurer : ici, elle effacerait les marques « modifiée à la main » et
     // pourrait recréer en double un plat renommé depuis.
     if (estSauvegarde(extrait.paquets)) return { type: 'sauvegarde' };
+    // Plan de batch (réponse à DEMANDE-BATCH, 2026-10-19) : son propre aperçu, jamais des recettes.
+    if (estReponseBatch(extrait.paquets)) return calculerBatch(extrait);
     const validation = validerPaquet(extrait.paquets, {
       profils: courant.profilsCharges ? courant.profils : null,
       relectureEnCours: courant.actions?.lireRelectureEnCours?.() ?? [],
@@ -776,6 +825,36 @@ export function creer(ctx) {
         )];
       case 'serie':
         return [renduSerie(etat)];
+      case 'refusBatch':
+        return [el('section', { class: 'carte resultat-erreur' },
+          titreResultat(etat.refus === 'perime' ? TEXTES_PLAN_BATCH.titrePerime : TEXTES_PLAN_BATCH.titreAutreSemaine),
+          el('p', { role: 'alert' }, etat.refus === 'perime' ? TEXTES_PLAN_BATCH.perimeImport : TEXTES_PLAN_BATCH.autreSemaine),
+          el('a', { class: 'bouton bouton-principal bouton-plein', href: '#/semaine', 'data-action': 'semaine' },
+            TEXTES_PLAN_BATCH.ouvrirSemaine),
+        )];
+      case 'erreursBatch':
+        return [el('section', { class: 'carte resultat-erreur' },
+          titreResultat(etat.erreurs.length > 1 ? `${etat.erreurs.length} points à corriger` : '1 point à corriger'),
+          el('ul', { class: 'liste-erreurs', role: 'alert' }, etat.erreurs.map((e) => el('li', {}, `⚠️ ${e.message}`))),
+          el('button', {
+            class: 'bouton bouton-principal bouton-plein',
+            type: 'button',
+            'data-action': 'copier-corrections',
+            onclick: async () => {
+              const reussi = await copier(texteCorrectionBatch({ erreurs: etat.erreurs, semaineId: etat.semaineId }));
+              if (reussi) {
+                copieFaite = true;
+                dessiner();
+                annoncer(MESSAGE_COPIE);
+              } else {
+                annoncer('La copie n’a pas marché. Réessayez.');
+              }
+            },
+          }, '📋 Copier les corrections pour Claude'),
+          copieFaite ? messageCopie() : null,
+        )];
+      case 'batch':
+        return [renduBatch(etat)];
       default:
         if (etat.lotDEtapes) return [renduEtapes(etat)];
         return [etat.relecture ? renduRelecture(etat) : renduPret(etat)];
@@ -1202,6 +1281,70 @@ export function creer(ctx) {
     });
   }
 
+  /**
+   * Aperçu d'un plan de batch (2026-10-19) : la semaine, le nombre d'étapes et la durée, les plats, leurs plats de
+   * cuisson, les titres des étapes (repliés), les avertissements ; « Enregistrer le plan du batch ».
+   */
+  function renduBatch(etat) {
+    const { plan } = etat;
+    // Comme l'écran du batch : une étape qui allume le four n'est pas une étape à suivre.
+    const aSuivre = plan.etapes.filter((etape) => !etape.prechauffer);
+    const plats = [...new Set(plan.etapes.flatMap((etape) => etape.plats))].map((id) => etat.noms[id] ?? id);
+    return el('section', { class: 'carte resultat-pret' },
+      titreResultat([el('span', { 'aria-hidden': 'true' }, '👩‍🍳\u00A0'), TEXTES_PLAN_BATCH.apercuTitre.replace(/^\S+\s*/u, '')]),
+      etat.avertissements.length
+        ? el('ul', { class: 'liste-avertissements' }, etat.avertissements.map((m) => el('li', {}, `⚠️ ${m}`)))
+        : null,
+      etat.dates ? el('p', {}, etat.dates) : null,
+      el('p', {}, TEXTES_PLAN_BATCH.apercuEtapes(aSuivre.length, texteEnviron(plan.dureeTotale, plan.travail))),
+      el('p', { class: 'texte-doux' }, TEXTES_PLAN_BATCH.apercuPlats(listeNoms(plats))),
+      plan.recipients.length
+        ? el('div', {},
+          el('h3', { class: 'apercu-nom' }, TEXTES_PLAN_BATCH.recipients),
+          el('ul', { class: 'liste-serie' }, plan.recipients.map((r) => el('li', {},
+            TEXTES_PLAN_BATCH.recipient(etat.noms[r.plat] ?? r.plat, r.ustensile, r.taille)))))
+        : null,
+      el('details', { class: 'depliable apercu-titres' },
+        el('summary', {}, TEXTES_PLAN_BATCH.voirLesEtapes),
+        el('ol', { class: 'liste-titres-etapes' }, aSuivre.map((etape) => el('li', {}, etape.titre)))),
+      etat.remplace ? el('p', { class: 'texte-doux' }, TEXTES_PLAN_BATCH.remplace) : null,
+      messageEnvoi ? el('p', { class: 'message-erreur', role: 'alert' }, messageEnvoi) : null,
+      el('button', {
+        class: 'bouton bouton-principal bouton-plein',
+        type: 'button',
+        'data-action': 'enregistrer',
+        onclick: enregistrer,
+      }, TEXTES_PLAN_BATCH.enregistrer),
+      navigator.onLine ? null : el('p', { class: 'aide' }, TEXTES_PLAN_BATCH.horsLigne),
+    );
+  }
+
+  /**
+   * Plan de batch : écrit tout de suite (hors ligne : part plus tard), puis retour à l'écran Demandes s'il en vient,
+   * sinon à Semaine (un pas en arrière si l'on en vient).
+   */
+  function enregistrerBatch() {
+    const etat = dernierEtat;
+    if (enregistre || etat?.type !== 'batch') return;
+    const resultat = courant.actions.enregistrerPlanBatch({
+      semaineId: etat.semaineId, plan: etat.plan, empreinte: etat.empreinte, portions: etat.portions,
+      instructions: etat.version,
+    });
+    if (resultat?.code !== 'ok') {
+      messageEnvoi = TEXTES_PLAN_BATCH.echec;
+      dessiner();
+      annoncer(TEXTES_PLAN_BATCH.echec);
+      return;
+    }
+    enregistre = true;
+    annoncer(TEXTES_PLAN_BATCH.enregistre);
+    if (depuisDemandes()) {
+      if (courant.routePrecedente === 'demandes' && history.length > 1) history.back();
+      else location.replace('#/demandes');
+    } else if (courant.routePrecedente === 'semaine' && history.length > 1) history.back();
+    else location.replace('#/semaine');
+  }
+
   /** Coché ou non : choix de la personne, sinon ajout coché et retrait décoché. Une case par plat et par repère. */
   const estCochee = (cle, parDefaut) => (Object.hasOwn(cases, cle) ? cases[cle] : parDefaut);
 
@@ -1372,6 +1515,10 @@ export function creer(ctx) {
   }
 
   function enregistrer() {
+    if (dernierEtat?.type === 'batch') {
+      enregistrerBatch();
+      return;
+    }
     if (preparation?.lotDEtapes) {
       enregistrerEtapes();
       return;

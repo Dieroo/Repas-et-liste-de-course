@@ -17,6 +17,10 @@ import { nombrePhotos } from '../coeur/photos-demande.js';
 import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { sujetValide } from '../coeur/ntfy.js';
 import { visuelDuPlat } from '../coeur/plats.js';
+import {
+  TEXTES_PLAN_BATCH, empreintePlanBatch, phraseDemandeBatch, texteDemandeBatch, texteSemaineDuPlan,
+} from '../coeur/plan-batch.js';
+import { partageDUnTextePossible, partagerTexte } from './fichier.js';
 
 const MESSAGE_COPIE = 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse de Claude\u00A0».';
 const MESSAGE_ECHEC_COPIE = 'La copie n’a pas marché. Réessayez.';
@@ -61,8 +65,18 @@ function modele(ctx, plats) {
   };
   const groupes = versions.map(({ profil, elements }) => ({ profilId: profil.id, nom: nomDe(profil), lignes: elements.map(ligne) }));
   const lignesRecettes = recettes.map(ligne);
+  // Plan du batch demandé (2026-10-19) : celui de la semaine montrée (`ctx.demandeBatch`), en tête.
+  const demande = ctx.demandeBatch?.carte?.demande ?? null;
+  const batch = demande ? {
+    semaineId: ctx.demandeBatch.semaineId,
+    dates: texteSemaineDuPlan(ctx.semaine),
+    texte: phraseDemandeBatch(demande, {
+      profils: ctx.profils ?? [], moi: options.moi, avecAuteur: true, enLigne: navigator.onLine,
+    }).replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, ''),
+  } : null;
   return {
-    total: lignesRecettes.length + groupes.reduce((somme, groupe) => somme + groupe.lignes.length, 0),
+    total: (batch ? 1 : 0) + lignesRecettes.length + groupes.reduce((somme, groupe) => somme + groupe.lignes.length, 0),
+    batch,
     recettes: lignesRecettes,
     versions: groupes,
   };
@@ -78,6 +92,10 @@ export function creer(ctx) {
   // Nœuds de chaque groupe de versions affiché : { message, boutonCopier, lienColler } par profil.
   const groupesAffiches = new Map();
   let plats = new Map(); // identifiant de la demande → fiche du plat (vignette), relue à chaque mise à jour
+  // Plan du batch : { copie, message, empreinte } de la dernière copie de sa demande (cette visite ; `empreinte` : les
+  // plats copiés, une copie de plats changés depuis ne vaut plus), et ses nœuds affichés.
+  let copieBatch = { copie: false, message: '', empreinte: null };
+  let noeudsBatch = null;
 
   const titre = el('h1', { tabindex: '-1' }, 'Demandes');
   const sousTitre = el('p', { class: 'sous-titre', hidden: true });
@@ -142,6 +160,88 @@ export function creer(ctx) {
     noeuds.message.hidden = !message;
   }
 
+  const demandeDuBatch = (batch) => texteDemandeBatch(batch.elements, {
+    semaine: courant.semaine ?? null, appareils: courant.reglages?.appareils ?? null,
+  });
+
+  /** « 📋 Copier la demande » du plan du batch : DEMANDE-BATCH de la semaine montrée, calculée dans le toucher. */
+  async function copierBatch() {
+    const batch = courant.demandeBatch;
+    if (!batch) return;
+    const reussi = await copier(demandeDuBatch(batch));
+    copieBatch = reussi
+      ? { copie: true, message: MESSAGE_COPIE, empreinte: empreintePlanBatch(batch.elements) }
+      : { ...copieBatch, message: MESSAGE_ECHEC_COPIE };
+    majBatch();
+  }
+
+  /** « 📤 Envoyer à Claude » : la demande copiée, puis partagée en fichier joint (menu « Partager » d'Android). */
+  async function envoyerBatch() {
+    const batch = courant.demandeBatch;
+    if (!batch) return;
+    const texte = demandeDuBatch(batch);
+    const copiee = await copier(texte);
+    const { issue } = await partagerTexte({ nom: TEXTES_PLAN_BATCH.nomFichier(batch.semaineId), contenu: texte });
+    let message = TEXTES_PLAN_BATCH.envoiAnnule;
+    if (issue === 'partage') message = TEXTES_PLAN_BATCH.envoyee;
+    else if (issue !== 'annule') message = copiee ? TEXTES_PLAN_BATCH.copiee : TEXTES_PLAN_BATCH.envoiRate;
+    copieBatch = issue === 'partage' || copiee
+      ? { copie: true, message, empreinte: empreintePlanBatch(batch.elements) }
+      : { ...copieBatch, message };
+    majBatch();
+  }
+
+  /** « Retirer la demande » du plan : elle passe traitée (« Annuler » la rouvre, le focus revient au bouton). */
+  function retirerBatch() {
+    courant.actions?.retirerDemandePlanBatch?.({
+      apresAnnulation: () => contenu.querySelector('[data-cle="retirer:batch"]')?.focus(),
+    });
+  }
+
+  /** Avant la copie, l'action principale est « Copier la demande » ; ensuite, « Coller la réponse de Claude ». */
+  function majBatch() {
+    if (!noeudsBatch) return;
+    // Plats changés depuis la copie (l'autre téléphone) : la réponse de Claude serait refusée ; on le dit.
+    if (copieBatch.copie && courant.demandeBatch && copieBatch.empreinte !== empreintePlanBatch(courant.demandeBatch.elements)) {
+      copieBatch = { copie: false, message: TEXTES_PLAN_BATCH.recopier, empreinte: null };
+    }
+    const { copie, message } = copieBatch;
+    const partage = !noeudsBatch.boutonEnvoyer.hidden;
+    noeudsBatch.boutonEnvoyer.className = `bouton bouton-plein ${copie ? 'bouton-secondaire' : 'bouton-principal'}`;
+    noeudsBatch.boutonCopier.className = `bouton bouton-plein ${copie || partage ? 'bouton-secondaire' : 'bouton-principal'}`;
+    noeudsBatch.lienColler.className = `bouton bouton-plein ${copie ? 'bouton-principal' : 'bouton-secondaire'}`;
+    if (noeudsBatch.message.textContent !== message) noeudsBatch.message.textContent = message;
+    noeudsBatch.message.hidden = !message;
+  }
+
+  /** « Plan du batch » : la semaine, qui l'a demandé et quand, puis la copie pour Claude et « Coller la réponse ». */
+  function sectionBatch(batch) {
+    const message = el('p', { class: 'aide', role: 'status' });
+    const boutonCopier = el('button', {
+      class: 'bouton bouton-plein bouton-principal', type: 'button', 'data-cle': 'copier:batch', onclick: copierBatch,
+    }, el('span', { 'aria-hidden': 'true' }, '📋\u00A0'), TEXTES_PLAN_BATCH.copier.replace(/^\S+\s*/u, ''));
+    const lienColler = el('a', { class: 'bouton bouton-plein bouton-secondaire', href: '#/import', 'data-cle': 'coller:batch' },
+      'Coller la réponse de Claude');
+    const partage = partageDUnTextePossible();
+    const boutonEnvoyer = el('button', {
+      class: 'bouton bouton-plein bouton-principal', type: 'button', 'data-cle': 'envoyer:batch', hidden: !partage, onclick: envoyerBatch,
+    }, el('span', { 'aria-hidden': 'true' }, '📤\u00A0'), TEXTES_PLAN_BATCH.envoyer.replace(/^\S+\s*/u, ''));
+    noeudsBatch = { message, boutonEnvoyer, boutonCopier, lienColler };
+    majBatch();
+    return el('section', { class: 'section groupe-demandes', 'aria-labelledby': 'titre-batch-demande' },
+      el('h2', { id: 'titre-batch-demande' }, TEXTES_PLAN_BATCH.sectionDemandes),
+      batch.dates ? el('p', {}, batch.dates) : null,
+      el('p', { class: 'texte-doux' }, batch.texte),
+      partage ? el('p', { class: 'aide' }, TEXTES_PLAN_BATCH.guidageEnvoi) : null,
+      message,
+      el('div', { class: 'actions-recette' }, boutonEnvoyer, boutonCopier, lienColler),
+      el('button', {
+        class: 'bouton bouton-texte bouton-retirer-demande', type: 'button', 'data-cle': 'retirer:batch',
+        'aria-label': `${TEXTES_PLAN_BATCH.retirer}\u00A0: ${TEXTES_PLAN_BATCH.sectionDemandes.toLocaleLowerCase('fr-FR')}`,
+        onclick: retirerBatch,
+      }, TEXTES_PLAN_BATCH.retirer));
+  }
+
   /** Une demande : le plat (lien vers sa fiche), qui l'a demandée et quand, puis « Retirer la demande ». */
   function ligneDemande(ligne) {
     const plat = plats.get(ligne.id) ?? { id: ligne.platId, nom: ligne.nom };
@@ -184,6 +284,7 @@ export function creer(ctx) {
 
   function dessiner(m) {
     groupesAffiches.clear();
+    noeudsBatch = null;
     if (m.chargement) {
       ordre = [];
       contenu.replaceChildren(el('p', { class: 'texte-doux', role: 'status' }, 'Chargement…'));
@@ -205,7 +306,9 @@ export function creer(ctx) {
       contenu.replaceChildren(vide);
       return;
     }
+    if (!m.batch) copieBatch = { copie: false, message: '', empreinte: null };
     contenu.replaceChildren(...[
+      m.batch ? sectionBatch(m.batch) : null,
       m.recettes.length
         ? el('section', { class: 'section groupe-demandes', 'aria-labelledby': 'titre-recettes-demandees' },
           el('h2', { id: 'titre-recettes-demandees' }, 'Recettes à ajouter'),
@@ -251,6 +354,8 @@ export function creer(ctx) {
     // Sans sujet ntfy valide : « 🔔 Être prévenu sur votre téléphone › », vers la carte « 🔔 Notifications » de Réglages.
     lienNotifications.hidden = sujetValide(nouveau.reglages?.notifications?.ntfySujet);
 
+    // Copie de la demande du plan devenue périmée (plats changés ailleurs) : dite même sans nouveau dessin.
+    majBatch();
     const nouvelle = JSON.stringify(m);
     if (nouvelle === signature) return;
     signature = nouvelle;

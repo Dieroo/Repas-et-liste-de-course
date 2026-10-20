@@ -88,7 +88,7 @@ export function devenirGestionnaire(email) {
  */
 export function suivreCollections(rappel, surErreur) {
   arreterCollections();
-  for (const nom of ['profils', 'plats', 'demandes', 'semaines', 'articles', 'produits']) {
+  for (const nom of ['profils', 'plats', 'demandes', 'semaines', 'articles', 'produits', 'plansBatch']) {
     // Toutes sauf les demandes : on sait aussi si la copie vient du serveur ou seulement du téléphone (sauvegarde ;
     // « La liste n'est pas encore sur ce téléphone »).
     const suivreCache = nom !== 'demandes';
@@ -247,6 +247,64 @@ export function remettreDemande(id) {
   const reference = referenceDemande(id);
   const lot = writeBatch(db);
   lot.update(reference, { statut: 'ouverte', traiteeLe: deleteField() });
+  return lot.commit();
+}
+
+// ——— Plan du batch (2026-10-19) ———
+
+/** `plansBatch/<semaine>` : identifiant de semaine sûr, sinon une erreur avant tout envoi. */
+function referencePlanBatch(semaineId) {
+  if (typeof semaineId !== 'string' || !/^[a-z0-9-]+$/.test(semaineId)) throw new Error('Semaine refusée.');
+  return doc(db, 'plansBatch', semaineId);
+}
+
+/**
+ * « 📬 Demander le plan du batch » (vue « Repas et courses ») : `set` des seuls champs de la `demande` (`mergeFields` :
+ * ouverte, auteur, `creeLe` du serveur, `traiteeLe` effacé : redemandée, elle se rouvre) ; le plan déjà là reste. Pas de transaction :
+ * la demande peut naître hors ligne et partir au retour du réseau. → promesse de l'envoi.
+ */
+export function demanderPlanBatch(semaineId, { creePar } = {}) {
+  const lot = writeBatch(db);
+  lot.set(referencePlanBatch(semaineId), {
+    demande: { statut: 'ouverte', creePar: String(creePar ?? ''), creeLe: serverTimestamp(), traiteeLe: deleteField() },
+  }, { mergeFields: ['demande.statut', 'demande.creePar', 'demande.creeLe', 'demande.traiteeLe'] });
+  return lot.commit();
+}
+
+/** « Annuler » juste après « 📬 Demander le plan du batch » : `update` du seul statut de la demande. → promesse de l'envoi. */
+export function annulerDemandePlanBatch(semaineId) {
+  const lot = writeBatch(db);
+  lot.update(referencePlanBatch(semaineId), { 'demande.statut': 'traitee', 'demande.traiteeLe': serverTimestamp() });
+  return lot.commit();
+}
+
+/**
+ * « Annuler » de « Retirer la demande » du plan (gestionnaire, écran Demandes) : `update` du statut, rouverte ; auteur et
+ * date gardés. → promesse de l'envoi.
+ */
+export function remettreDemandePlanBatch(semaineId) {
+  const lot = writeBatch(db);
+  lot.update(referencePlanBatch(semaineId), { 'demande.statut': 'ouverte', 'demande.traiteeLe': deleteField() });
+  return lot.commit();
+}
+
+/**
+ * Plan de batch collé par le gestionnaire (coeur/plan-batch.js › validerPlanBatch) : `set` des seuls champs du plan,
+ * de son empreinte, des portions de la semaine au moment de l'enregistrement, de la version des instructions, de
+ * l'auteur et de l'heure du serveur (`mergeFields` : chacun remplacé en entier, jamais fusionné avec celui d'un plan
+ * d'avant) ; la demande passe traitée (son auteur et sa date restent). Hors ligne : part plus
+ * tard (la dernière écriture gagne). Lève une erreur avant tout envoi si une valeur est indéfinie. → promesse de l'envoi.
+ */
+export function enregistrerPlanBatch(semaineId, { plan, empreinte, portions, instructions = null } = {}, auteur) {
+  const champs = { plan, empreinte, portions, instructions };
+  if (!plan || typeof plan !== 'object' || contientIndefini(champs)) throw new Error('Plan refusé : une table sans valeur indéfinie est attendue.');
+  const lot = writeBatch(db);
+  lot.set(referencePlanBatch(semaineId), {
+    ...champs, ecritLe: serverTimestamp(), ecritPar: String(auteur ?? ''),
+    demande: { statut: 'traitee', traiteeLe: serverTimestamp() },
+  }, {
+    mergeFields: ['plan', 'empreinte', 'portions', 'instructions', 'ecritLe', 'ecritPar', 'demande.statut', 'demande.traiteeLe'],
+  });
   return lot.commit();
 }
 
