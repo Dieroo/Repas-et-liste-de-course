@@ -14,7 +14,7 @@ import { vignetteDuPlat } from './plats.js';
 import { nomDe } from './compat.js';
 import { grouperDemandes, texteDemandee } from '../coeur/demandes.js';
 import { nombrePhotos } from '../coeur/photos-demande.js';
-import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
+import { LOT_VERSIONS, faconLue, texteDemandeVariantes } from '../coeur/claude.js';
 import { sujetValide } from '../coeur/ntfy.js';
 import { visuelDuPlat } from '../coeur/plats.js';
 import {
@@ -57,10 +57,13 @@ function modele(ctx, plats) {
       nom: String(plat.nom ?? ''),
       visuel: visuelDuPlat(plat),
       vignette: plat.vignette ?? '',
-      // Recette en photos (2026-10-16) : le nombre de photos jointes, à envoyer depuis la fiche.
-      texte: nombrePhotos(demande)
-        ? `${texteDemandee(demande, options)} Avec ${nombrePhotos(demande) === 1 ? 'une photo' : `${nombrePhotos(demande)}\u00A0photos`}.`
-        : texteDemandee(demande, options),
+      // Recette en photos (2026-10-16) : le nombre de photos jointes, à envoyer depuis la fiche ; façon du foyer
+      // (2026-10-20, « Comment vous la faites ? »), qui part aussi dans la demande à Claude (`notre façon:`).
+      texte: [
+        texteDemandee(demande, options),
+        nombrePhotos(demande) ? `Avec ${nombrePhotos(demande) === 1 ? 'une photo' : `${nombrePhotos(demande)}\u00A0photos`}.` : '',
+        faconLue(demande.facon) ? `Notre façon\u00A0: ${faconLue(demande.facon)}.` : '',
+      ].filter(Boolean).join(' '),
     };
   };
   const groupes = versions.map(({ profil, elements }) => ({ profilId: profil.id, nom: nomDe(profil), lignes: elements.map(ligne) }));
@@ -161,7 +164,7 @@ export function creer(ctx) {
   }
 
   const demandeDuBatch = (batch) => texteDemandeBatch(batch.elements, {
-    semaine: courant.semaine ?? null, appareils: courant.reglages?.appareils ?? null,
+    semaine: courant.semaine ?? null, reglages: courant.reglages ?? null,
   });
 
   /** « 📋 Copier la demande » du plan du batch : DEMANDE-BATCH de la semaine montrée, calculée dans le toucher. */

@@ -273,3 +273,19 @@ test('`reperesARevoir` n’est demandé que dans une réponse à DEMANDE-ETAPES 
   // L'app ne le connaît que dans un lot d'étapes : une fiche complète le traite comme un champ inconnu.
   assert.ok(!CHAMPS_PLAT.includes('reperesARevoir'));
 });
+
+// ——— « Ma cuisine » (version 12) ———
+
+test('version 12 : la section 1 donne les lignes de la cuisine et les noms des objets peu courants, ceux de l’app', async () => {
+  const { nomsPourClaude, lignesCuisine } = await import('../js/coeur/ma-cuisine.js');
+  for (const ligne of ['`appareils:`', '`dans la cuisine:`', '`pas de:`', '`plats et moules:`', '`notre façon:`']) {
+    assert.ok(doc.includes(ligne), ligne);
+  }
+  assert.ok(doc.includes(`exactement** comme dans cette liste, dans les \`ustensiles\` de l'étape où il sert, pour que l'app le reconnaisse et demande à la famille si elle l'a : ${nomsPourClaude().join(', ')}.`),
+    'liste des objets peu courants de la section 1 = OBJETS de ma-cuisine.js');
+  // Les préfixes des lignes de la demande sont ceux que la section 1 décrit.
+  const lignes = lignesCuisine({ cuisine: { siphon: true, mandoline: false }, platsEtMoules: { a: 'A' } });
+  assert.deepEqual(lignes.map((l) => l.split(': ')[0]), ['dans la cuisine', 'pas de', 'plats et moules']);
+  const recette = texteDemandeRecette({ id: 'tarte', nom: 'Tarte' }, { demande: { facon: 'au four' } });
+  assert.ok(recette.includes('\nnotre façon: au four\n'));
+});

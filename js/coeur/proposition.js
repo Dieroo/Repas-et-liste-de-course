@@ -5,7 +5,9 @@
 // données proposent la même chose).
 // - Filtre dur : jamais un plat sans recette, de la corbeille, un apéro, une préparation de chaque semaine, un autre
 //   type que celui demandé, un plat déjà dans la cible, un plat refusé pendant la visite (ancien plat d'un 🔄), un plat
-//   noté « Jamais » par un adulte, ni un plat dont personne ne mange.
+//   noté « Jamais » par un adulte, ni un plat dont personne ne mange ; option `ecarter` (2026-10-20, « Ma cuisine ») :
+//   jamais un plat qui demande un objet que la cuisine n'a pas (ma-cuisine.js › manqueUnObjet, prédicat donné par
+//   l'app : ce module n'en sait rien d'autre).
 // - Paliers : 1 personne n'est écarté et pas mangé récemment (JOURS_RECENTS avant ou après la cible) ; 2 récent ;
 //   3 quelqu'un est écarté (pas de version qui convient, 🧸 « Pas avant… », « Jamais » de l'enfant), ECARTES_MAX par
 //   semaine, plats de la cible compris.
@@ -486,9 +488,10 @@ function analyserPlat(plat, { profils, evaluer, passages, cible }) {
 /**
  * Tout ce que la proposition sait de la cible → { cible, profils, actifs (Set des plats actifs de la cible),
  * elementsCible (platsDeLaSemaine), passages, candidats (type), rejets, ecartesCible }. `exclure` : plat de la cible
- * qui ne compte pas (l'ancien plat d'un 🔄).
+ * qui ne compte pas (l'ancien plat d'un 🔄) ; `ecarter(plat)` : vrai pour un plat qui demande un objet que la cuisine
+ * n'a pas (rejet 'cuisine').
  */
-function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses, exclure = null }) {
+function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses, exclure = null, ecarter = null }) {
   const lue = lireCible(cible, semaines);
   if (!lue) return null;
   const lusProfils = profilsLus(profils);
@@ -510,6 +513,10 @@ function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refus
     if (vus.has(plat.id)) continue;
     vus.add(plat.id);
     if (!peutAllerDansLaSemaine(plat) || typeDe(plat) !== type || actifs.has(plat.id) || refusesSet.has(plat.id)) continue;
+    if (typeof ecarter === 'function' && aSaRecette(plat) && ecarter(plat)) {
+      rejets.push({ rejet: 'cuisine', platId: plat.id });
+      continue;
+    }
     const analyse = analyserPlat(plat, { profils: lusProfils, evaluer: evaluation, passages, cible: lue });
     if (analyse.rejet) rejets.push(analyse);
     else candidats.push(analyse);
@@ -522,10 +529,11 @@ function contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refus
  * groupe: 'aime'|'decouvrir'|'autre', jamaisAuMenu, moyenne, mangeurs: [profilId], ecartes: [{ profilId, raison:
  * 'version'|'age'|'jamaisEnfant' }], ecart: n|null, recent, aimePar: [profilId], proteine, forme, legumes, mer (lireMer),
  * base }], triés par
- * identifiant. `type` : 'plat' | 'dessert' ; `refuses` : ids écartés pendant la visite (ancien plat d'un 🔄).
+ * identifiant. `type` : 'plat' | 'dessert' ; `refuses` : ids écartés pendant la visite (ancien plat d'un 🔄) ;
+ * `ecarter` : prédicat des plats qui demandent un objet absent (filtre dur, « Ma cuisine »).
  */
-export function candidats(tousLesPlats, { cible, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [] } = {}) {
-  return contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses })?.candidats ?? [];
+export function candidats(tousLesPlats, { cible, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [], ecarter = null } = {}) {
+  return contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses, ecarter })?.candidats ?? [];
 }
 
 // ——— Score et remplissage ———
@@ -603,12 +611,12 @@ const choisi = (c) => ({
 
 /**
  * Cause d'une proposition pauvre → { cause, profilCause } : parmi les plats du type qui ne sont pas au palier 1 (sans
- * recette, « Jamais », quelqu'un écarté, récents), la raison la plus fréquente ; à égalité : versions, age, recettes,
- * jamais, recents. `versions` et `age` nomment le profil le plus souvent écarté (ordre des profils à égalité).
+ * recette, objet absent de la cuisine, « Jamais », quelqu'un écarté, récents), la raison la plus fréquente ; à
+ * égalité : versions, age, recettes, cuisine, jamais, recents. `versions` et `age` nomment le profil le plus souvent écarté (ordre des profils à égalité).
  * 'catalogue' si rien de tout cela.
  */
 function causeDe(ctx) {
-  const comptes = { versions: 0, age: 0, recettes: 0, jamais: 0, recents: 0 };
+  const comptes = { versions: 0, age: 0, recettes: 0, cuisine: 0, jamais: 0, recents: 0 };
   const parProfil = { versions: new Map(), age: new Map() };
   const compterEcarte = (ecarte) => {
     if (!ecarte) return;
@@ -624,7 +632,7 @@ function causeDe(ctx) {
     if (c.palier === 3) compterEcarte(c.ecartes[0]);
     else if (c.palier === 2) comptes.recents += 1;
   }
-  const ordre = ['versions', 'age', 'recettes', 'jamais', 'recents'];
+  const ordre = ['versions', 'age', 'recettes', 'cuisine', 'jamais', 'recents'];
   const cause = ordre.reduce((meilleure, c) => (comptes[c] > (meilleure ? comptes[meilleure] : 0) ? c : meilleure), null);
   if (!cause) return { cause: 'catalogue', profilCause: null };
   let profilCause = null;
@@ -710,9 +718,9 @@ const sansRien = (type, nombre) => ({
   type, ids: [], choisis: [], manque: Math.max(0, nombre), code: 'aucun', cause: null, profilCause: null,
 });
 
-function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, graine, refuses }, type) {
+function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, graine, refuses, ecarter }, type) {
   const voulu = Number.isInteger(nombre) && nombre > 0 ? nombre : 0;
-  const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses });
+  const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses, ecarter });
   if (!ctx || !voulu) return sansRien(type, voulu);
   const rang = rangsDeDepartage(ctx.candidats, graine);
   const remplis = remplir(ctx, voulu, rang, type);
@@ -727,7 +735,7 @@ function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, gra
  * La proposition de plats (type `plat` seulement : les desserts ont leur bouton, proposerDesserts) → { type: 'plat',
  * ids: [platId…] (ordre des emplacements : aimés d'abord ; ordre d'ajout, donc des cartes), choisis: [{ platId, groupe,
  * palier, raison, ecartes }], manque, code: 'ok' | 'peu' | 'aucun', cause: null | 'versions' | 'age' | 'recettes' |
- * 'jamais' | 'recents' | 'catalogue', profilCause }. `nombre` : nombreAProposer().aProposer par défaut ; `graine` :
+ * 'cuisine' | 'jamais' | 'recents' | 'catalogue', profilCause }. `ecarter` : comme candidats. `nombre` : nombreAProposer().aProposer par défaut ; `graine` :
  * graineProposition(cible) par défaut. `plafond` (facultatif) : le nombre dit par le libellé du bouton touché ; la
  * proposition vise `nombre` (code 'peu' et sa cause si les plats manquent, même quand le libellé le savait déjà), et
  * si elle trouve plus que `plafond` (plats arrivés depuis l'affichage), elle est refaite pour `plafond` plats.
@@ -737,10 +745,10 @@ function proposer(tousLesPlats, { cible, semaines, profils, evaluer, nombre, gra
  */
 export function proposerPlats(tousLesPlats, {
   cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, nombre = null, graine = null, refuses = [],
-  plafond = null,
+  plafond = null, ecarter = null,
 } = {}) {
   const n = nombre ?? nombreAProposer(semaines, cible, { tousLesPlats, profils, evaluer }).aProposer;
-  const options = { cible, semaines, profils, evaluer, graine: graine ?? graineProposition(cible, semaines), refuses };
+  const options = { cible, semaines, profils, evaluer, graine: graine ?? graineProposition(cible, semaines), refuses, ecarter };
   const resultat = proposer(tousLesPlats, { ...options, nombre: n }, 'plat');
   if (!Number.isInteger(plafond) || plafond < 0 || resultat.ids.length <= plafond) return resultat;
   return proposer(tousLesPlats, { ...options, nombre: plafond }, 'plat');
@@ -752,10 +760,10 @@ export function proposerPlats(tousLesPlats, {
  * graine `graineProposition(cible) + '|desserts'` par défaut ; jamais un plat ni un dessert déjà actif dans la cible.
  */
 export function proposerDesserts(tousLesPlats, {
-  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, nombre = 1, graine = null, refuses = [],
+  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, nombre = 1, graine = null, refuses = [], ecarter = null,
 } = {}) {
   return proposer(tousLesPlats, {
-    cible, semaines, profils, evaluer, nombre, graine: graine ?? `${graineProposition(cible, semaines)}|desserts`, refuses,
+    cible, semaines, profils, evaluer, nombre, graine: graine ?? `${graineProposition(cible, semaines)}|desserts`, refuses, ecarter,
   }, 'dessert');
 }
 
@@ -770,8 +778,8 @@ function proposablesDe(ctx) {
  * Nombre de plats (ou de desserts) proposables pour la cible : paliers 1 et 2, plus le palier 3 dans la limite
  * ECARTES_MAX (plats de la cible compris). 0 pour une cible illisible.
  */
-export function nombreProposable(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [] } = {}) {
-  return proposablesDe(contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses }));
+export function nombreProposable(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, type = 'plat', refuses = [], ecarter = null } = {}) {
+  return proposablesDe(contexte(tousLesPlats, { cible, semaines, profils, evaluer, type, refuses, ecarter }));
 }
 
 /**
@@ -781,8 +789,8 @@ export function nombreProposable(tousLesPlats, { cible = null, semaines = [], pr
  * manquent (texteSansProposition ; 'catalogue' sans plat du tout) ; `desserts` : desserts proposables, DESSERTS_MAX au
  * plus (0 : pas de bouton 🍰).
  */
-export function apercuProposition(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
-  const options = { cible, semaines, profils, evaluer, refuses };
+export function apercuProposition(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [], ecarter = null } = {}) {
+  const options = { cible, semaines, profils, evaluer, refuses, ecarter };
   const { voulu, presents, aProposer } = nombreAProposer(semaines, cible, { tousLesPlats, profils, evaluer });
   const ctx = contexte(tousLesPlats, { ...options, type: 'plat' });
   const disponibles = proposablesDe(ctx);
@@ -799,7 +807,7 @@ export function apercuProposition(tousLesPlats, { cible = null, semaines = [], p
  * cible qui en avait au moins un (desserts `ok` ou `sansRecette`, ni corbeille ni « personne »), 1 sans historique ;
  * borné de 1 à DESSERTS_MAX et au nombre de desserts proposables (s'il y en a). Rien n'est stocké.
  */
-export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
+export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], profils = [], evaluer = evaluerParDefaut, refuses = [], ecarter = null } = {}) {
   const lue = lireCible(cible, semaines);
   let n = 1;
   if (lue) {
@@ -811,7 +819,7 @@ export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], 
       }
     }
   }
-  const disponibles = nombreProposable(tousLesPlats, { cible, semaines, profils, evaluer, type: 'dessert', refuses });
+  const disponibles = nombreProposable(tousLesPlats, { cible, semaines, profils, evaluer, type: 'dessert', refuses, ecarter });
   const plafond = disponibles > 0 ? Math.min(DESSERTS_MAX, disponibles) : DESSERTS_MAX;
   return Math.min(plafond, Math.max(1, n));
 }
@@ -828,7 +836,7 @@ export function nombreDeDessertsParDefaut(semaines, cible, { tousLesPlats = [], 
  * convient → null, jamais un autre plat à la place. Une valeur inconnue → null.
  */
 export function autreIdee(tousLesPlats, platId, {
-  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, graine = null, refuses = [], mer = null,
+  cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, graine = null, refuses = [], mer = null, ecarter = null,
 } = {}) {
   const ancien = listeDe(tousLesPlats).find((p) => estObjet(p) && p.id === platId) ?? null;
   const type = typeDe(ancien);
@@ -836,7 +844,7 @@ export function autreIdee(tousLesPlats, platId, {
   const voulu = mer === null || mer === undefined ? null : choixMer(mer);
   if ((mer !== null && mer !== undefined && !voulu) || (voulu && type !== 'plat')) return null;
   const ctx = contexte(tousLesPlats, {
-    cible, semaines, profils, evaluer, type, refuses: [...listeDe(refuses), platId], exclure: platId,
+    cible, semaines, profils, evaluer, type, refuses: [...listeDe(refuses), platId], exclure: platId, ecarter,
   });
   if (!ctx) return null;
   const vu = analyserPlat(ancien, { profils: ctx.profils, evaluer: ctx.evaluer, passages: ctx.passages, cible: ctx.cible });
@@ -868,8 +876,8 @@ export function autreIdee(tousLesPlats, platId, {
  * refusés exclus ; paliers 1 et 2 seulement, comme autreIdee avec `mer` : tout le monde en mange), `total` en tout et `familles` dans l'ordre de FAMILLES_MER, sans famille vide. Un
  * plat compte dans chacune de ses familles. Cible illisible : { total: 0, familles: [] }.
  */
-export function choixDeLaMer(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [] } = {}) {
-  const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type: 'plat', refuses });
+export function choixDeLaMer(tousLesPlats, { cible = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [], ecarter = null } = {}) {
+  const ctx = contexte(tousLesPlats, { cible, semaines, profils, evaluer, type: 'plat', refuses, ecarter });
   const marins = ctx ? ctx.candidats.filter((c) => c.mer.deLaMer && c.palier < 3) : [];
   const familles = FAMILLES_MER.map((f) => ({ id: f.id, nom: f.nom, nombre: marins.filter((c) => c.mer.familles.includes(f.id)).length }))
     .filter((f) => f.nombre > 0);
@@ -885,7 +893,7 @@ export function choixDeLaMer(tousLesPlats, { cible = null, semaines = [], profil
  * ils restent dans la semaine). Aucune écriture ici : semaine.js › ecrituresRemplacements.
  */
 export function changerDesPlats(tousLesPlats, platIds, {
-  semaine = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [], mer = null,
+  semaine = null, semaines = [], profils = [], evaluer = evaluerParDefaut, refuses = [], mer = null, ecarter = null,
 } = {}) {
   const lue = lireSemaine(semaine);
   if (!lue) return { remplacements: [], restes: [] };
@@ -897,7 +905,7 @@ export function changerDesPlats(tousLesPlats, platIds, {
   for (const ancienId of demandes) {
     const cible = { id: courante.id, debut: courante.debut, fin: courante.fin, plats: courante.plats };
     const idee = autreIdee(tousLesPlats, ancienId, {
-      cible, semaines, profils, evaluer, mer,
+      cible, semaines, profils, evaluer, mer, ecarter,
       refuses: [...listeDe(refuses), ...demandes, ...remplacements.map((r) => r.platId)],
     });
     const ecritures = idee ? ecrituresRemplacement(courante, ancienId, idee.platId) : null;
@@ -929,11 +937,13 @@ export const TEXTES_PROPOSER = Object.freeze({
   complet: 'Les plats de la semaine sont déjà choisis.',
   causes: Object.freeze({
     recettes: 'Les autres plats n’ont pas encore leur recette.',
+    cuisine: 'Les autres plats demandent un objet que vous n’avez pas.',
     recents: 'Les autres plats ont été mangés ces deux dernières semaines.',
     catalogue: 'Ajoutez des plats pour avoir plus d’idées.',
   }),
   sansProposition: Object.freeze({
     recettes: 'L’app proposera des plats quand ils auront leur recette.',
+    cuisine: 'Vos plats demandent un objet que vous n’avez pas\u00A0: choisissez-les vous-même.',
     recents: 'Vos plats ont tous été mangés ces deux dernières semaines\u00A0: choisissez-les vous-même.',
   }),
   autreIdee: Object.freeze({
@@ -1115,7 +1125,7 @@ function phraseCause(cause, profilCause, contexteTexte) {
   const pour = pourQui(profilCause, contexteTexte);
   if (cause === 'versions' && pour) return `Les autres plats n’ont pas encore de version ${pour}.`;
   if (cause === 'age' && pour) return `Les autres plats ne sont pas encore ${pour}.`;
-  if (cause === 'recettes' || cause === 'recents') return TEXTES_PROPOSER.causes[cause];
+  if (cause === 'recettes' || cause === 'cuisine' || cause === 'recents') return TEXTES_PROPOSER.causes[cause];
   return TEXTES_PROPOSER.causes.catalogue;
 }
 
@@ -1172,7 +1182,7 @@ export function annonceProposition(resultat, { moi = null, profils = [] } = {}) 
  * choisissez-les vous-même. » ; null pour un catalogue vide, « Jamais » (voulu par la personne) ou l'âge.
  */
 export function texteSansProposition(cause, { moi = null, profils = [], profilCause = null } = {}) {
-  if (cause === 'recettes' || cause === 'recents') return TEXTES_PROPOSER.sansProposition[cause];
+  if (cause === 'recettes' || cause === 'cuisine' || cause === 'recents') return TEXTES_PROPOSER.sansProposition[cause];
   if (cause === 'versions') {
     const pour = pourQui(profilCause, { moi, profils });
     return pour ? `L’app proposera des plats quand ils auront une version ${pour}.` : null;

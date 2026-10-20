@@ -36,7 +36,9 @@ import {
   TEXTES_DATES, exceptionPlat, feuillePlat, lireSemaine, peutPreparerLaSuivante, resumePlat, semaineEnCours,
   semaineVisee, texteDates, texteErreurDates, texteJour, validerDates,
 } from '../coeur/semaine.js';
-import { TEXTES_PROPOSER, texteSansProposition } from '../coeur/proposition.js';
+import { TEXTES_PROPOSER, peutChangerDIdee, texteSansProposition } from '../coeur/proposition.js';
+import { creerAlerteCuisine } from './alerte-cuisine.js';
+import { TEXTES_NOUVEAUTES } from '../coeur/nouveautes.js';
 import { TEXTES_PLAN_BATCH, empreintePlanBatch, phraseDemandeBatch, texteDemandeBatch } from '../coeur/plan-batch.js';
 import {
   TEXTES_T3D, carteProchaineAction, grouperParRayon, ordreRayons, texteChaqueSemaineAussi,
@@ -145,7 +147,7 @@ function ouvrirIdees() {
         // Tous les plats, corbeille comprise : Claude ne repropose pas un plat mis de côté (« déjà dans l'app »).
         plats: ctx.tousLesPlats ?? ctx.plats ?? [],
         profils: ctx.profils ?? [],
-        appareils: ctx.reglages?.appareils ?? null,
+        reglages: ctx.reglages ?? null,
       });
       const reussi = await copier(texte);
       if (reussi) {
@@ -335,7 +337,7 @@ function creerCarteBatch(ctx) {
     note, actions, ligneMessage);
 
   const texteDeLaDemande = () => texteDemandeBatch(courant.batch?.elements ?? [], {
-    semaine: courant.semaine ?? null, appareils: courant.reglages?.appareils ?? null,
+    semaine: courant.semaine ?? null, reglages: courant.reglages ?? null,
   });
 
   function demander() {
@@ -687,12 +689,57 @@ function creerCarteAction(choisir, proposer) {
   return { noeud, maj };
 }
 
+// ——— Carte « Nouveau » (2026-10-20, décision 32) ———
+
+/**
+ * Ce qu'une mise à jour apporte à l'utilisatrice des courses (`ctx.nouveaute`, coeur/nouveautes.js ›
+ * nouveauteAMontrer : vue « Repas et courses », aperçu compris), en tête de Semaine, une fois : « Voir Ma cuisine › »
+ * (secondaire : la carte « prochaine action » garde le seul bouton principal) et « OK ». Un des deux boutons la marque
+ * vue sur ce téléphone (actions.nouveauteVue) ; après « OK », le focus passe au titre de la carte « prochaine action ».
+ */
+function creerCarteNouveaute() {
+  const titre = el('h2', { id: 'titre-nouveaute' });
+  const texte = el('p', {});
+  let numero = 0;
+  const vue = () => contexteSemaine?.actions?.nouveauteVue?.(numero);
+  const lien = el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/', onclick: vue });
+  const ok = el('button', {
+    class: 'bouton bouton-texte',
+    type: 'button',
+    onclick: () => {
+      vue();
+      const suite = document.getElementById('titre-prochaine-action');
+      if (suite) {
+        if (!suite.hasAttribute('tabindex')) suite.setAttribute('tabindex', '-1');
+        suite.focus();
+      }
+    },
+  }, TEXTES_NOUVEAUTES.ok);
+  const noeud = el('section', { class: 'carte carte-nouveaute', 'aria-labelledby': 'titre-nouveaute', hidden: true },
+    el('div', { class: 'carte-ligne' }, pastille('✨', 'olive'), el('div', { class: 'carte-texte' }, titre, texte)),
+    el('div', { class: 'actions-carte' }, lien, ok));
+
+  function maj(ctx) {
+    const nouveaute = ctx?.nouveaute ?? null;
+    noeud.hidden = !nouveaute;
+    if (!nouveaute) return;
+    numero = nouveaute.numero;
+    ecrireTexte(titre, nouveaute.titre);
+    ecrireTexte(texte, nouveaute.texte);
+    ecrireTexte(lien, `${nouveaute.lien.libelle}\u00A0›`);
+    if (lien.getAttribute('href') !== nouveaute.lien.hash) lien.setAttribute('href', nouveaute.lien.hash);
+  }
+
+  return { noeud, maj };
+}
+
 // ——— Cartes des plats de la semaine ———
 
 /**
  * Carte d'un plat de la semaine : une `section` dont le haut est un bouton (vignette, nom, mode de cuisson, « Tout le
- * monde · 2 repas · 5 portions », une ligne d'exception au plus) qui ouvre la feuille du plat ; dessous, le choix Mer /
- * Végétale (deux versions conviennent) ou la version unique, puis la conservation. Jamais de bouton dans un lien,
+ * monde · 2 repas · 5 portions », une ligne d'exception au plus) qui ouvre la feuille du plat ; dessous, l'alerte de
+ * « Ma cuisine » (un objet peu courant pas encore dit ou absent, 2026-10-20), le choix Mer / Végétale (deux versions
+ * conviennent) ou la version unique, puis la conservation. Jamais de bouton dans un lien,
  * jamais de croix dans la vue « Repas et courses ». → nœud ; `maj` par majCartePlat.
  */
 const cartes = new WeakMap(); // nœud → ses parties
@@ -722,11 +769,13 @@ function creerCartePlat(element, ouvrir) {
     el('span', { class: 'carte-plat-texte' }, nom, mode, resume, exception),
     el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'));
   bouton.addEventListener('click', () => ouvrir(element.platId, bouton));
+  // « Ma cuisine » (2026-10-20) : la recette demande un objet peu courant pas encore dit, ou absent.
+  const alerte = creerAlerteCuisine({ apresReponse: () => bouton.focus() });
   const versions = creerVersions((profilId, style) => contexteSemaine?.actions?.choisirStyle?.(element.platId, profilId, style));
   const conservation = creerConservation();
   const noeud = el('section', { class: 'carte-plat-semaine', 'aria-labelledby': idNom, 'data-plat': element.platId },
-    bouton, versions.noeud, conservation.noeud);
-  cartes.set(noeud, { visuel, nom, mode, resume, exception, versions, conservation, plat: null });
+    bouton, alerte.noeud, versions.noeud, conservation.noeud);
+  cartes.set(noeud, { visuel, nom, mode, resume, exception, alerte, versions, conservation, plat: null });
   majCartePlat(noeud, element);
   return noeud;
 }
@@ -749,6 +798,9 @@ function majCartePlat(noeud, element) {
     ?? avertissementCoche(element, ctx) ?? '';
   ecrireTexte(carte.exception, exception);
   carte.exception.hidden = !exception;
+  carte.alerte.maj(element.etat === 'ok' ? element.plat : null, ctx, {
+    changer: element.etat === 'ok' && peutChangerDIdee(ctx?.semaine ?? null, element.plat),
+  });
   carte.versions.maj(element.etat === 'ok' ? element : null, ctx);
   carte.conservation.maj(element.etat === 'ok' ? element : null, ctx);
 }
@@ -1185,6 +1237,7 @@ export function creer(ctx) {
     });
   }
 
+  const carteNouveaute = creerCarteNouveaute();
   const carteAction = creerCarteAction(choisir, proposer);
   const sectionPlats = creerSectionPlats(choisir, ouvrir, desserts, changer);
   const carteBatch = creerCarteBatch(ctx);
@@ -1193,6 +1246,7 @@ export function creer(ctx) {
     enteteVue(prenom ? `${salutation(maintenant)} ${prenom}` : salutation(maintenant), formatDate.format(maintenant)),
     anniversaire?.noeud ?? null,
     demandes?.noeud ?? null,
+    carteNouveaute.noeud,
     carteAction.noeud,
     sectionPlats.noeud,
     carteBatch.noeud,
@@ -1200,6 +1254,7 @@ export function creer(ctx) {
   );
 
   function majSemaine(c) {
+    carteNouveaute.maj(c);
     const carte = carteDuMoment(c);
     carteAction.maj(carte);
     sectionPlats.maj(c);

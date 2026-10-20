@@ -6,8 +6,9 @@ export const ROUTE_PAR_DEFAUT = 'semaine';
 // `accueil` : la présentation de première ouverture (T6-0), pour les deux rôles (« Revoir la présentation »).
 // `cuisiner` : « Cuisiner pas à pas » d'un plat (T5-1), pour les deux rôles.
 // `batch` : le plan du batch d'une semaine (2026-10-19), pour les deux rôles.
+// `ma-cuisine` : « 🍳 Ma cuisine » (2026-10-20), pour les deux rôles.
 const ROUTES = ['semaine', 'courses', 'plats', 'plat', 'modifier', 'decouvrir', 'reglages', 'import', 'restaurer', 'regime',
-  'demandes', 'accueil', 'cuisiner', 'batch'];
+  'demandes', 'accueil', 'cuisiner', 'batch', 'ma-cuisine'];
 const ROUTES_GESTIONNAIRE = ['reglages', 'import', 'restaurer', 'regime', 'demandes'];
 
 // Écrans qui reçoivent un identifiant : « #/plat/<id> », « #/modifier/<id> » et « #/cuisiner/<id> » (plat,

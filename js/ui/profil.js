@@ -183,12 +183,13 @@ function lignesVersion(version, versionPrete) {
  * `onDemandes()` ouvre l'écran Demandes, panneau déjà fermé.
  * `onAccueil()` (T6-0) : « 👋 Revoir la présentation », les deux rôles, aperçu compris, juste avant « Se
  * déconnecter » ; absent si null (la présentation est déjà à l'écran).
+ * `onMaCuisine()` (2026-10-20) : « 🍳 Ma cuisine », les deux rôles, aperçu compris ; absent si null (déjà à l'écran).
  */
 export function ouvrirProfil(dialogue, {
   utilisateur, role, apercu, moi = null, aRelier = [], avecProfils = false,
   onReglages, onAjouterRecettes, onApercu, onDeconnecter, onQuiEtesVous, onDelier,
   sauvegarde = null, onSauvegarder, instructionsAJour = true, onInstructions, version = null, versionPrete = false,
-  demandes = 0, onDemandes, onAccueil = null,
+  demandes = 0, onDemandes, onAccueil = null, onMaCuisine = null,
 }) {
   const fermer = () => dialogue.close();
   const nom = (utilisateur.displayName ?? '').trim() || utilisateur.email;
@@ -215,6 +216,7 @@ export function ouvrirProfil(dialogue, {
       role === 'gestionnaire' && !apercu ? blocDemandes(demandes, onDemandes, bouton) : null,
       role === 'gestionnaire' && !apercu ? bouton('📋 Ajouter des recettes', onAjouterRecettes) : null,
       role === 'gestionnaire' && !apercu ? bouton('⚙️ Réglages', onReglages) : null,
+      onMaCuisine ? bouton('🍳 Ma cuisine', onMaCuisine) : null,
       role === 'gestionnaire'
         ? bouton(apercu ? 'Quitter l’aperçu' : `👀 Aperçu de la vue «\u00A0${LIBELLES_ROLE.courses}\u00A0»`, () => onApercu(!apercu))
         : null,

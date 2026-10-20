@@ -12,7 +12,7 @@ import {
   aSaRecette,
 } from '../coeur/plats.js';
 import { profilsContraints, platsSansVersion } from '../coeur/compatibilite.js';
-import { LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
+import { FACON_MAX, LOT_VERSIONS, texteDemandeVariantes } from '../coeur/claude.js';
 import { ligneCompat, lignePrecautions, garderPour, nomDe, libellesStyles, rangerStyles } from './compat.js';
 import { estNote, nombreANoter, resumeNotes } from '../coeur/notes.js';
 import { platsSansPreneur, texteCorbeille } from '../coeur/corbeille.js';
@@ -480,6 +480,16 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
     const erreur = el('p', { class: 'message-erreur', role: 'alert', hidden: true });
     // Recette en photos (2026-10-16) : vue « Repas et courses » (aperçu compris), la recette est demandée avec elles.
     const choix = ctx.role === 'gestionnaire' ? null : creerChoixPhotos();
+    // « Comment vous la faites ? » (2026-10-20, décision 31) : vue « Repas et courses » seulement, avec la demande.
+    const facon = choix ? el('input', {
+      class: 'champ',
+      id: 'facon-du-plat',
+      name: 'facon',
+      maxlength: FACON_MAX,
+      autocomplete: 'off',
+      enterkeyhint: 'done',
+      'aria-describedby': 'facon-aide',
+    }) : null;
     const boutonAjouter = el('button', { class: 'bouton bouton-principal bouton-plein', type: 'submit' }, 'Ajouter');
     const attente = el('p', { class: 'aide', role: 'status' });
     let envoiEnCours = false;
@@ -516,7 +526,7 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
           // Feuille fermée pendant la préparation : rien n'est ajouté.
           if (!entree.isConnected) return;
         }
-        const resultat = ctx.actions.ajouterPlat(entree.value, photos);
+        const resultat = ctx.actions.ajouterPlat(entree.value, { ...photos, facon: facon?.value ?? '' });
         if (resultat.erreur) {
           erreur.replaceChildren(
             el('span', {}, !choix || entree.value.trim()
@@ -556,6 +566,11 @@ function ouvrirAjout(lireCtx, { ouvrirCorbeille = null } = {}) {
     el('p', { class: 'aide' }, ctx.role === 'gestionnaire'
       ? 'Il apparaîtra avec ⏳ jusqu’à l’ajout de sa recette.'
       : 'Il apparaîtra avec ⏳\u00A0: la recette sera demandée.'),
+    facon ? [
+      el('label', { class: 'etiquette-champ', for: 'facon-du-plat' }, 'Comment vous la faites\u202F? (facultatif)'),
+      facon,
+      el('p', { class: 'aide', id: 'facon-aide' }, 'Par exemple\u00A0: avec des lardons, au Cookeo.'),
+    ] : null,
     choix?.noeud ?? null,
     erreur,
     attente,

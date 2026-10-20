@@ -1131,3 +1131,27 @@ test('pureté : ni heure ni hasard du téléphone dans proposition.js ; module a
   const sw = await readFile(new URL('../sw.js', import.meta.url), 'utf8');
   assert.match(sw, /'\.\/js\/coeur\/proposition\.js'/);
 });
+
+// ——— « Ma cuisine » (2026-10-20) : option `ecarter` ———
+
+test('ecarter : un plat qui demande un objet absent n’est jamais proposé, ni en 🔄 ; cause « cuisine »', () => {
+  const ecarter = (p) => p.id.startsWith('neuf');
+  assert.ok(!candidats(RICHE, opts({ ecarter })).some((c) => c.platId.startsWith('neuf')));
+  assert.equal(candidats(RICHE, opts()).length, 8);
+  const proposition = proposerPlats(RICHE, opts({ ecarter, nombre: 6 }));
+  assert.ok(proposition.ids.every((id) => id.startsWith('aime')));
+  assert.equal(proposition.code, 'peu');
+  assert.equal(proposition.cause, 'cuisine');
+  assert.match(annonceProposition(proposition, { profils: PROFILS }), /Les autres plats demandent un objet que vous n’avez pas\./);
+  const idee = autreIdee(RICHE, 'aime-1', opts({ ecarter: (p) => p.id !== 'aime-2' && p.id !== 'aime-1' }));
+  assert.equal(idee?.platId, 'aime-2');
+  assert.equal(autreIdee(RICHE, 'aime-1', opts({ ecarter: (p) => p.id !== 'aime-1' })), null);
+  assert.equal(nombreProposable(RICHE, opts({ ecarter: () => true })), 0);
+  const apercu = apercuProposition(RICHE, opts({ ecarter: (p) => p.id !== 'aime-1' }));
+  assert.equal(apercu.plats, 0);
+  assert.equal(apercu.cause, 'cuisine');
+  assert.equal(texteSansProposition('cuisine'), 'Vos plats demandent un objet que vous n’avez pas : choisissez-les vous-même.');
+  // Un plat sans recette n'est jamais « écarté par la cuisine » : sa cause reste la recette.
+  const sansRecette = [plat('vide', 'Vide', [])];
+  assert.equal(apercuProposition(sansRecette, opts({ ecarter: () => true })).cause, 'recettes');
+});

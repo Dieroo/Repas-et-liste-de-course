@@ -10,21 +10,22 @@ import { evaluer, profilsContraints } from './compatibilite.js';
 import { NOTE_MAX, noteDe } from './notes.js';
 import { slug } from './slug.js';
 import { estDansCorbeille } from './corbeille.js';
-import { MARQUEURS_PRECAUTION, VOCABULAIRES, code, texte } from './vocabulaire.js';
+import { MARQUEURS_PRECAUTION, texte } from './vocabulaire.js';
 import { LOT_PRECAUTIONS, empreinteRelecture, lignesRelecture } from './relecture.js';
 import { ETAPES_PAR_MESSAGE, empreinteEtapes, partsAMettreDeCote } from './realisation.js';
 import { cuissonEnTexte } from './empreinte.js';
 import { estNomDAttente, nombrePhotos } from './photos-demande.js';
+import { appareilsActifs, appareilsDuFoyer, cuisineReglee, lignesCuisine } from './ma-cuisine.js';
 
-export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE };
+export { LOT_PRECAUTIONS, ETAPES_PAR_MESSAGE, appareilsActifs };
 
 const FORMAT = 'paquet@1';
 
 /** Version des instructions du projet Claude (docs/projet-claude.md, en tête) : +1 à chaque modification du fichier. */
-export const VERSION_INSTRUCTIONS = 11;
+export const VERSION_INSTRUCTIONS = 12;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '7ecef6d7cca6';
+export const EMPREINTE_INSTRUCTIONS = 'e40f83e8cfd4';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;
@@ -46,8 +47,6 @@ export const IDEES_NOMS_MAX = 20;
  * (paquet.js › preparerImport, statut `deja`).
  */
 export const SOURCE_IDEE = 'Idée de Claude';
-// Appareils annoncés quand les réglages n'en disent rien (monsieur_cuisine : seulement s'il est actif).
-const APPAREILS_PAR_DEFAUT = ['plaque', 'four', 'cookeo', 'airfryer'];
 
 // Critères de toute demande d'idées (décision du propriétaire) : plats originaux, faciles à faire en batch ; version 8 :
 // au moins un plat sur trois avec des légumes bien présents (comme proposition.js › aDesLegumes pour « Proposer »).
@@ -129,16 +128,29 @@ function lignesVersions(profils, plat = null) {
 /** Valeur de la ligne `nom:` d'une recette demandée en photos sans nom (Claude le lit sur les photos, section 5). */
 export const NOM_A_TROUVER = 'à trouver dans les photos';
 
+/** « Comment vous la faites ? » (2026-10-20, champ facultatif de « Nouveau plat ») : longueur au plus. */
+export const FACON_MAX = 120;
+
+/** Façon du foyer d'une demande de recette (`demandes/{id}.facon`) : une ligne, FACON_MAX caractères au plus ; ''. */
+export function faconLue(valeur) {
+  const lu = ligne(valeur);
+  // Sans point final : la phrase qui la cite (écran Demandes) met le sien.
+  return lu ? [...lu].slice(0, FACON_MAX).join('').trim().replace(/[\s.…]+$/u, '') : '';
+}
+
 /**
  * (a) Texte copié par « Demander à Claude » pour une recette à ajouter. Sans profil qui a des règles : texte de T1b
  * (plus la ligne de version des instructions). Sinon, une ligne `versions:` par profil contraint (lignesVersions),
  * pour que Claude rende la fiche complète avec leurs variantes. `demande` : la demande de recette ouverte ; si elle
  * porte des photos (2026-10-16), une ligne `photos: <n>` (jointes au message) et, sans nom donné, `nom: à trouver dans
- * les photos` ; l'`id` reste celui du plat.
+ * les photos` ; l'`id` reste celui du plat ; si elle porte la façon du foyer (2026-10-20, « Comment vous la
+ * faites ? »), une ligne `notre façon:`. `reglages` (reglages/foyer) : dès que « Ma cuisine » dit quelque chose, les
+ * lignes `appareils:` et celles de la cuisine (ma-cuisine.js › lignesCuisine) ; sinon, rien de plus qu'avant.
  */
-export function texteDemandeRecette(plat, { profils = [], demande = null } = {}) {
+export function texteDemandeRecette(plat, { profils = [], demande = null, reglages = null } = {}) {
   const versions = lignesVersions(profils, plat);
   const photos = nombrePhotos(demande);
+  const facon = faconLue(demande?.facon);
   const lignes = [
     `DEMANDE-RECETTE ${FORMAT}`,
     LIGNE_INSTRUCTIONS,
@@ -146,8 +158,13 @@ export function texteDemandeRecette(plat, { profils = [], demande = null } = {})
     // Nom à trouver seulement tant que la fiche garde son nom d'attente (pas renommée par « Modifier »).
     `nom: ${photos && demande.nomATrouver === true && estNomDAttente(plat?.nom) ? NOM_A_TROUVER : ligne(plat?.nom)}`,
     ...(photos ? [`photos: ${photos}`] : []),
-    ...versions,
+    ...(facon ? [`notre façon: ${facon}`] : []),
   ];
+  if (cuisineReglee(reglages)) {
+    const { appareils, cuisine } = cuisineDeLaDemande({ reglages });
+    lignes.push(`appareils: ${appareils.join(', ')}`, ...cuisine);
+  }
+  lignes.push(...versions);
   lignes.push(photos
     ? `(La recette est dans ${photos === 1 ? 'la photo jointe' : `les ${photos} photos jointes`} à ce message : lis-la en entier.)`
     : '(Ajoute un lien, une photo ou la recette dictée.)');
@@ -187,20 +204,13 @@ function nomsNotes(plats, profils, note) {
 }
 
 /**
- * Codes des appareils actifs des réglages (`reglages/foyer.appareils` : codes, ou objets { id | appareil | code,
- * actif }), dans l'ordre du vocabulaire ; `monsieur_cuisine` seulement s'il est actif. Sans liste lisible ni appareil
- * actif : plaque, four, cookeo, airfryer.
+ * Appareils et cuisine du foyer d'une demande : `reglages` (reglages/foyer, « Ma cuisine » comprise) l'emporte sur
+ * `appareils` (reglages.appareils seuls, comme avant « Ma cuisine »). → { appareils: [codes], cuisine: [lignes] } ;
+ * `cuisine` : [] tant que rien n'est dit dans « Ma cuisine » (ma-cuisine.js › lignesCuisine).
  */
-export function appareilsActifs(appareils) {
-  const actifs = new Set();
-  for (const appareil of Array.isArray(appareils) ? appareils : []) {
-    if (estObjet(appareil) && appareil.actif === false) continue;
-    const brut = estObjet(appareil) ? [appareil.id, appareil.appareil, appareil.code].find((v) => typeof v === 'string') : appareil;
-    const valeur = code(brut);
-    if (VOCABULAIRES.appareil.includes(valeur)) actifs.add(valeur);
-  }
-  const ordonnes = VOCABULAIRES.appareil.filter((valeur) => actifs.has(valeur));
-  return ordonnes.length ? ordonnes : APPAREILS_PAR_DEFAUT;
+export function cuisineDeLaDemande({ appareils = null, reglages = null } = {}) {
+  if (!estObjet(reglages)) return { appareils: appareilsActifs(appareils), cuisine: [] };
+  return { appareils: appareilsDuFoyer(reglages), cuisine: lignesCuisine(reglages) };
 }
 
 /** Envie facultative (texte) : une ligne, espaces réduits, IDEES_ENVIE_MAX caractères au plus (jamais un emoji coupé). */
@@ -215,10 +225,11 @@ function envieLue(envie) {
  * facultatif (une ligne, IDEES_ENVIE_MAX caractères au plus) ; `plats` : tous les plats de l'app (noms à éviter, ⏳ et
  * corbeille compris ; notes « J'adore » et « Jamais » des profils de l'app, un plat de la corbeille n'étant jamais
  * « aimé ») ; `profils` : profils de l'app (bloc `versions:`, comme DEMANDE-RECETTE, plat inconnu : tous les styles du
- * profil ; notes) ; `appareils` : reglages.appareils (appareils actifs, sinon plaque, four, cookeo, airfryer). Lignes `envie`, `versions`, `aimés`, `évités` et `déjà dans l'app`
- * omises quand elles sont vides.
+ * profil ; notes) ; `appareils` : reglages.appareils (appareils actifs, sinon plaque, four, cookeo, airfryer), ou
+ * `reglages` (reglages/foyer : appareils et lignes de « Ma cuisine », cuisineDeLaDemande). Lignes `envie`, `versions`,
+ * `aimés`, `évités`, `déjà dans l'app` et celles de la cuisine omises quand elles sont vides.
  */
-export function texteDemandeIdees({ nombre = IDEES_NOMBRE_DEFAUT, envie = '', plats = [], profils = [], appareils = null } = {}) {
+export function texteDemandeIdees({ nombre = IDEES_NOMBRE_DEFAUT, envie = '', plats = [], profils = [], appareils = null, reglages = null } = {}) {
   const lu = typeof nombre === 'string' && /^\s*\d+\s*$/.test(nombre) ? Number(nombre) : nombre;
   const combien = IDEES_NOMBRES.includes(lu) ? lu : IDEES_NOMBRE_DEFAUT;
   const fiches = (Array.isArray(plats) ? plats : []).filter(estObjet);
@@ -235,7 +246,8 @@ export function texteDemandeIdees({ nombre = IDEES_NOMBRE_DEFAUT, envie = '', pl
   ];
   if (souhait) lignes.push(`envie: ${souhait}`);
   lignes.push(`critères: ${CRITERES_IDEES}`);
-  lignes.push(`appareils: ${appareilsActifs(appareils).join(', ')}`);
+  const cuisine = cuisineDeLaDemande({ appareils, reglages });
+  lignes.push(`appareils: ${cuisine.appareils.join(', ')}`, ...cuisine.cuisine);
   lignes.push(...lignesVersions(lesProfils));
   if (aimes.length) lignes.push(`aimés: ${aimes.join(' ; ')}`);
   if (evites.length) lignes.push(`évités: ${evites.join(' ; ')}`);
@@ -369,17 +381,19 @@ export function texteDemandePrecautions(plats) {
  * (les `etapes` de la fiche, jointes par « / »), `cuisson:` (avec le mode), `temps de travail:`, `parts à mettre de
  * côté:` (anonymes : ni profil, ni style, ni identifiant), `à corriger:` (une ligne par code, `aCorriger[id]`, quand
  * l'écran redemande des recettes refusées). Lignes omises quand elles sont vides. Aucun profil n'est reçu : rien sur
- * les personnes ne peut partir. `appareils` : reglages.appareils (comme DEMANDE-IDEES).
+ * les personnes ne peut partir. `appareils` ou `reglages` : comme DEMANDE-IDEES.
  */
-export function texteDemandeEtapes(plats, { appareils = null, aCorriger = {} } = {}) {
+export function texteDemandeEtapes(plats, { appareils = null, reglages = null, aCorriger = {} } = {}) {
   const fiches = (Array.isArray(plats) ? plats : [])
     .filter((plat) => estObjet(plat) && Array.isArray(plat.ingredients) && plat.ingredients.some(estObjet));
   const corrections = estObjet(aCorriger) ? aCorriger : {};
   const unSeul = fiches.length === 1;
+  const cuisine = cuisineDeLaDemande({ appareils, reglages });
   const lignes = [
     `DEMANDE-ETAPES ${FORMAT}`,
     LIGNE_INSTRUCTIONS,
-    `appareils: ${appareilsActifs(appareils).join(', ')}`,
+    `appareils: ${cuisine.appareils.join(', ')}`,
+    ...cuisine.cuisine,
   ];
   if (!unSeul) {
     lignes.push(`nombre: ${fiches.length}`);

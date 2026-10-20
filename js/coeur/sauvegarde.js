@@ -17,6 +17,7 @@ import { estDansCorbeille } from './corbeille.js';
 import { STYLES } from './vocabulaire.js';
 import { comparerAuxReperesPres, garderReperes, reperesEnPlus, texteReperes } from './relecture.js';
 import { RECHERCHE_MAX, lireDrive } from './drive.js';
+import { cheminCuisineSur, lireCuisine, lirePlatsEtMoules } from './ma-cuisine.js';
 import {
   CHAMPS_PLAT, FORMAT, code, demandesSatisfaites, estSauvegarde, extrairePaquet, fusionnerVariantes, recetteValidee,
   validerPaquet,
@@ -46,9 +47,10 @@ export const CLES_SAUVEGARDE = Object.freeze(['format', 'sauvegardeLe', 'reglage
 // Champs d'un produit (`produits/{id}`) sauvegardés : ceux qu'écrit un geste (T3b : le mot cherché au drive ; T3d :
 // rayon, placard, habituel). Jamais une valeur recopiée des produits courants (ils sont du code).
 export const CHAMPS_PRODUIT = Object.freeze(['rechercheDrive', 'rayon', 'placard', 'habituel']);
-// Réglages du foyer sauvegardés (T3b : le drive ; T3d : l'ordre des rayons ; T3e : apéro). Jamais le gestionnaire, le
-// sujet des notifications, la version des instructions copiée ni la date de la dernière sauvegarde.
-export const CHAMPS_REGLAGES = Object.freeze(['drive', 'rayons']);
+// Réglages du foyer sauvegardés (T3b : le drive ; T3d : l'ordre des rayons ; 2026-10-20 : « Ma cuisine », `cuisine` et
+// `platsEtMoules` ; T3e : apéro). Jamais le gestionnaire, le sujet des notifications, la version des instructions
+// copiée ni la date de la dernière sauvegarde.
+export const CHAMPS_REGLAGES = Object.freeze(['drive', 'rayons', 'cuisine', 'platsEtMoules']);
 const AVERTISSEMENT_PARTIE_IGNOREE = 'Une partie du fichier n’est pas encore reprise par l’app\u00A0: elle a été ignorée.';
 
 const estObjet = (valeur) => Boolean(valeur) && typeof valeur === 'object' && !Array.isArray(valeur);
@@ -58,8 +60,13 @@ const deux = (n) => String(n).padStart(2, '0');
 const guillemets = (nom) => `«\u00A0${nom}\u00A0»`;
 const marqueurHorodatage = () => ({ horodatageServeur: true });
 /** Vrai si le document porte ce champ (ni absent, ni null, ni texte vide) : la restauration ne le remplace jamais. */
-const champPresent = (document, champ) => estObjet(document) && document[champ] !== undefined && document[champ] !== null
-  && document[champ] !== '';
+// Champ pointé (« cuisine.siphon », 2026-10-20) lu dans ses tables.
+const valeurDuChemin = (document, champ) => String(champ).split('.')
+  .reduce((noeud, cle) => (estObjet(noeud) ? noeud[cle] : undefined), document);
+const champPresent = (document, champ) => {
+  const valeur = valeurDuChemin(document, champ);
+  return valeur !== undefined && valeur !== null && valeur !== '';
+};
 
 /** Mot cherché au drive lisible : texte de 1 à RECHERCHE_MAX caractères (espaces réduits), sinon ''. */
 function motCherche(valeur) {
@@ -271,11 +278,14 @@ export function nomFichierSauvegarde(date, { avantRestauration = false } = {}) {
 /**
  * Fichier de sauvegarde, à partir des plats, des profils, des produits du foyer (documents { id, ...champs } ; T3b) et
  * des réglages du foyer (`reglages/foyer`, T3b). Clés dans cet ordre : format, sauvegardeLe, reglages (seulement
- * `drive`, lu par drive.js › lireDrive, et T3d `rayons`, l'ordre des rayons lu par lireOrdreRayons ; {} sans eux),
+ * `drive`, lu par drive.js › lireDrive, T3d `rayons`, l'ordre des rayons lu par lireOrdreRayons, et « Ma cuisine »
+ * (2026-10-20) `cuisine` ({ objet: true | false }) et `platsEtMoules` ({ id: nom }), lus par ma-cuisine.js ; {} sans
+ * eux),
  * profils, produits (triés par id, CHAMPS_PRODUIT seulement : T3d, rayon, placard et habituel en plus du mot cherché ;
  * un produit sans champ sauvegardé est omis ; [] sinon), plats. Jamais le gestionnaire, les notifications, les
  * instructions copiées, la date de sauvegarde, les semaines ni les articles ajoutés à la main.
- * → { nomFichier, texte, resume: { plats, profils, notes, produits, drive, rayons }, aCorriger: [{ id, nom }] }
+ * → { nomFichier, texte, resume: { plats, profils, notes, produits, drive, rayons, cuisine (réponses et plats et
+ *   moules) }, aCorriger: [{ id, nom }] }
  *   `aCorriger` : plats dont la recette ne pourrait pas être reprise depuis ce fichier (fiche abîmée) ; le reste
  *   du fichier reste restaurable.
  */
@@ -294,10 +304,18 @@ export function creerSauvegarde({ plats = [], profils = [], produits = [], regla
     .sort(parId);
   const drive = lireDrive(reglages?.drive);
   const rayons = lireOrdreRayons(reglages?.rayons);
+  // « Ma cuisine » (2026-10-20) : les réponses dites (ordre des objets) et la liste des plats et moules.
+  const cuisine = Object.fromEntries(lireCuisine(reglages));
+  const platsEtMoules = Object.fromEntries(lirePlatsEtMoules(reglages).map(({ id, nom }) => [id, nom]));
+  const avecCuisine = Object.keys(cuisine).length > 0;
+  const avecPlatsEtMoules = Object.keys(platsEtMoules).length > 0;
   const fichier = {
     format: FORMAT,
     sauvegardeLe: quand.toISOString(),
-    reglages: { ...(drive ? { drive } : {}), ...(rayons ? { rayons } : {}) },
+    reglages: {
+      ...(drive ? { drive } : {}), ...(rayons ? { rayons } : {}),
+      ...(avecCuisine ? { cuisine } : {}), ...(avecPlatsEtMoules ? { platsEtMoules } : {}),
+    },
     profils: profilsFichier,
     produits: produitsFichier,
     plats: platsFichier,
@@ -321,6 +339,7 @@ export function creerSauvegarde({ plats = [], profils = [], produits = [], regla
       produits: produitsFichier.length,
       drive: Boolean(drive),
       rayons: Boolean(rayons),
+      cuisine: Object.keys(cuisine).length + Object.keys(platsEtMoules).length,
     },
     aCorriger,
   };
@@ -458,6 +477,26 @@ function validerCourses(sauvegarde, cles) {
         const rayons = lireOrdreRayons(sauvegarde.reglages.rayons);
         if (rayons) sortie.reglages.rayons = rayons;
         else sortie.avertissements.push('L’ordre des rayons du fichier est illisible\u00A0: il a été ignoré.');
+      }
+      // « Ma cuisine » (2026-10-20) : réponses des objets connus, plats et moules lisibles ; un objet d'une version plus
+      // récente de l'app (inconnu ici) donne l'avertissement « Une partie du fichier… ».
+      if (sauvegarde.reglages.cuisine != null) {
+        if (!estObjet(sauvegarde.reglages.cuisine)) {
+          sortie.avertissements.push('«\u00A0Ma cuisine\u00A0» est illisible dans ce fichier\u00A0: elle a été ignorée.');
+        } else {
+          const lues = lireCuisine({ cuisine: sauvegarde.reglages.cuisine });
+          if (lues.size) sortie.reglages.cuisine = Object.fromEntries(lues);
+          if (Object.keys(sauvegarde.reglages.cuisine).some((id) => !lues.has(id))) sortie.ignoree = true;
+        }
+      }
+      if (sauvegarde.reglages.platsEtMoules != null) {
+        const brut = estObjet(sauvegarde.reglages.platsEtMoules) ? sauvegarde.reglages.platsEtMoules : null;
+        const lus = brut ? lirePlatsEtMoules({ platsEtMoules: brut })
+          .filter(({ id, nom }) => cheminCuisineSur(`platsEtMoules.${id}`, nom)) : [];
+        if (lus.length) sortie.reglages.platsEtMoules = Object.fromEntries(lus.map(({ id, nom }) => [id, nom]));
+        if (!brut || lus.length < Object.keys(brut).length) {
+          sortie.avertissements.push('Des plats et moules du fichier sont illisibles\u00A0: ils ont été ignorés.');
+        }
       }
     }
   }
@@ -705,6 +744,7 @@ export function preparerRestauration(validation, {
     produitsRemis: 0,
     driveRemis: null,
     rayonsRemis: false,
+    cuisineRemise: 0,
   };
   const recettesDifferentes = [];
   const ecrituresProfils = [];
@@ -962,8 +1002,9 @@ export function preparerRestauration(validation, {
     return { id: pour, ordre: profil?.ordre, nom: reduire(profil?.nom) || pour };
   })).map(({ id, nom }) => ({ pour: id, nom, nombre: versionsRemises.get(id) }));
 
-  // Réglages des courses (T3b, T3d) : le drive et l'ordre des rayons, chacun seulement s'il manque dans l'app ; une
-  // seule écriture de `reglages/foyer` (`update` des seuls champs absents, jamais un `set` du document).
+  // Réglages des courses (T3b, T3d) : le drive et l'ordre des rayons, chacun seulement s'il manque dans l'app, puis
+  // « Ma cuisine » chemin par chemin ; une seule écriture de `reglages/foyer` (`update` des seuls champs absents, jamais
+  // un `set` du document).
   const ecrituresReglages = [];
   const reglagesARemettre = {};
   const drive = lireDrive(validation?.reglages?.drive);
@@ -975,6 +1016,18 @@ export function preparerRestauration(validation, {
   if (rayons && !champPresent(reglages, 'rayons')) {
     reglagesARemettre.rayons = rayons;
     resume.rayonsRemis = true;
+  }
+  // « Ma cuisine » (2026-10-20) : chaque réponse et chaque plat ou moule absents de l'app, par leur chemin (une réponse
+  // présente, même différente, n'est jamais remplacée).
+  for (const [id, valeur] of lireCuisine({ cuisine: validation?.reglages?.cuisine })) {
+    if (champPresent(reglages, `cuisine.${id}`)) continue;
+    reglagesARemettre[`cuisine.${id}`] = valeur;
+    resume.cuisineRemise += 1;
+  }
+  for (const { id, nom } of lirePlatsEtMoules({ platsEtMoules: validation?.reglages?.platsEtMoules })) {
+    if (champPresent(reglages, `platsEtMoules.${id}`) || !cheminCuisineSur(`platsEtMoules.${id}`, nom)) continue;
+    reglagesARemettre[`platsEtMoules.${id}`] = nom;
+    resume.cuisineRemise += 1;
   }
   if (Object.keys(reglagesARemettre).length) {
     ecrituresReglages.push({
@@ -1011,7 +1064,8 @@ export function preparerRestauration(validation, {
 
 /**
  * Lignes de l'aperçu pour les réglages des courses qui reviennent (T3b) : « 12 réglages de produits reviennent. »,
- * « 1 réglage de produit revient. », « Le drive revient (drive.exemple.fr). », T3d « L'ordre des rayons revient. » ;
+ * « 1 réglage de produit revient. », « Le drive revient (drive.exemple.fr). », T3d « L'ordre des rayons revient. »,
+ * « 3 réglages de « Ma cuisine » reviennent. » (2026-10-20) ;
  * [] si rien ne revient.
  */
 export function phrasesCoursesRemises(resume) {
@@ -1022,6 +1076,9 @@ export function phrasesCoursesRemises(resume) {
   const nom = reduire(resume?.driveRemis);
   if (nom) lignes.push(`Le drive revient (${nom}).`);
   if (resume?.rayonsRemis === true) lignes.push('L’ordre des rayons revient.');
+  const c = resume?.cuisineRemise;
+  if (Number.isInteger(c) && c === 1) lignes.push('1\u00A0réglage de «\u00A0Ma cuisine\u00A0» revient.');
+  else if (Number.isInteger(c) && c > 1) lignes.push(`${c}\u00A0réglages de «\u00A0Ma cuisine\u00A0» reviennent.`);
   return lignes;
 }
 

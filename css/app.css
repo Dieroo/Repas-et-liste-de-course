@@ -5373,3 +5373,106 @@ body:has(.vue.cuisiner) .bandeau-apercu-bouton { display: none; }
 
 /* Fiche et feuille du plat de la semaine : « 👩‍🍳 Cuisiner pas à pas ». */
 .bouton-cuisiner { margin-top: 8px; }
+
+/* « 🍳 Ma cuisine » (2026-10-20) : alerte d'une recette (carte du plat de la semaine, fiche). */
+.alerte-cuisine {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ocre-doux);
+  color: var(--texte);
+}
+.alerte-cuisine[hidden] { display: none; }
+.carte-plat-semaine > .alerte-cuisine { margin-left: 4px; }
+.alerte-cuisine-emoji { flex: none; font-size: 1.25rem; line-height: 1.4; }
+.alerte-cuisine-corps { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+.alerte-cuisine-texte { margin: 0; line-height: 1.4; }
+.alerte-cuisine-texte:focus { outline-offset: 2px; }
+.alerte-cuisine-boutons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.alerte-cuisine-boutons[hidden] { display: none; }
+.alerte-cuisine-boutons .bouton {
+  flex: 1 1 8rem;
+  min-height: 48px;
+  border-color: var(--bordure-champ);
+}
+
+/* Écran « Ma cuisine » : un objet, son « Pour : … », ses deux réponses (boutons à bascule). */
+.liste-objets {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.liste-objets[hidden] { display: none; }
+.objet-cuisine {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: 1px solid var(--bordure);
+}
+.objet-cuisine:first-child { border-top: none; }
+.objet-cuisine-nom { margin: 0; font-weight: 700; }
+.objet-cuisine-pour { margin: 0; }
+.objet-cuisine-reponses {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.bouton-reponse {
+  min-height: 48px;
+  border: 1px solid var(--bordure-champ);
+  background: var(--surface);
+  color: var(--texte);
+  font-weight: 600;
+}
+.bouton-reponse[aria-pressed="true"] {
+  border-color: var(--olive);
+  background: var(--olive);
+  color: var(--sur-accent);
+}
+.details-objets > summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.details-objets > summary h2 { display: inline; margin: 0; }
+.liste-plats-moules {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.liste-plats-moules[hidden] { display: none; }
+.plat-moule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  border-top: 1px solid var(--bordure);
+}
+.plat-moule:first-child { border-top: none; }
+.plat-moule > span { min-width: 0; overflow-wrap: anywhere; }
+.champ-et-bouton {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.champ-et-bouton .champ { flex: 1 1 12rem; width: auto; }
+.champ-et-bouton .bouton { flex: none; min-height: 52px; }
+
+/* Carte « Nouveau » de Semaine (2026-10-20). */
+.carte-nouveaute .actions-carte { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.carte-nouveaute .actions-carte .bouton-plein { flex: 1 1 12rem; }

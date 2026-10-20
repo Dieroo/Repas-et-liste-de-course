@@ -24,6 +24,7 @@ import { EFFACER, cheminSur, champsValides, jourValide, ecartJours, DUREE_MAX_JO
 import { ARTICLE_MAX, PRECISION_MAX } from './coeur/liste.js';
 import { CHAMPS_PRODUIT, lireChampProduit, lireOrdreRayons } from './coeur/sauvegarde.js';
 import { RECHERCHE_MAX, lireDrive } from './coeur/drive.js';
+import { cheminCuisineSur } from './coeur/ma-cuisine.js';
 
 let arreterSuiviReglages = null;
 const arretsCollections = [];
@@ -144,9 +145,10 @@ function trace(auteur) {
  * Ajoute un plat par son nom ({ id, nom } : statut ⏳ par défaut). Écriture fusionnée : si l'autre téléphone a
  * créé ce plat entre-temps, sa recette, ses notes et sa photo restent intactes.
  * `demanderRecette` (rôle effectif « Repas et courses », aperçu compris : décidé par l'app) : crée aussi la demande de
- * recette, `set` sans fusion (une demande traitée du même identifiant se rouvre entière).
+ * recette, `set` sans fusion (une demande traitée du même identifiant se rouvre entière), avec `facon` (texte déjà lu
+ * par coeur/claude.js › faconLue) s'il y en a une.
  */
-export function ajouterPlat(plat, auteur, { demanderRecette, photos = [], photoDuPlat = null, nomATrouver = false }) {
+export function ajouterPlat(plat, auteur, { demanderRecette, photos = [], photoDuPlat = null, nomATrouver = false, facon = '' }) {
   const lot = writeBatch(db);
   // Recette en photos (2026-10-16) : « ⭐ C'est la photo du plat » devient la photo de la fiche et sa vignette.
   const vignette = photoDuPlat?.vignette ? { vignette: photoDuPlat.vignette } : {};
@@ -164,6 +166,8 @@ export function ajouterPlat(plat, auteur, { demanderRecette, photos = [], photoD
     lot.set(doc(db, 'demandes', demande.id), {
       ...demande.donnees,
       ...champsDemandePhotos({ photos: images.length, nomATrouver }),
+      // « Comment vous la faites ? » (2026-10-20) : la façon du foyer, lue par DEMANDE-RECETTE (`notre façon:`).
+      ...(typeof facon === 'string' && facon ? { facon } : {}),
       creeLe: serverTimestamp(),
     });
   }
@@ -751,7 +755,8 @@ function versFirestore(valeur) {
 }
 
 const COLLECTIONS_RESTAUREES = new Set(['plats', 'profils', 'produits', 'reglages']);
-// Réglages du foyer qu'une restauration peut écrire (T3b : le drive ; T3d : l'ordre des rayons), par `update` de ces
+// Réglages du foyer qu'une restauration peut écrire (T3b : le drive ; T3d : l'ordre des rayons ; « Ma cuisine »,
+// 2026-10-20 : `cuisine.<objet>` et `platsEtMoules.<id>`, coeur/ma-cuisine.js › cheminCuisineSur), par `update` de ces
 // seuls champs : jamais un `set` du document, le gestionnaire, le sujet des notifications ni la date de sauvegarde ne
 // sont touchés.
 const REGLAGES_RESTAURES = new Set(['drive', 'rayons']);
@@ -771,7 +776,9 @@ function ecritureRestaurablePermise({ collection: nom, id, mode, donnees, efface
       && !champs.some((champ) => donnees[champ] === EFFACER) && !(effacer ?? []).length;
   }
   if (nom === 'reglages') {
-    return id === 'foyer' && mode === 'update' && champs.length > 0 && champs.every((champ) => REGLAGES_RESTAURES.has(champ))
+    return id === 'foyer' && mode === 'update' && champs.length > 0
+      && champs.every((champ) => REGLAGES_RESTAURES.has(champ)
+        || (cheminCuisineSur(champ, donnees[champ]) && donnees[champ] !== EFFACER))
       && (!champs.includes('drive') || driveSur(donnees.drive))
       && (!champs.includes('rayons') || rayonsSurs(donnees.rayons)) && !(effacer ?? []).length;
   }
@@ -1322,18 +1329,20 @@ function rayonsSurs(valeur) {
 }
 
 /**
- * Réglages des courses du foyer (T3b : `drive`, préparé par coeur/drive.js › ecrituresDrive ; T3d : `rayons`, l'ordre
- * des 14 rayons, préparé par coeur/liste.js › ecrituresRayons) : `update` de `reglages/foyer`, chemins validés (`drive`
- * et `rayons` seulement ; EFFACER → deleteField() : retour au défaut). Jamais un `set` du document : le gestionnaire, le
- * sujet des notifications et les autres réglages restent. Lève une erreur avant tout envoi si un chemin ou une valeur
- * est refusé (drive illisible, ordre qui n'a pas les 14 rayons une fois chacun). Hors ligne : part plus tard.
- * → promesse de l'envoi.
+ * Réglages du foyer écrits par les deux membres (T3b : `drive`, préparé par coeur/drive.js › ecrituresDrive ; T3d :
+ * `rayons`, l'ordre des 14 rayons, préparé par coeur/liste.js › ecrituresRayons ; « Ma cuisine », 2026-10-20 :
+ * `cuisine.<objet>` et `platsEtMoules.<id>`, un chemin par geste, coeur/ma-cuisine.js › cheminCuisineSur) : `update`
+ * de `reglages/foyer`, chemins validés (EFFACER → deleteField() : retour au défaut). Jamais un `set` du document : le
+ * gestionnaire, le sujet des notifications et les autres réglages restent. Lève une erreur avant tout envoi si un
+ * chemin ou une valeur est refusé (drive illisible, ordre qui n'a pas les 14 rayons une fois chacun, objet inconnu).
+ * Hors ligne : part plus tard. → promesse de l'envoi.
  */
 export function ecrireReglages(champs) {
   const entrees = estTable(champs) ? Object.entries(champs) : [];
-  const ok = entrees.length > 0 && entrees.every(([chemin, valeur]) => REGLAGES_COURSES.has(chemin)
-    && (valeur === EFFACER || (chemin === 'drive' && driveSur(valeur)) || (chemin === 'rayons' && rayonsSurs(valeur))));
-  if (!ok) throw new Error('Réglage refusé : seulement le drive ou l’ordre des rayons du foyer.');
+  const ok = entrees.length > 0 && entrees.every(([chemin, valeur]) => cheminCuisineSur(chemin, valeur)
+    || (REGLAGES_COURSES.has(chemin)
+      && (valeur === EFFACER || (chemin === 'drive' && driveSur(valeur)) || (chemin === 'rayons' && rayonsSurs(valeur)))));
+  if (!ok) throw new Error('Réglage refusé : seulement le drive, l’ordre des rayons ou « Ma cuisine ».');
   const lot = writeBatch(db);
   lot.update(doc(db, 'reglages', 'foyer'), Object.fromEntries(entrees.map(([chemin, valeur]) => [chemin, versChamp(valeur)])));
   return lot.commit();

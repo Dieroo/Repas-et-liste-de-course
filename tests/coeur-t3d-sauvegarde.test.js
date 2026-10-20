@@ -40,7 +40,16 @@ function appliquer(collections, lots) {
     if (ecriture.mode === 'fusion') docs[ecriture.collection].set(ecriture.id, { ...(actuel ?? { id: ecriture.id }), ...structuredClone(ecriture.donnees) });
     else {
       assert.ok(actuel, `update sur un document absent : ${ecriture.id}`);
-      Object.assign(actuel, structuredClone(ecriture.donnees));
+      // Chemins pointés (« cuisine.siphon », 2026-10-20) comme Firestore.
+      for (const [chemin, valeur] of Object.entries(structuredClone(ecriture.donnees))) {
+        const morceaux = chemin.split('.');
+        let ici = actuel;
+        for (const m of morceaux.slice(0, -1)) {
+          if (!ici[m] || typeof ici[m] !== 'object') ici[m] = {};
+          ici = ici[m];
+        }
+        ici[morceaux.at(-1)] = valeur;
+      }
     }
   }
   return Object.fromEntries(Object.entries(docs).map(([nom, map]) => [nom, [...map.values()].sort((a, b) => (a.id < b.id ? -1 : 1))]));
@@ -62,7 +71,7 @@ test('lireChampProduit : mot cherché, rayon, placard, habituel lus propres ; il
   assert.equal(lireChampProduit('habituel', 'chaque semaine'), null);
   assert.equal(lireChampProduit('nom', 'lait'), null, 'champ réservé : jamais sauvegardé');
   assert.deepEqual(CHAMPS_PRODUIT, ['rechercheDrive', 'rayon', 'placard', 'habituel']);
-  assert.deepEqual(CHAMPS_REGLAGES, ['drive', 'rayons']);
+  assert.deepEqual(CHAMPS_REGLAGES, ['drive', 'rayons', 'cuisine', 'platsEtMoules']);
 });
 
 test('lireOrdreRayons : les 14 rayons, ceux du foyer d’abord ; inconnus et doublons ignorés ; illisible → null', () => {
@@ -85,7 +94,7 @@ test('creerSauvegarde : produits avec rayon, placard et habituel (triés, champs
     { id: 'pate', rechercheDrive: 'penne', rayon: 'epicerie_sucree' },
     { id: 'pile', rayon: 'entretien', habituel: { actif: false, libelle: 'piles' } },
   ]);
-  assert.deepEqual(r.resume, { plats: 0, profils: 0, notes: 0, produits: 5, drive: true, rayons: true });
+  assert.deepEqual(r.resume, { plats: 0, profils: 0, notes: 0, produits: 5, drive: true, rayons: true, cuisine: 0 });
   for (const absent of ['gestionnaire', 'ntfy', 'instructionsCopiees', 'frigoJoursDefaut', 'sansHebdo', 'sansHabituel', 'precision']) {
     assert.equal(r.texte.includes(absent), false, absent);
   }
@@ -199,7 +208,9 @@ test('garde-fou T3d : un produit et des réglages avec chaque champ sauvegardé 
     id: 'lait', rechercheDrive: 'lait bio', rayon: 'boissons', placard: { actif: false },
     habituel: { actif: true, qte: 0.5, unite: 'l', libelle: 'lait' },
   };
-  const reglages = { drive: DRIVE, rayons: RAYONS };
+  const reglages = {
+    drive: DRIVE, rayons: RAYONS, cuisine: { 'mixeur-plongeant': true, four: false }, platsEtMoules: { 'moule-a-cake-22-cm': 'Moule à cake 22 cm' },
+  };
   for (const champ of CHAMPS_PRODUIT) assert.ok(champ in produit, champ);
   for (const champ of CHAMPS_REGLAGES) assert.ok(champ in reglages, champ);
   const v = relue({ produits: [produit], reglages });
@@ -213,4 +224,37 @@ test('aller-retour : le nom gardé avec le placard revient de la sauvegarde', ()
   const produits = [{ id: 'tofu-fume-maison', placard: { actif: true, libelle: 'tofu fumé maison' } }];
   const lu = relue({ ...etat(), produits });
   assert.deepEqual(lu.produits, produits);
+});
+
+// ——— « Ma cuisine » (2026-10-20) ———
+
+test('« Ma cuisine » : sauvegardée, puis rendue chemin par chemin sans jamais remplacer une réponse présente', () => {
+  const reglages = {
+    gestionnaire: 'a@example.com',
+    cuisine: { siphon: true, cookeo: false, inconnu: true, mandoline: 'oui' },
+    platsEtMoules: { 'cocotte-5-l': 'Cocotte 5 l', 'mal-ecrit': 'Autre nom' },
+  };
+  const fichierCree = JSON.parse(creerSauvegarde({ reglages }, { maintenant: MAINTENANT }).texte);
+  assert.deepEqual(fichierCree.reglages.cuisine, { cookeo: false, siphon: true });
+  assert.deepEqual(fichierCree.reglages.platsEtMoules, { 'cocotte-5-l': 'Cocotte 5 l', 'mal-ecrit': 'Autre nom' });
+  const v = relue({ reglages });
+  assert.deepEqual(v.reglages.cuisine, { cookeo: false, siphon: true });
+  assert.deepEqual(v.reglages.platsEtMoules, { 'cocotte-5-l': 'Cocotte 5 l' }, 'un nom qui ne donne pas son identifiant est ignoré');
+  assert.ok(v.avertissements.some((a) => /plats et moules/.test(a)));
+  // L'app a déjà dit « Je ne l'ai pas » pour le siphon : jamais remplacé ; le Cookeo et la cocotte reviennent.
+  const actuels = { gestionnaire: 'a@example.com', cuisine: { siphon: false } };
+  const r = preparerRestauration(v, base({ reglages: actuels }));
+  const [ecriture] = ecrituresDe(r).filter((e) => e.collection === 'reglages');
+  assert.deepEqual(ecriture.donnees, { 'cuisine.cookeo': false, 'platsEtMoules.cocotte-5-l': 'Cocotte 5 l' });
+  assert.deepEqual(ecriture.condition, { champsAbsents: ['cuisine.cookeo', 'platsEtMoules.cocotte-5-l'] });
+  assert.equal(r.resume.cuisineRemise, 2);
+  assert.deepEqual(phrasesCoursesRemises(r.resume), ['2 réglages de « Ma cuisine » reviennent.']);
+  // Réponse donnée entre l'aperçu et l'envoi sur l'autre téléphone : elle reste.
+  assert.deepEqual(appliquerConditions(ecriture, { cuisine: { siphon: false, cookeo: true } }).donnees, { 'platsEtMoules.cocotte-5-l': 'Cocotte 5 l' });
+  const apres = appliquer({ produits: [], reglages: [{ id: 'foyer', ...actuels }] }, r.lots);
+  assert.deepEqual(apres.reglages[0].cuisine, { siphon: false, cookeo: false });
+  assert.deepEqual(apres.reglages[0].platsEtMoules, { 'cocotte-5-l': 'Cocotte 5 l' });
+  // Un objet d'une version plus récente de l'app : « Une partie du fichier… ».
+  const recent = validerSauvegarde(fichier({ reglages: { cuisine: { 'objet-futur': true } } }));
+  assert.ok(recent.avertissements.some((a) => /Une partie du fichier/.test(a)));
 });

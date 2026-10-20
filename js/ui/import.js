@@ -24,6 +24,7 @@ import {
   TEXTES_PLAN_BATCH, empreintePlanBatch, estReponseBatch, planDeLaReponse, portionsDuBatch, texteCorrectionBatch,
   texteEnviron, texteSemaineDuPlan, validerPlanBatch,
 } from '../coeur/plan-batch.js';
+import { appareilsDuFoyer } from '../coeur/ma-cuisine.js';
 
 // Écran ouvert en série d'étapes (T5-0b) : par « Coller la réponse de Claude » de la carte « 👩‍🍳 Étapes détaillées »
 // (Réglages) ou de la carte des étapes d'une fiche (`platId` : le retour y ramène). Lu une fois, à l'ouverture de
@@ -654,7 +655,7 @@ export function creer(ctx) {
       elements: reference?.elements ?? [],
       semaineId: reference?.semaineId ?? null,
       empreinte: reference ? empreintePlanBatch(reference.elements) : null,
-      appareils: courant.reglages?.appareils ?? null,
+      appareils: appareilsDuFoyer(courant.reglages ?? null),
     });
     if (validation.refus) return { type: 'refusBatch', refus: validation.refus };
     if (!validation.plan) return { type: 'erreursBatch', erreurs: validation.erreurs, semaineId: reference?.semaineId ?? null };
@@ -951,7 +952,7 @@ export function creer(ctx) {
     const plats = aDetaillerMaintenant();
     if (!plats.length) return;
     // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
-    copieDeLaSerie(await copier(texteDemandeEtapes(plats, { appareils: courant.reglages?.appareils ?? null })));
+    copieDeLaSerie(await copier(texteDemandeEtapes(plats, { reglages: courant.reglages ?? null })));
   }
 
   /** « 📋 Redemander ces N recettes » : les recettes pas reprises dans la visite, avec leurs lignes `à corriger:`. */
@@ -962,7 +963,7 @@ export function creer(ctx) {
     if (!refuses.length) return;
     const aCorriger = Object.fromEntries(refuses.filter((plat) => plat.aCorriger.length).map((plat) => [plat.id, plat.aCorriger]));
     copieDeLaSerie(await copier(texteDemandeEtapes(refuses.map((plat) => encore.get(plat.id)), {
-      appareils: courant.reglages?.appareils ?? null,
+      reglages: courant.reglages ?? null,
       aCorriger,
     })));
   }

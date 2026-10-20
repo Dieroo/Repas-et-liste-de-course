@@ -46,9 +46,9 @@ const statuts = (prep) => prep.elements.map((e) => [e.id, e.statut]);
 
 test('version 7 : une fiche complète porte sa réalisation ; `etapes` = ses titres (la liste reçue est ignorée)', () => {
   // Versions 8 (critère des légumes dans les idées), 9 (Claude relit sa fiche avant de l’envoyer), 10 (recette en
-  // photos) et 11 (plan de batch, saison, gestes possibles, versions mer) : la réalisation
-  // reste exigée depuis la version 7.
-  assert.equal(VERSION_INSTRUCTIONS, 11);
+  // photos), 11 (plan de batch, saison, gestes possibles, versions mer) et 12 (« Ma cuisine », notre façon) : la
+  // réalisation reste exigée depuis la version 7.
+  assert.equal(VERSION_INSTRUCTIONS, 12);
   assert.equal(VERSION_REALISATION, 7);
   const v = validerPaquet(reponse([{ ...ficheV7(GRATIN, REALISATION_GRATIN), etapes: ['Autre chose.'] }]), { profils: PROFILS });
   assert.equal(v.valide, true, JSON.stringify(v.plats[0].erreurs));
