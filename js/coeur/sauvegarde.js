@@ -1024,7 +1024,8 @@ export function preparerRestauration(validation, {
     reglagesARemettre[`cuisine.${id}`] = valeur;
     resume.cuisineRemise += 1;
   }
-  // Plats et moules : au plus ce qui reste de place (PLATS_ET_MOULES_MAX, ceux de l'app comptés), dans l'ordre du fichier.
+  // Plats et moules : au plus ce qui reste de place (PLATS_ET_MOULES_MAX, ceux de l'app comptés), par ordre de nom
+  // (lirePlatsEtMoules).
   let place = PLATS_ET_MOULES_MAX - lirePlatsEtMoules(reglages).length;
   for (const { id, nom } of lirePlatsEtMoules({ platsEtMoules: validation?.reglages?.platsEtMoules })) {
     if (place <= 0) break;

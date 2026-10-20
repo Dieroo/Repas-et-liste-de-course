@@ -1150,7 +1150,7 @@ test('ecarter : un plat qui demande un objet absent n’est jamais proposé, ni 
   const apercu = apercuProposition(RICHE, opts({ ecarter: (p) => p.id !== 'aime-1' }));
   assert.equal(apercu.plats, 0);
   assert.equal(apercu.cause, 'cuisine');
-  assert.equal(texteSansProposition('cuisine'), 'Vos plats demandent un objet que vous n’avez pas\u00A0: dites-le dans Ma cuisine si vous l’avez, sinon choisissez-les vous-même.');
+  assert.equal(texteSansProposition('cuisine'), 'Vos plats demandent un objet que vous n’avez pas. Si vous l’avez finalement, changez-le dans Ma cuisine\u00A0; sinon, choisissez-les vous-même.');
   // « Changer des plats » passe l'option à chaque « Une autre idée ».
   const sem = semaine(CIBLE.id, CIBLE.debut, CIBLE.fin, { 'aime-1': dans(1) });
   const change = changerDesPlats(RICHE, ['aime-1'], { semaine: sem, semaines: [sem], profils: PROFILS, evaluer, ecarter: (p) => !['aime-1', 'aime-3'].includes(p.id) });

@@ -941,7 +941,7 @@ export const TEXTES_PROPOSER = Object.freeze({
   }),
   sansProposition: Object.freeze({
     recettes: 'L’app proposera des plats quand ils auront leur recette.',
-    cuisine: 'Vos plats demandent un objet que vous n’avez pas\u00A0: dites-le dans Ma cuisine si vous l’avez, sinon choisissez-les vous-même.',
+    cuisine: 'Vos plats demandent un objet que vous n’avez pas. Si vous l’avez finalement, changez-le dans Ma cuisine\u00A0; sinon, choisissez-les vous-même.',
     recents: 'Vos plats ont tous été mangés ces deux dernières semaines\u00A0: choisissez-les vous-même.',
   }),
   autreIdee: Object.freeze({

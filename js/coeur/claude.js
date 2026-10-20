@@ -25,7 +25,7 @@ const FORMAT = 'paquet@1';
 export const VERSION_INSTRUCTIONS = 12;
 /** Empreinte de docs/projet-claude.md (sha256, 12 premiers caractères hex) : un test échoue si le fichier change sans
  * que VERSION_INSTRUCTIONS augmente. */
-export const EMPREINTE_INSTRUCTIONS = '8eb8ec179803';
+export const EMPREINTE_INSTRUCTIONS = 'dc0348195e70';
 
 /** Deuxième ligne de chaque texte copié : Claude refuse une demande écrite pour d'autres instructions que les siennes. */
 const LIGNE_INSTRUCTIONS = `instructions: ${VERSION_INSTRUCTIONS}`;

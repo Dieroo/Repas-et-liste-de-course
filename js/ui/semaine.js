@@ -696,10 +696,8 @@ function creerCarteAction(choisir, proposer) {
  * nouveauteAMontrer : vue « Repas et courses », aperçu compris), sous la carte « prochaine action » : « Voir Ma cuisine › »
  * (secondaire : la carte « prochaine action » garde le seul bouton principal) et « OK ». Un des deux boutons la marque
  * vue sur ce téléphone (actions.nouveauteVue) ; après « OK », le focus passe au titre de la carte « prochaine action ».
+ * Chaque rendu la dit montrée (actions.nouveauteMontree, qui ne compte qu'une fois par ouverture de l'app).
  */
-// Nouveautés déjà comptées pour cette ouverture de l'app (actions.nouveauteMontree : une fois par chargement).
-const nouveautesComptees = new Set();
-
 function creerCarteNouveaute() {
   const emoji = el('span', { 'aria-hidden': 'true' });
   const libelle = el('span', {});
@@ -730,10 +728,7 @@ function creerCarteNouveaute() {
     if (!nouveaute) return;
     ecrireTexte(emoji, `${nouveaute.emoji}\u00A0`);
     numero = nouveaute.numero;
-    if (!nouveautesComptees.has(numero)) {
-      nouveautesComptees.add(numero);
-      ctx.actions?.nouveauteMontree?.(numero);
-    }
+    ctx.actions?.nouveauteMontree?.(numero);
     ecrireTexte(libelle, nouveaute.titre);
     ecrireTexte(texte, nouveaute.texte);
     ecrireTexte(lien, `${nouveaute.lien.libelle}\u00A0›`);

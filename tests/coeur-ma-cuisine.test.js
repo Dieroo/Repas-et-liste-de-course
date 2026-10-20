@@ -6,7 +6,8 @@ import {
   OBJETS, PLATS_ET_MOULES_MAX, PLAT_ET_MOULE_MAX, aLObjet, ajoutPlatEtMoule, alerteDuPlat, annonceReponse,
   appareilsActifs, appareilsDuFoyer, cheminCuisineSur, cuisineReglee, ecrituresObjet, etatObjet, libellesReponse,
   lignesCuisine, lignesMaCuisine, lireCuisine, lirePlatsEtMoules, manqueUnObjet, nomsPourClaude, objetDAppareil,
-  objetDUstensile, objetsDuPlat, recettesParObjet, retraitPlatEtMoule, texteManquants, textePour, texteQuestion,
+  objetDUstensile, objetsDUstensile, objetsDuPlat, recettesParObjet, remplacantADemander, retraitPlatEtMoule,
+  texteManquants, textePour, texteQuestion,
 } from '../js/coeur/ma-cuisine.js';
 import { EFFACER } from '../js/coeur/semaine.js';
 import { texteDemandeEtapes, texteDemandeIdees, texteDemandeRecette, appareilsActifs as appareilsDeClaude } from '../js/coeur/claude.js';
@@ -84,6 +85,10 @@ test('reconnaissance d’un ustensile : le nom le plus long, jamais un ustensile
   assert.equal(objetDUstensile('mixeur plongeant ou presse-purée'), null);
   assert.equal(objetDUstensile('robot pâtissier (ou batteur électrique)'), 'robot-patissier');
   assert.equal(objetDUstensile('cocotte en fonte / faitout'), null);
+  // Relecture : toutes les possibilités, dans l'ordre ; une barre sans espaces est une taille.
+  assert.deepEqual(objetsDUstensile('robot pâtissier ou batteur électrique'), ['robot-patissier', 'batteur-electrique']);
+  assert.deepEqual(objetsDUstensile('moule à charnière 24/26 cm'), ['moule-a-charniere']);
+  assert.equal(objetsDUstensile('saladier'), null);
   assert.equal(objetDAppareil('cookeo'), 'cookeo');
   assert.equal(objetDAppareil('monsieur_cuisine'), 'monsieur-cuisine');
   assert.equal(objetDAppareil('micro_ondes'), null);
@@ -145,6 +150,29 @@ test('alerte d’une recette : question pour ce qui n’est pas dit, manquants p
   assert.equal(manqueUnObjet(GRATIN, { cuisine: { four: false } }), true);
 });
 
+test('ustensile au choix : une seule possibilité suffit, quel que soit son rang', () => {
+  const BRIOCHE_AU_CHOIX = {
+    id: 'brioche-choix', nom: 'Brioche au choix', type: 'dessert', portionsBase: 8, ingredients: ING, etapes: ['Pétrir'],
+    cuisson: [{ appareil: 'four', tempC: 180, dureeMin: 30 }],
+    realisation: [{ titre: 'Pétrir', texte: '…', duree: 10, ustensiles: ['robot pâtissier ou batteur électrique'] }],
+  };
+  const four = { four: true };
+  assert.equal(alerteDuPlat(BRIOCHE_AU_CHOIX, { cuisine: { ...four, 'batteur-electrique': true } }), null, 'la seconde possibilité suffit');
+  assert.equal(manqueUnObjet(BRIOCHE_AU_CHOIX, { cuisine: { ...four, 'robot-patissier': false, 'batteur-electrique': true } }), false);
+  // La première dite absente : la suivante est demandée.
+  const alerte = alerteDuPlat(BRIOCHE_AU_CHOIX, { cuisine: { ...four, 'robot-patissier': false } });
+  assert.equal(alerte?.question, 'batteur-electrique');
+  assert.equal(alerte?.pour, 'robot-patissier');
+  // Puis ce qui remplacerait le robot pâtissier (Monsieur Cuisine), et seulement ensuite il manque.
+  assert.equal(manqueUnObjet(BRIOCHE_AU_CHOIX, { cuisine: { ...four, 'robot-patissier': false, 'batteur-electrique': false } }), false);
+  const sansRien = { ...four, 'robot-patissier': false, 'batteur-electrique': false, 'monsieur-cuisine': false };
+  assert.equal(manqueUnObjet(BRIOCHE_AU_CHOIX, { cuisine: sansRien }), true);
+  // Demandé seul ailleurs dans la recette : plus de choix pour lui.
+  const SEUL = { ...BRIOCHE_AU_CHOIX, id: 'seul', realisation: [...BRIOCHE_AU_CHOIX.realisation, { titre: 'Fouetter', texte: '…', duree: 5, ustensiles: ['robot pâtissier'] }], etapes: ['Pétrir', 'Fouetter'] };
+  assert.equal(manqueUnObjet(SEUL, { cuisine: { ...sansRien, 'batteur-electrique': true } }), true);
+  assert.equal(manqueUnObjet(BRIOCHE_AU_CHOIX, { cuisine: { ...sansRien, 'batteur-electrique': true } }), false);
+});
+
 test('textes : question, réponses, manquants, annonces', () => {
   assert.equal(texteQuestion('siphon'), 'Il faut un siphon. Vous l’avez\u202F?');
   assert.equal(texteQuestion('mandoline'), 'Il faut une mandoline. Vous l’avez\u202F?');
@@ -161,6 +189,11 @@ test('textes : question, réponses, manquants, annonces', () => {
   assert.equal(texteManquants([]), '');
   assert.equal(annonceReponse('siphon', true), 'C’est noté\u00A0: siphon dans Ma cuisine.');
   assert.equal(annonceReponse('airfryer', false), 'C’est noté\u00A0: pas d’airfryer. L’app ne proposera plus les plats qui en demandent.');
+  // Un objet qui le remplacerait reste à demander : rien n'est encore écarté, l'annonce ne le promet pas.
+  assert.equal(annonceReponse('mixeur-plongeant', false, { remplacant: true }), 'C’est noté\u00A0: pas de mixeur plongeant.');
+  assert.equal(remplacantADemander('mixeur-plongeant', {}), true);
+  assert.equal(remplacantADemander('mixeur-plongeant', { cuisine: { blender: false, robot: false, 'monsieur-cuisine': false } }), false);
+  assert.equal(remplacantADemander('siphon', {}), false);
   assert.equal(textePour(['A', 'B']), 'Pour\u00A0: A et B');
   assert.equal(textePour(['A', 'B', 'C', 'D', 'E']), 'Pour\u00A0: A, B, C et 2\u00A0autres');
   assert.equal(textePour([]), '');

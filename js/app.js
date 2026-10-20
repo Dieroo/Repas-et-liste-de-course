@@ -27,7 +27,8 @@ import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions }
 import { VERSION_INSTRUCTIONS, faconLue } from './coeur/claude.js';
 import { cleNouveautes, nouveauteAMontrer, valeurMontree, valeurVue } from './coeur/nouveautes.js';
 import {
-  ajoutPlatEtMoule, annonceReponse, ecrituresObjet, etatObjet, lireCuisine, lirePlatsEtMoules, manqueUnObjet, retraitPlatEtMoule,
+  ajoutPlatEtMoule, annonceReponse, ecrituresObjet, etatObjet, lireCuisine, lirePlatsEtMoules, manqueUnObjet,
+  remplacantADemander, retraitPlatEtMoule,
 } from './coeur/ma-cuisine.js';
 import {
   ecranChargement,
@@ -2376,17 +2377,20 @@ const actions = {
     } catch {
       // Stockage plein ou bloqué : la carte reviendra à la prochaine ouverture.
     }
+    nouveautesVisite.valeur = valeurVue(numero);
     // La carte s'en va et tout remonte sous le doigt : un second toucher impatient n'atteint rien (« ✨ Proposer »).
     ignorerToucherFantome();
     rendre();
   },
   /**
-   * La nouveauté `numero` s'est montrée à cette ouverture de l'app (Semaine l'appelle une fois par chargement) :
-   * après OUVERTURES_NOUVEAUTE ouvertures sans geste, elle compte pour vue. Rien n'est redessiné.
+   * La nouveauté `numero` s'est montrée (Semaine l'appelle à chaque rendu de sa carte ; comptée une fois par ouverture
+   * de l'app) : après OUVERTURES_NOUVEAUTE ouvertures sans geste, elle compte pour vue, à la prochaine ouverture (la
+   * carte reste jusque-là : lireNouveautesVues garde la marque lue au début de la visite). Rien n'est redessiné.
    */
   nouveauteMontree(numero) {
     const cle = cleNouveautes(etat.utilisateur?.uid);
-    if (!cle) return;
+    if (!cle || nouveautesVisite.comptees.has(numero)) return;
+    nouveautesVisite.comptees.add(numero);
     try {
       localStorage.setItem(cle, valeurMontree(localStorage.getItem(cle), numero));
     } catch {
@@ -2403,7 +2407,7 @@ const actions = {
    * dit », pour « Annuler ») : alerte d'une recette (carte du plat de la semaine, fiche) ou écran « Ma cuisine ».
    * `annonce` (par défaut) : « C’est noté : siphon dans Ma cuisine. » avec « Annuler » (8 s), qui remet la réponse
    * d'avant ; `apresAnnulation()` est appelé ensuite (focus). Même réponse que celle qui se voit : rien n'est écrit.
- * `garde` : les touchers sont ignorés 500 ms (alerte d'une recette : ce qui suit arrive sous le doigt).
+   * `garde` : les touchers sont ignorés 500 ms (alerte d'une recette : ce qui suit arrive sous le doigt).
    * → { code: 'ok' | 'chargement' | 'invalide' | 'echec' | 'refuse' }.
    */
   repondreCuisine(id, valeur, { annonce = true, apresAnnulation = null, garde = false } = {}) {
@@ -2422,7 +2426,9 @@ const actions = {
     if (garde) ignorerToucherFantome();
     rendre();
     if (annonce && valeur !== null) {
-      annoncer(annonceReponse(id, valeur), {
+      // « Je ne l'ai pas » quand un objet qui le remplacerait reste à demander : rien n'est encore écarté.
+      const remplacant = valeur === false && remplacantADemander(id, etat.donnees.reglages);
+      annoncer(annonceReponse(id, valeur, { remplacant }), {
         action: {
           libelle: 'Annuler',
           faire: () => {
@@ -3618,19 +3624,30 @@ function cloreDemandes(demandesAClore) {
     : demande));
 }
 
+// Carte « Nouveau » pendant cette ouverture de l'app : la marque lue au premier rendu (`uid`, `valeur`), changée
+// seulement par actions.nouveauteVue (la carte ne disparaît pas sous les yeux quand la troisième ouverture la marque
+// vue), et les nouveautés déjà comptées (actions.nouveauteMontree).
+const nouveautesVisite = { uid: null, valeur: undefined, comptees: new Set() };
+
 /**
- * Marque « Nouveau » de ce compte sur ce téléphone (`localStorage`, coeur/nouveautes.js › cleNouveautes) : la valeur
- * stockée, null si elle est absente, undefined si le stockage est bloqué (la carte ne se montre pas alors : elle
- * reviendrait à chaque ouverture).
+ * Marque « Nouveau » de ce compte sur ce téléphone (`localStorage`, coeur/nouveautes.js › cleNouveautes), lue une fois
+ * par ouverture de l'app et par compte : la valeur stockée, null si elle est absente, undefined si le stockage est
+ * bloqué (la carte ne se montre pas alors : elle reviendrait à chaque ouverture).
  */
 function lireNouveautesVues() {
-  const cle = cleNouveautes(etat.utilisateur?.uid);
+  const uid = etat.utilisateur?.uid ?? null;
+  const cle = cleNouveautes(uid);
   if (!cle) return undefined;
-  try {
-    return localStorage.getItem(cle);
-  } catch {
-    return undefined;
+  if (nouveautesVisite.uid !== uid) {
+    nouveautesVisite.uid = uid;
+    nouveautesVisite.comptees = new Set();
+    try {
+      nouveautesVisite.valeur = localStorage.getItem(cle);
+    } catch {
+      nouveautesVisite.valeur = undefined;
+    }
   }
+  return nouveautesVisite.valeur;
 }
 
 /** Panneau du profil, rempli avec le contexte à jour (la personne reconnue, les prénoms à relier). */

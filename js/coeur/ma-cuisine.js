@@ -175,9 +175,21 @@ export function etatObjet(id, reglages) {
   const reponse = estObjet(reglages?.cuisine) ? reglages.cuisine[id] : undefined;
   if (reponse === true) return 'oui';
   if (reponse === false) return 'non';
-  if (lirePlatsEtMoules(reglages).some((element) => objetDUstensile(element.nom) === id)) return 'oui';
+  if (objetsDesPlatsEtMoules(reglages).has(id)) return 'oui';
   if (objet.appareil) return appareilsActifs(reglages?.appareils).includes(objet.appareil) ? 'oui' : null;
   return null;
+}
+
+const memoPlatsEtMoules = new WeakMap();
+
+/** Objets connus que « Mes plats et moules » nomme (Set d'ids ; même Set tant que la liste est le même objet). */
+function objetsDesPlatsEtMoules(reglages) {
+  const brut = reglages?.platsEtMoules;
+  if (!estObjet(brut)) return new Set();
+  if (!memoPlatsEtMoules.has(brut)) {
+    memoPlatsEtMoules.set(brut, new Set(lirePlatsEtMoules(reglages).map((element) => objetDUstensile(element.nom)).filter(Boolean)));
+  }
+  return memoPlatsEtMoules.get(brut);
 }
 
 /** Vrai si la cuisine a cet objet, ou un objet qui le remplace (REMPLACE_PAR). */
@@ -233,16 +245,25 @@ function objetDUnNom(nom) {
 }
 
 /**
- * Objet connu d'un ustensile écrit dans une étape (« grand moule à charnière » → 'moule-a-charniere' ; « robot
- * pâtissier » → 'robot-patissier', jamais 'robot') ; null pour un ustensile courant ou inconnu. Un ustensile au choix
- * (« mixeur plongeant ou presse-purée », « robot / batteur ») n'est un objet que si chaque possibilité en est un : la
- * première alors (ses remplaçants comptent) ; sinon null (le presse-purée suffit).
+ * Objets connus d'un ustensile écrit dans une étape, au choix → [ids] (« grand moule à charnière » →
+ * ['moule-a-charniere'] ; « robot pâtissier ou batteur électrique » → ['robot-patissier', 'batteur-electrique'] : l'un
+ * ou l'autre suffit) ; null pour un ustensile courant ou inconnu, ou dès qu'une possibilité est courante (« mixeur
+ * plongeant ou presse-purée » : le presse-purée suffit). « ou » et une barre entre espaces séparent les possibilités
+ * (« 24/26 cm » reste une taille).
  */
-export function objetDUstensile(nom) {
-  const possibilites = texte(nom).replace(/[()]/g, ' ').split(/\s+ou\s+|\s*\/\s*/i).map((p) => p.trim()).filter(Boolean);
+export function objetsDUstensile(nom) {
+  const possibilites = texte(nom).replace(/[()]/g, ' ').split(/\s+ou\s+|\s+\/\s+/i).map((p) => p.trim()).filter(Boolean);
   if (!possibilites.length) return null;
   const objets = possibilites.map(objetDUnNom);
-  return objets.every(Boolean) ? objets[0] : null;
+  return objets.every(Boolean) ? [...new Set(objets)] : null;
+}
+
+/**
+ * Objet connu d'un ustensile (« robot pâtissier » → 'robot-patissier', jamais 'robot') : la première possibilité de
+ * objetsDUstensile, ou null.
+ */
+export function objetDUstensile(nom) {
+  return objetsDUstensile(nom)?.[0] ?? null;
 }
 
 /** Objet d'un code d'appareil du format (« cookeo » → 'cookeo', « monsieur_cuisine » → 'monsieur-cuisine'), ou null. */
@@ -250,43 +271,63 @@ export function objetDAppareil(appareil) {
   return OBJET_PAR_APPAREIL.get(code(typeof appareil === 'string' ? appareil : ''))?.id ?? null;
 }
 
-const memoObjets = new WeakMap();
+const memoBesoins = new WeakMap();
 
 /**
- * Objets connus dont une recette a besoin, dans l'ordre de la recette, chacun une fois : l'appareil de chaque cuisson
- * (`cuisson[]`), puis, étape par étape (`realisation[]` à jour seulement, realisation.js › realisationAJour ; jamais
- * les étapes « le jour du repas », où un objet n'est que pratique), son appareil et ses ustensiles. [] pour un plat
- * sans recette.
+ * Besoins d'une recette → [{ id, autres: [ids] }], dans l'ordre de la recette, un par objet : l'appareil de chaque
+ * cuisson (`cuisson[]`), puis, étape par étape (`realisation[]` à jour seulement, realisation.js › realisationAJour ;
+ * jamais les étapes « le jour du repas », où un objet n'est que pratique), son appareil et ses ustensiles ; `autres` :
+ * les autres possibilités d'un ustensile au choix (« robot pâtissier ou batteur électrique »), [] si l'objet est demandé
+ * seul quelque part. [] pour un plat sans recette.
  */
-export function objetsDuPlat(plat) {
+function besoinsDuPlat(plat) {
   if (!estObjet(plat) || !aSaRecette(plat)) return [];
-  if (memoObjets.has(plat)) return memoObjets.get(plat);
-  const ids = [];
-  const ajouter = (id) => {
-    if (id && !ids.includes(id)) ids.push(id);
+  if (memoBesoins.has(plat)) return memoBesoins.get(plat);
+  const parId = new Map();
+  const ajouter = ([id, ...autres] = []) => {
+    if (!id) return;
+    const deja = parId.get(id);
+    if (!deja) parId.set(id, { id, autres });
+    else if (deja.autres.length) deja.autres = autres.length ? [...new Set([...deja.autres, ...autres])] : [];
   };
-  for (const cuisson of Array.isArray(plat.cuisson) ? plat.cuisson : []) ajouter(objetDAppareil(cuisson?.appareil));
+  for (const cuisson of Array.isArray(plat.cuisson) ? plat.cuisson : []) ajouter([objetDAppareil(cuisson?.appareil)]);
   for (const etape of realisationAJour(plat) ? plat.realisation : []) {
     if (!estObjet(etape) || etape.auService === true) continue;
-    ajouter(objetDAppareil(etape.appareil));
-    for (const ustensile of listeDe(etape.ustensiles)) ajouter(objetDUstensile(ustensile));
+    ajouter([objetDAppareil(etape.appareil)]);
+    for (const ustensile of listeDe(etape.ustensiles)) ajouter(objetsDUstensile(ustensile) ?? []);
   }
-  const figes = Object.freeze(ids);
-  memoObjets.set(plat, figes);
+  const figes = Object.freeze([...parId.values()].map((b) => Object.freeze({ id: b.id, autres: Object.freeze(b.autres) })));
+  memoBesoins.set(plat, figes);
   return figes;
 }
 
+const memoObjets = new WeakMap();
+
+/** Objets connus dont une recette a besoin (besoinsDuPlat), dans son ordre, chacun une fois → [ids] (même tableau). */
+export function objetsDuPlat(plat) {
+  if (!estObjet(plat)) return [];
+  if (!memoObjets.has(plat)) memoObjets.set(plat, Object.freeze(besoinsDuPlat(plat).map((b) => b.id)));
+  return memoObjets.get(plat);
+}
+
 /**
- * Où en est un objet dont la recette a besoin → 'la' (la cuisine l'a, ou un objet qui le remplace), 'manque' (dit
- * absent, et chaque objet qui le remplace aussi), ou { question, pour } : l'objet à demander, `question`, l'objet
- * lui-même (pas encore dit), ou, l'objet dit absent, le premier objet qui le remplace pas encore dit (`pour` : l'objet
- * absent ; « Pas de mixeur plongeant. Vous avez un blender ? »).
+ * Où en est un besoin d'une recette ({ id, autres }) → 'la' (la cuisine a l'objet, une autre possibilité de
+ * l'ustensile, ou un objet qui le remplace), 'manque' (tout cela dit absent), ou { question, pour } : l'objet à
+ * demander, `question`, l'objet lui-même (pas encore dit), ou, l'objet dit absent, la première possibilité pas encore
+ * dite (les autres de l'ustensile, puis ses remplaçants ; `pour` : l'objet absent ; « Pas de mixeur plongeant. Vous
+ * avez un blender ? »).
  */
-function besoin(id, reglages) {
-  if (aLObjet(id, reglages)) return 'la';
+function besoin({ id, autres = [] }, reglages) {
+  const remplacants = [...autres, ...(OBJET_PAR_ID.get(id)?.remplacePar ?? [])].filter((r) => r !== id);
+  if (aLObjet(id, reglages) || remplacants.some((r) => etatObjet(r, reglages) === 'oui')) return 'la';
   if (etatObjet(id, reglages) !== 'non') return { question: id, pour: null };
-  const autre = OBJET_PAR_ID.get(id)?.remplacePar.find((r) => etatObjet(r, reglages) === null) ?? null;
+  const autre = remplacants.find((r) => etatObjet(r, reglages) === null) ?? null;
   return autre ? { question: autre, pour: id } : 'manque';
+}
+
+/** Vrai si, après une réponse « Je ne l'ai pas », un objet qui le remplacerait reste à demander. */
+export function remplacantADemander(id, reglages) {
+  return (OBJET_PAR_ID.get(id)?.remplacePar ?? []).some((r) => etatObjet(r, reglages) === null);
 }
 
 /**
@@ -299,10 +340,10 @@ export function alerteDuPlat(plat, reglages) {
   const manquants = [];
   let question = null;
   let pour = null;
-  for (const id of objetsDuPlat(plat)) {
-    const etat = besoin(id, reglages);
+  for (const b of besoinsDuPlat(plat)) {
+    const etat = besoin(b, reglages);
     if (etat === 'la') continue;
-    if (etat === 'manque') manquants.push(id);
+    if (etat === 'manque') manquants.push(b.id);
     else if (!question) ({ question, pour } = etat);
   }
   return manquants.length || question ? { manquants, question, pour } : null;
@@ -313,7 +354,7 @@ export function alerteDuPlat(plat, reglages) {
  * objet pas encore dit, ou dont un remplaçant n'est pas encore dit, n'écarte rien (dans le doute, on propose).
  */
 export function manqueUnObjet(plat, reglages) {
-  return objetsDuPlat(plat).some((id) => besoin(id, reglages) === 'manque');
+  return besoinsDuPlat(plat).some((b) => besoin(b, reglages) === 'manque');
 }
 
 const memoRecettes = new WeakMap();
@@ -416,13 +457,16 @@ export function texteManquants(ids, { changer = false } = {}) {
 
 /**
  * Annonce après une réponse (`valeur` : true « Je l'ai », false « Je ne l'ai pas ») : « C’est noté : siphon dans Ma
- * cuisine. », « C’est noté : pas de siphon. L’app ne proposera plus les plats qui en demandent. ».
+ * cuisine. », « C’est noté : pas de siphon. L’app ne proposera plus les plats qui en demandent. » ; `remplacant` (un
+ * objet qui le remplacerait reste à demander) : « C’est noté : pas de mixeur plongeant. ».
  */
-export function annonceReponse(id, valeur) {
+export function annonceReponse(id, valeur, { remplacant = false } = {}) {
   const objet = OBJET_PAR_ID.get(id);
   if (!objet) return '';
-  return valeur
-    ? `C’est noté\u00A0: ${objet.phrase} dans Ma cuisine.`
+  if (valeur) return `C’est noté\u00A0: ${objet.phrase} dans Ma cuisine.`;
+  // Un objet qui le remplacerait reste à demander : rien n'est encore écarté.
+  return remplacant
+    ? `C’est noté\u00A0: pas ${avecDe(objet)}.`
     : `C’est noté\u00A0: pas ${avecDe(objet)}. L’app ne proposera plus les plats qui en demandent.`;
 }
 
