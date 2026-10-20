@@ -18,7 +18,7 @@ import {
 import {
   BASES_DE_SAUCE, BRUIT_MAX, DESSERTS_MAX, ECARTES_MAX, GRAMMES_PAR_BOITE, JOURS_RECENTS, LEGUMES_AROMATIQUES,
   LEGUMES_MIN, LEGUME_VISIBLE_G, POIDS_PIECE_LEGUMES, PORTION_LEGUMES_G, PROPOSITION_MIN, TEXTES_PROPOSER, aDesLegumes, annonceProposition,
-  apercuProposition, autreIdee, candidats, ecartAuMenu, emplacements, graineProposition, historiqueDesPlats,
+  apercuProposition, autreIdee, candidats, changerDesPlats, ecartAuMenu, emplacements, graineProposition, historiqueDesPlats,
   libelleProposer, libelleProposerDesserts, nombreAProposer, nombreDeDessertsParDefaut, nombreProposable,
   nomAutreIdee, peutChangerDIdee, proposerDesserts, proposerPlats, sousTitreDesserts, texteAutreIdee, texteRaison,
   texteSansProposition,
@@ -1151,6 +1151,10 @@ test('ecarter : un plat qui demande un objet absent n’est jamais proposé, ni 
   assert.equal(apercu.plats, 0);
   assert.equal(apercu.cause, 'cuisine');
   assert.equal(texteSansProposition('cuisine'), 'Vos plats demandent un objet que vous n’avez pas : choisissez-les vous-même.');
+  // « Changer des plats » passe l'option à chaque « Une autre idée ».
+  const sem = semaine(CIBLE.id, CIBLE.debut, CIBLE.fin, { 'aime-1': dans(1) });
+  const change = changerDesPlats(RICHE, ['aime-1'], { semaine: sem, semaines: [sem], profils: PROFILS, evaluer, ecarter: (p) => !['aime-1', 'aime-3'].includes(p.id) });
+  assert.deepEqual(change.remplacements.map((r) => r.platId), ['aime-3']);
   // Un plat sans recette n'est jamais « écarté par la cuisine » : sa cause reste la recette.
   const sansRecette = [plat('vide', 'Vide', [])];
   assert.equal(apercuProposition(sansRecette, opts({ ecarter: () => true })).cause, 'recettes');
