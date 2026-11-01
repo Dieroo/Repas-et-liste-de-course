@@ -16,7 +16,7 @@ import {
   etatsCompat, estVous, nomDe, rangerStyles, profilsAgeDe, precautionsDe, texteSeverite, symboleGravite,
 } from './compat.js';
 import { marqueursDouteux } from '../coeur/compatibilite.js';
-import { texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
+import { faconLue, texteDemandeRecette, texteDemandeVariantes } from '../coeur/claude.js';
 import { stylesAttendus, marqueursSurveilles } from '../coeur/regles.js';
 import { EMOJIS_STYLE, LIBELLES_STYLE, STYLES } from '../coeur/vocabulaire.js';
 import { LIBELLES_TYPE, STATUTS, statutDe, typeDe, quantiteLisible, cuissonLisible, visuelDuPlat } from '../coeur/plats.js';
@@ -32,6 +32,7 @@ import { ouvrirEnSerieEtapes } from './import.js';
 import { boutonCuisiner, TEXTES_CUISINE } from '../coeur/cuisine.js';
 import { avecPictogramme } from './etape.js';
 import { creerPhotosDeLaDemande } from './photos-demande.js';
+import { creerAlerteCuisine } from './alerte-cuisine.js';
 import { partageDePhotosPossible, partageDuTextePossible, partagerImages, telechargerImages } from './fichier.js';
 import { demandeEnPhotos, nomFichierDemande, nomFichierPhoto, nombrePhotos } from '../coeur/photos-demande.js';
 
@@ -329,6 +330,15 @@ function versionAttendue(etats, demandes = new Set()) {
 // plat-semaine.js › phraseDemandee (partagée avec la feuille du plat de la semaine).
 const CLE_RECETTE = 'recette';
 
+/**
+ * « Votre façon : avec des lardons, au Cookeo. » (vue « Repas et courses ») ou « Notre façon : … » (gestionnaire) :
+ * la façon du foyer jointe à la demande de recette (2026-10-20), qui part aussi à Claude ; null sans façon.
+ */
+function ligneFacon(demande, debut) {
+  const facon = faconLue(demande?.facon);
+  return facon ? el('p', { class: 'aide' }, `${debut}\u00A0: ${facon}.`) : null;
+}
+
 /** Ligne « 📬 Demandée par Adulte B le 9 octobre. » (gestionnaire) : qui a demandé, et quand ; jamais une adresse. */
 function ligneDemandee(demande, { profils, moi }) {
   return el('p', { class: 'demande-etat' }, el('span', { 'aria-hidden': 'true' }, '📬\u00A0'),
@@ -490,6 +500,11 @@ export function creer(ctx) {
     iconeSemaine, libelleSemaine);
   const aideSemaine = el('p', { class: 'aide aide-semaine', id: 'fiche-aide-semaine', hidden: true });
   const blocSemaine = el('div', { class: 'bloc-semaine' }, boutonSemaine, aideSemaine);
+  // « Ma cuisine » (2026-10-20, décision 27) : un objet peu courant pas encore dit, ou absent ; gardée d'un rendu à
+  // l'autre (le focus reste sur la réponse touchée). Plus rien à dire après une réponse : focus sur le titre.
+  // Titre gardé d'un rendu à l'autre : le focus qu'il reçoit tient après la mise à jour qui suit la réponse.
+  const titre = el('h1', { tabindex: '-1' });
+  const alerteCuisine = creerAlerteCuisine({ apresReponse: () => titre.focus() });
   // Ce qui décide si le bouton est principal : la fiche a-t-elle déjà un bouton principal ? (dernier rendu)
   let autrePrincipal = false;
 
@@ -609,7 +624,9 @@ export function creer(ctx) {
       const manque = versionAttendue(etats, profilsDemandeurs(situationsDemande(plat, etats)));
       if (manque) return texteDemandeVariantes([plat], manque.profil);
     }
-    return texteDemandeRecette(plat, { profils: courant.profils ?? [], demande: demandeEnPhotos(plat.id, courant.demandes ?? []) });
+    // La demande ouverte donne ses photos (2026-10-16) et la façon du foyer (2026-10-20) ; « Ma cuisine », ses lignes.
+    const demande = (courant.demandes ?? []).find((d) => d?.id === `${plat.id}__recette` && d.statut === 'ouverte') ?? null;
+    return texteDemandeRecette(plat, { profils: courant.profils ?? [], demande, reglages: courant.reglages ?? null });
   }
 
   /** Photos de la demande, prêtes à partir : [{ nom, adresse }] ; null tant qu'elles ne sont pas toutes lues. */
@@ -689,7 +706,7 @@ export function creer(ctx) {
     const plat = platCourant();
     if (!plat) return;
     // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
-    const reussi = await copier(texteDemandeEtapes([plat], { appareils: courant.reglages?.appareils ?? null }));
+    const reussi = await copier(texteDemandeEtapes([plat], { reglages: courant.reglages ?? null }));
     etapesCopiees = etapesCopiees || reussi;
     messageEtapes.textContent = reussi
       ? 'Copié. Collez-le dans votre projet Claude, puis revenez ici et touchez «\u00A0Coller la réponse de Claude\u00A0».'
@@ -932,11 +949,12 @@ export function creer(ctx) {
             ? 'Envoyez la demande et ses photos à votre projet Claude, puis collez sa réponse ici.'
             : 'Demandez-la à votre projet Claude, puis collez sa réponse ici.'),
           situationRecette?.ouverte ? ligneDemandee(situationRecette.ouverte, auteurs) : null,
+          ligneFacon(situationRecette?.ouverte, 'Notre façon'),
         ];
       } else if (situationRecette?.ouverte) {
         const bloc = blocDemande(CLE_RECETTE);
         ecrireBloc(bloc, { phrase: phraseDemandee(situationRecette.ouverte, { pourVersion: false, horsLigne }) });
-        textes = [bloc.phrase];
+        textes = [bloc.phrase, ligneFacon(situationRecette.ouverte, 'Votre façon')];
       } else if (situationRecette?.possible) {
         const bloc = blocDemande(CLE_RECETTE);
         ecrireBloc(bloc, { libelle: 'Demander la recette' });
@@ -967,7 +985,7 @@ export function creer(ctx) {
     if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
     const blocs = [...blocsDemande.values()];
-    const focusGarde = [actionsRecette, blocSemaine, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes, lienCuisiner,
+    const focusGarde = [titre, actionsRecette, blocSemaine, alerteCuisine.noeud, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes, lienCuisiner,
       ...blocs.flatMap((bloc) => [bloc.bouton, bloc.phrase])]
       .some((n) => n.contains(document.activeElement))
       ? document.activeElement
@@ -1008,10 +1026,12 @@ export function creer(ctx) {
       const phrase = etatEtapes === 'perimee' ? TEXTES_ETAPES.perimee : TEXTES_ETAPES.ficheCourte;
       if (texteEtapesCourtes.textContent !== phrase) texteEtapesCourtes.textContent = phrase;
     }
+    alerteCuisine.maj(jete ? null : plat, courant);
+    if (titre.textContent !== plat.nom) titre.textContent = plat.nom;
     // replaceChildren écrirait « null » : les blocs absents sont retirés.
     contenu.replaceChildren(...[
       el('header', { class: 'vue-entete' },
-        el('h1', {}, plat.nom),
+        titre,
         el('p', { class: 'badges' },
           el('span', { class: 'badge' }, LIBELLES_TYPE[typeDe(plat)] ?? 'Plat'),
           el('span', { class: `badge badge-${statut}` }, `${STATUTS[statut].emoji}\u00A0${STATUTS[statut].libelle}`),
@@ -1021,6 +1041,9 @@ export function creer(ctx) {
             : null,
         ),
       ),
+
+      // « Ma cuisine » avant « ＋ Ajouter à la semaine » : la question se lit avant le geste.
+      jete ? null : alerteCuisine.noeud,
 
       // Ni sur un plat de la corbeille, ni sur un apéro (T3e) ou une préparation de chaque semaine (T3d).
       jete || !peutAllerDansLaSemaine(plat) ? null : blocSemaine,

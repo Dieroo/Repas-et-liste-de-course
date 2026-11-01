@@ -28,7 +28,7 @@ import {
 import { cuissonEnTexte, empreinteDeTexte } from './empreinte.js';
 import { estDansCorbeille } from './corbeille.js';
 import { deNom } from './notes.js';
-import { VERSION_INSTRUCTIONS, appareilsActifs } from './claude.js';
+import { VERSION_INSTRUCTIONS, appareilsActifs, cuisineDeLaDemande } from './claude.js';
 
 const FORMAT = 'paquet@1';
 /** En-tête du texte copié pour Claude. */
@@ -277,22 +277,25 @@ function detailEtape(etape) {
 
 /**
  * Texte copié pour demander à Claude le plan de batch d'une semaine (DEMANDE-BATCH) : semaine (identifiant, que Claude
- * recopie), empreinte (empreintePlanBatch, recopiée), appareils actifs (claude.js › appareilsActifs), nombre de plats,
+ * recopie), empreinte (empreintePlanBatch, recopiée), appareils du foyer et lignes de « Ma cuisine » (claude.js ›
+ * cuisineDeLaDemande : `reglages`, sinon `appareils` comme avant), nombre de plats,
  * consigne, puis pour chaque plat du batch (platsDuBatch, dans l'ordre de la semaine) : `id`, `nom`, `portions à
  * cuisiner` (de la semaine, « (dont 2 à congeler) »), `ingrédients:` (quantités de la semaine, arrondies ; un ingrédient
  * que toutes les parts retirent est omis ; ceux qui ne servent qu'au service vont dans `au service:`), `étapes:` (une
  * ligne par étape de la recette, « le jour du repas » exclues, parts d'ingrédient comprises), `cuisson:`, `se garde:`,
  * `parts à mettre de côté:` (anonymes, avec leurs portions). Rien sur les personnes : ni profil, ni prénom.
  */
-export function texteDemandeBatch(elements, { semaine = null, appareils = null } = {}) {
+export function texteDemandeBatch(elements, { semaine = null, appareils = null, reglages = null } = {}) {
   const lue = lireSemaine(semaine);
   const plats = listeDe(elements).filter((e) => estObjet(e) && estObjet(e.plat));
+  const cuisine = cuisineDeLaDemande({ appareils, reglages });
   const lignes = [
     ENTETE_DEMANDE_BATCH,
     `instructions: ${VERSION_INSTRUCTIONS}`,
     `semaine: ${ligne(lue?.id ?? '')}`,
     `empreinte: ${empreintePlanBatch(plats) ?? ''}`,
-    `appareils: ${appareilsActifs(appareils).join(', ')}`,
+    `appareils: ${cuisine.appareils.join(', ')}`,
+    ...cuisine.cuisine,
     `nombre: ${plats.length}`,
     CONSIGNE_BATCH,
     'plats:',
@@ -399,7 +402,8 @@ function appareilsDeLaRecette(plat) {
  * Valide un plan de batch reçu → { plan | null, erreurs: [{ message, pourClaude }], avertissements: [{ message }],
  * refus: null | 'semaine' | 'perime' }.
  * `brut` : la valeur de `batch` ; `elements` : platsDuBatch de la semaine montrée ; `semaineId`, `empreinte` : les
- * siens (sans semaine : refus `semaine`) ; `appareils` : reglages.appareils (un appareil absent du foyer : avertissement).
+ * siens (sans semaine : refus `semaine`) ; `appareils` : reglages.appareils, ou les codes de ma-cuisine.js ›
+ * appareilsDuFoyer (un appareil absent du foyer : avertissement).
  * Refus (rien n'est enregistrable, rien à corriger par Claude) : plan d'une autre semaine (`semaine`), ou d'avant un
  * changement des plats (`perime` : empreinte différente). Erreurs (« Copier les corrections pour Claude ») : forme,
  * durées, plat inconnu, étape sans plat, plat absent de toutes les étapes, manière de cuire changée (appareil de la

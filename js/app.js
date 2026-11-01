@@ -24,7 +24,12 @@ import { evaluer, bilanCompatibilite } from './coeur/compatibilite.js';
 import { precautionsAge, profilsAvecAge, bilanPrecautions } from './coeur/age.js';
 import { marqueursSurveilles } from './coeur/regles.js';
 import { appliquerImport, profilsDesVersions, versionsEcrites, annonceVersions } from './coeur/import-local.js';
-import { VERSION_INSTRUCTIONS } from './coeur/claude.js';
+import { VERSION_INSTRUCTIONS, faconLue } from './coeur/claude.js';
+import { cleNouveautes, nouveauteAMontrer, valeurMontree, valeurVue } from './coeur/nouveautes.js';
+import {
+  ajoutPlatEtMoule, annonceReponse, ecrituresObjet, etatObjet, lireCuisine, lirePlatsEtMoules, manqueUnObjet,
+  remplacantADemander, retraitPlatEtMoule,
+} from './coeur/ma-cuisine.js';
 import {
   ecranChargement,
   ecranConnexion,
@@ -53,6 +58,7 @@ import * as accueil from './ui/accueil.js';
 // T5-1 « Cuisiner pas à pas ».
 import * as cuisiner from './ui/cuisiner.js';
 import * as ecranBatch from './ui/batch.js';
+import * as maCuisine from './ui/ma-cuisine.js';
 import { TEXTES_CUISINE } from './coeur/cuisine.js';
 import { cleAccueil, lireMarque, valeurVu, valeurOuverture, accueilAuto } from './coeur/accueil.js';
 import { telecharger } from './ui/fichier.js';
@@ -112,6 +118,8 @@ const ECRANS = {
   cuisiner: { titre: 'Cuisiner pas à pas', module: cuisiner, onglet: 'plats', sansOnglets: true },
   // Plan du batch (2026-10-19) : comme « Cuisiner pas à pas », pour les plats de la semaine.
   batch: { titre: 'Le batch de la semaine', module: ecranBatch, onglet: 'semaine', sansOnglets: true },
+  // « 🍳 Ma cuisine » (2026-10-20) : les deux rôles, depuis le panneau du profil, Réglages ou une carte de Semaine.
+  'ma-cuisine': { titre: 'Ma cuisine', module: maCuisine, onglet: null },
 };
 
 const NOM_APP = 'Repas & Courses';
@@ -596,14 +604,24 @@ function cibleProposition(cible) {
   return { id: cible.id, debut: cible.debut, fin: cible.fin };
 }
 
-/** Options communes de coeur/proposition.js pour une cible (plats de la corbeille compris : le cœur les écarte). */
-function optionsProposition(cible) {
-  return { cible, semaines: etat.semaines, profils: etat.profils, evaluer: compat, refuses: refusesDe(cible.id) };
+/**
+ * Plats qu'une proposition écarte parce qu'ils demandent un objet que la cuisine n'a pas (« Ma cuisine », 2026-10-20 :
+ * coeur/ma-cuisine.js › manqueUnObjet, sur les réglages du moment).
+ */
+function ecarterSelonLaCuisine(plat) {
+  return manqueUnObjet(plat, etat.donnees.reglages);
 }
 
-// Aperçus (coeur/proposition.js › apercuProposition) par semaine visée, gardés tant que semaines, plats, profils et
-// refusés sont les mêmes objets : la carte et la feuille ne recalculent rien d'un rendu à l'autre.
-let memoApercus = { semaines: null, plats: null, profils: null, refuses: null, resultats: new Map() };
+/** Options communes de coeur/proposition.js pour une cible (plats de la corbeille compris : le cœur les écarte). */
+function optionsProposition(cible) {
+  return {
+    cible, semaines: etat.semaines, profils: etat.profils, evaluer: compat, refuses: refusesDe(cible.id), ecarter: ecarterSelonLaCuisine,
+  };
+}
+
+// Aperçus (coeur/proposition.js › apercuProposition) par semaine visée, gardés tant que semaines, plats, profils,
+// refusés et réglages (« Ma cuisine ») sont les mêmes objets : la carte et la feuille ne recalculent rien d'un rendu à l'autre.
+let memoApercus = { semaines: null, plats: null, profils: null, refuses: null, reglages: null, resultats: new Map() };
 
 /**
  * Ce que la carte « prochaine action » et la feuille de choix montrent pour une semaine visée : { plats, …, cause,
@@ -613,8 +631,12 @@ function apercuPour(cible) {
   const visee = cibleProposition(cible);
   if (!visee || !semainesLues()) return null;
   const m = memoApercus;
-  if (m.semaines !== etat.semaines || m.plats !== etat.plats || m.profils !== etat.profils || m.refuses !== etat.refuses) {
-    memoApercus = { semaines: etat.semaines, plats: etat.plats, profils: etat.profils, refuses: etat.refuses, resultats: new Map() };
+  if (m.semaines !== etat.semaines || m.plats !== etat.plats || m.profils !== etat.profils || m.refuses !== etat.refuses
+    || m.reglages !== etat.donnees.reglages) {
+    memoApercus = {
+      semaines: etat.semaines, plats: etat.plats, profils: etat.profils, refuses: etat.refuses, reglages: etat.donnees.reglages,
+      resultats: new Map(),
+    };
   }
   const cle = `${visee.id}|${visee.debut}|${visee.fin}`;
   if (!memoApercus.resultats.has(cle)) {
@@ -770,6 +792,8 @@ function contexteCourant() {
     aTraiter,
     // Plan du batch (2026-10-19) : celui de la semaine montrée ; `demandeBatch` : sa demande, quand elle reste à traiter.
     batch,
+    // Carte « Nouveau » de Semaine (2026-10-20) : la nouveauté pas encore vue sur ce téléphone, vue « Repas et courses ».
+    nouveaute: nouveauteAMontrer(lireNouveautesVues(), { role }),
     demandeBatch: batch?.carte.etat === 'demande' ? batch : null,
     parametre,
     routePrecedente,
@@ -1044,8 +1068,10 @@ const actions = {
    * part dans le même lot, s'affiche tout de suite (la fiche, ouverte aussitôt, dit « 📬 Demandée… ») et le
    * gestionnaire est prévenu (prevenirDemande). → { id } ou { erreur } (coeur/plats.js › nouveauPlatParNom).
    */
-  ajouterPlat(nom, { photos = [], photoDuPlat = null } = {}) {
+  ajouterPlat(nom, { photos = [], photoDuPlat = null, facon = '' } = {}) {
     const demanderRecette = roleCourant() !== 'gestionnaire';
+    // « Comment vous la faites ? » (2026-10-20) : seulement avec la demande de recette, qui la porte.
+    const notreFacon = demanderRecette ? faconLue(facon) : '';
     // Recette en photos (2026-10-16, vue « Repas et courses ») : sans nom, un nom d'attente que Claude remplacera par
     // le titre lu sur les photos.
     const images = demanderRecette && Array.isArray(photos) ? photos.slice(0, PHOTOS_DEMANDE_MAX) : [];
@@ -1054,7 +1080,9 @@ const actions = {
     if (resultat.erreur) return resultat;
     const email = etat.utilisateur.email;
     const photo = demanderRecette && photoDuPlat?.image && photoDuPlat?.vignette ? photoDuPlat : null;
-    const envoi = donnees.ajouterPlat(resultat.plat, email, { demanderRecette, photos: images, photoDuPlat: photo, nomATrouver });
+    const envoi = donnees.ajouterPlat(resultat.plat, email, {
+      demanderRecette, photos: images, photoDuPlat: photo, nomATrouver, facon: notreFacon,
+    });
     ecrire(envoi, images.length
       ? 'Le plat et ses photos n’ont pas pu être enregistrés. Réessayez.'
       : 'Le plat n’a pas pu être enregistré. Réessayez.');
@@ -1062,7 +1090,12 @@ const actions = {
     etat.plats = [...etat.plats, { ...resultat.plat, ...(photo ? { vignette: photo.vignette } : {}) }];
     if (demanderRecette) {
       const recette = demandeDeRecette(resultat.plat.id, email);
-      const demande = { ...recette, donnees: { ...recette.donnees, ...champsDemandePhotos({ photos: images.length, nomATrouver }) } };
+      const demande = {
+        ...recette,
+        donnees: {
+          ...recette.donnees, ...champsDemandePhotos({ photos: images.length, nomATrouver }), ...(notreFacon ? { facon: notreFacon } : {}),
+        },
+      };
       insererDemande(demande);
       const jeton = Symbol(demande.id);
       jetonsDemandes.set(demande.id, jeton);
@@ -1584,10 +1617,13 @@ const actions = {
       evaluer: compat,
     });
     if (preparation.erreur) return { code: preparation.erreur };
-    // Recette demandée de nouveau après un retrait : ses photos (jamais effacées par un retrait) restent jointes.
+    // Recette demandée de nouveau après un retrait : ses photos (jamais effacées par un retrait) restent jointes, et
+    // la façon du foyer (2026-10-20) aussi.
     if (!profil) {
       const avant = etat.demandes.find((d) => d.id === preparation.id);
       const champs = champsDemandePhotos({ photos: nombrePhotos(avant), nomATrouver: avant?.nomATrouver === true });
+      const facon = faconLue(avant?.facon);
+      if (facon) champs.facon = facon;
       if (Object.keys(champs).length) preparation.donnees = { ...preparation.donnees, ...champs };
     }
     const echec = 'La demande n’a pas pu être enregistrée. Réessayez.';
@@ -2062,6 +2098,7 @@ const actions = {
     if (!ids.length) return { code: 'invalide' };
     const { remplacements, restes } = changerDesPlatsDe(etat.plats, ids, {
       semaine, semaines: etat.semaines, profils: etat.profils, evaluer: compat, refuses: refusesDe(semaine.id), mer,
+      ecarter: ecarterSelonLaCuisine,
     });
     if (!remplacements.length) return { code: 'aucune', restes };
     const ecritures = ecrituresRemplacements(semaine, remplacements.map((r) => ({ ancienId: r.ancienId, nouveauId: r.platId })));
@@ -2326,6 +2363,124 @@ const actions = {
     const message = `«\u00A0${nom}\u00A0» retiré de la liste.`;
     if (!silencieux) annoncer(message, { action: { libelle: 'Annuler', faire: () => remettreArticle(article) } });
     return { code: 'ok', message };
+  },
+
+  /**
+   * Carte « Nouveau » de Semaine (2026-10-20) : `numero` vu sur ce téléphone pour ce compte (un de ses boutons
+   * touché) ; la carte disparaît. Stockage bloqué : rien (la carte ne se montrait pas).
+   */
+  nouveauteVue(numero) {
+    const cle = cleNouveautes(etat.utilisateur?.uid);
+    if (!cle) return;
+    try {
+      localStorage.setItem(cle, valeurVue(numero));
+    } catch {
+      // Stockage plein ou bloqué : la carte reviendra à la prochaine ouverture.
+    }
+    nouveautesVisite.valeur = valeurVue(numero);
+    // La carte s'en va et tout remonte sous le doigt : un second toucher impatient n'atteint rien (« ✨ Proposer »).
+    ignorerToucherFantome();
+    rendre();
+  },
+  /**
+   * La nouveauté `numero` s'est montrée (Semaine l'appelle à chaque rendu de sa carte ; comptée une fois par ouverture
+   * de l'app) : après OUVERTURES_NOUVEAUTE ouvertures sans geste, elle compte pour vue, à la prochaine ouverture (la
+   * carte reste jusque-là : lireNouveautesVues garde la marque lue au début de la visite). Rien n'est redessiné.
+   */
+  nouveauteMontree(numero) {
+    const cle = cleNouveautes(etat.utilisateur?.uid);
+    if (!cle || nouveautesVisite.comptees.has(numero)) return;
+    nouveautesVisite.comptees.add(numero);
+    try {
+      localStorage.setItem(cle, valeurMontree(localStorage.getItem(cle), numero));
+    } catch {
+      // Stockage plein ou bloqué : rien.
+    }
+  },
+
+  // ——— « Ma cuisine » (2026-10-20, les deux membres, aperçu compris) ———
+  // Chaque geste écrit un seul chemin de `reglages/foyer` (`cuisine.<objet>`, `platsEtMoules.<id>`) par un lot, sans
+  // transaction (hors ligne : plus tard), appliqué tout de suite sur ce téléphone, puis l'écran est redessiné.
+
+  /**
+   * Réponse pour un objet de « Ma cuisine » (`valeur` : true « Je l'ai », false « Je ne l'ai pas », null « pas encore
+   * dit », pour « Annuler ») : alerte d'une recette (carte du plat de la semaine, fiche) ou écran « Ma cuisine ».
+   * `annonce` (par défaut) : « C’est noté : siphon dans Ma cuisine. » avec « Annuler » (8 s), qui remet la réponse
+   * d'avant ; `apresAnnulation()` est appelé ensuite (focus). Même réponse que celle qui se voit : rien n'est écrit.
+   * `garde` : les touchers sont ignorés 500 ms (alerte d'une recette : ce qui suit arrive sous le doigt).
+   * → { code: 'ok' | 'chargement' | 'invalide' | 'echec' | 'refuse' }.
+   */
+  repondreCuisine(id, valeur, { annonce = true, apresAnnulation = null, garde = false } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.donnees.reglages) return { code: 'chargement' };
+    const champs = ecrituresObjet(id, valeur);
+    if (!champs) return { code: 'invalide' };
+    const reponses = lireCuisine(etat.donnees.reglages);
+    const avant = reponses.has(id) ? reponses.get(id) : null;
+    // Même réponse que celle qui se voit (un appareil de départ déjà « Je l'ai ») : rien n'est écrit.
+    const montre = etatObjet(id, etat.donnees.reglages);
+    if (avant === valeur || (valeur !== null && montre === (valeur ? 'oui' : 'non'))) return { code: 'ok', inchange: true };
+    const echec = 'Votre réponse n’a pas pu être enregistrée. Réessayez.';
+    if (!ecrireLesReglages(champs, echec)) return { code: 'echec' };
+    // Alerte d'une carte ou de la fiche (`garde`) : la question suivante, ou la carte suivante, arrive sous le doigt.
+    if (garde) ignorerToucherFantome();
+    rendre();
+    if (annonce && valeur !== null) {
+      // « Je ne l'ai pas » quand un objet qui le remplacerait reste à demander : rien n'est encore écarté.
+      const remplacant = valeur === false && remplacantADemander(id, etat.donnees.reglages);
+      annoncer(annonceReponse(id, valeur, { remplacant }), {
+        action: {
+          libelle: 'Annuler',
+          faire: () => {
+            const retour = ecrituresObjet(id, avant);
+            if (!retour || !ecrireLesReglages(retour, echec)) return;
+            rendre();
+            apresAnnulation?.();
+          },
+        },
+      });
+    }
+    return { code: 'ok' };
+  },
+  /**
+   * « Mes plats et moules » : ajoute `nom` (coeur/ma-cuisine.js › ajoutPlatEtMoule ; 40 caractères, 15 au plus, un nom
+   * déjà là refusé). N'annonce que le succès (« « Cocotte 5 l » ajouté. ») : l'écran montre l'erreur sous le champ.
+   * → { code: 'ok', nom } | { code: 'erreur', message } | { code: 'chargement' | 'echec' | 'refuse' }.
+   */
+  ajouterPlatEtMoule(nom) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.donnees.reglages) return { code: 'chargement' };
+    const ajout = ajoutPlatEtMoule(nom, etat.donnees.reglages);
+    if (ajout.erreur) return { code: 'erreur', message: ajout.erreur };
+    if (!ecrireLesReglages(ajout.champs, 'Ce plat n’a pas pu être ajouté. Réessayez.')) return { code: 'echec' };
+    rendre();
+    annoncer(`«\u00A0${ajout.nom}\u00A0» ajouté.`);
+    return { code: 'ok', nom: ajout.nom };
+  },
+  /**
+   * « Mes plats et moules » : retire un plat ou un moule ; annonce « « Cocotte 5 l » retiré. » avec « Annuler » (8 s),
+   * qui le remet (même nom, même identifiant), puis `apresAnnulation()`. → { code: 'ok' | 'inutile' | 'echec' | … }.
+   */
+  retirerPlatEtMoule(id, { apresAnnulation = null } = {}) {
+    if (!etat.utilisateur) return { code: 'refuse' };
+    if (!etat.donnees.reglages) return { code: 'chargement' };
+    const element = lirePlatsEtMoules(etat.donnees.reglages).find((p) => p.id === id);
+    const champs = retraitPlatEtMoule(id);
+    if (!element || !champs) return { code: 'inutile' };
+    const echec = 'Ce plat n’a pas pu être retiré. Réessayez.';
+    if (!ecrireLesReglages(champs, echec)) return { code: 'echec' };
+    rendre();
+    annoncer(`«\u00A0${element.nom}\u00A0» retiré.`, {
+      action: {
+        libelle: 'Annuler',
+        faire: () => {
+          if (!ecrireLesReglages({ [`platsEtMoules.${element.id}`]: element.nom }, 'Ce plat n’a pas pu être remis. Réessayez.')) return;
+          rendre();
+          apresAnnulation?.();
+        },
+      },
+    });
+    return { code: 'ok' };
   },
 
   // ——— Au drive et fin des courses (T3b, les deux membres, aperçu compris) ———
@@ -3469,6 +3624,32 @@ function cloreDemandes(demandesAClore) {
     : demande));
 }
 
+// Carte « Nouveau » pendant cette ouverture de l'app : la marque lue au premier rendu (`uid`, `valeur`), changée
+// seulement par actions.nouveauteVue (la carte ne disparaît pas sous les yeux quand la troisième ouverture la marque
+// vue), et les nouveautés déjà comptées (actions.nouveauteMontree).
+const nouveautesVisite = { uid: null, valeur: undefined, comptees: new Set() };
+
+/**
+ * Marque « Nouveau » de ce compte sur ce téléphone (`localStorage`, coeur/nouveautes.js › cleNouveautes), lue une fois
+ * par ouverture de l'app et par compte : la valeur stockée, null si elle est absente, undefined si le stockage est
+ * bloqué (la carte ne se montre pas alors : elle reviendrait à chaque ouverture).
+ */
+function lireNouveautesVues() {
+  const uid = etat.utilisateur?.uid ?? null;
+  const cle = cleNouveautes(uid);
+  if (!cle) return undefined;
+  if (nouveautesVisite.uid !== uid) {
+    nouveautesVisite.uid = uid;
+    nouveautesVisite.comptees = new Set();
+    try {
+      nouveautesVisite.valeur = localStorage.getItem(cle);
+    } catch {
+      nouveautesVisite.valeur = undefined;
+    }
+  }
+  return nouveautesVisite.valeur;
+}
+
 /** Panneau du profil, rempli avec le contexte à jour (la personne reconnue, les prénoms à relier). */
 function ouvrirPanneauProfil() {
   if (!etat.utilisateur) return;
@@ -3481,6 +3662,8 @@ function ouvrirPanneauProfil() {
     aRelier: profilsARelier(ctx.profils, { gestionnaire: ctx.reglages?.gestionnaire }),
     avecProfils: ctx.profils.length > 0,
     onReglages: () => { location.hash = '#/reglages'; },
+    // « 🍳 Ma cuisine » (2026-10-20), les deux rôles ; absent sur l'écran lui-même.
+    onMaCuisine: routeCourante().route === 'ma-cuisine' ? null : () => { location.hash = '#/ma-cuisine'; },
     onAjouterRecettes: () => { location.hash = '#/import'; },
     onApercu: changerApercu,
     onDeconnecter: seDeconnecter,

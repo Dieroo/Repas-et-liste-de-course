@@ -43,7 +43,7 @@ export const IDS_DICTIONNAIRE = Object.freeze([
   'gorgonzola', 'gousse-de-vanille', 'graine-de-coriandre', 'graine-de-cumin', 'graine-de-fenouil',
   'graine-de-moutarde', 'graine-de-sesame', 'graisse-d-oie', 'graisse-de-canard', 'grana-padano', 'grenade', 'gressin',
   'gro-sel', 'groseille', 'gruyere', 'gruyere-rape', 'guacamole', 'haddock', 'halloumi', 'hareng-fume', 'haricot-blanc',
-  'haricot-noir', 'haricot-rouge', 'haricot-vert', 'harissa', 'haut-de-cuisse-de-poulet', 'herbe-de-provence', 'houmou',
+  'haricot-noir', 'haricot-rouge', 'haricot-vert', 'harissa', 'haut-de-cuisse-de-poulet', 'haut-de-cuisse-de-poulet-desosse', 'herbe-de-provence', 'houmou',
   'huile', 'huile-d-arachide', 'huile-d-olive', 'huile-de-coco', 'huile-de-colza', 'huile-de-noi', 'huile-de-noisette',
   'huile-de-pepin-de-raisin', 'huile-de-sesame', 'huile-de-tournesol', 'huile-neutre', 'huitre', 'jambon-blanc',
   'jambon-cru', 'jambon-de-bayonne', 'jambon-de-parme', 'jambon-serrano', 'jarret-de-porc', 'jarret-de-veau',

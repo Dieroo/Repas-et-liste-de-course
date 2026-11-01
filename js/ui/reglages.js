@@ -7,7 +7,7 @@
 // du profil donne son âge (« · 🧸 4 ans ») et, si sa date demande des précautions que ses règles n'ont pas encore
 // (restauration, règle abîmée retirée, barème complété), « 🧸 N précautions à ajouter › ». Calcul seulement : rien
 // n'est écrit avant « Enregistrer » sur l'écran de l'enfant.
-import { el, enteteVue, etatVide, annoncer, ecrireTexte, reconcilier } from './dom.js';
+import { el, enteteVue, annoncer, ecrireTexte, reconcilier } from './dom.js';
 import { ouvrirFeuille } from './feuille.js';
 import { copier } from './presse-papiers.js';
 import { avecEcranAge, aujourdhuiDe } from './regime.js';
@@ -28,6 +28,7 @@ import { TEXTES_T3D, ordreRayons, placardDuFoyer, textePlacard } from '../coeur/
 // T5-0b « Étapes détaillées » : carte de Réglages (creerCarteEtapes).
 import { texteDemandeEtapes } from '../coeur/claude.js';
 import { carteEtapesDetaillees, platsADetailler, TEXTES_ETAPES } from '../coeur/realisation.js';
+import { TEXTES_MA_CUISINE } from '../coeur/ma-cuisine.js';
 import { ouvrirEnSerieEtapes } from './import.js';
 
 // Au-delà, la carte « Sauvegarde » invite à en faire une (même seuil que le rappel du panneau du profil).
@@ -469,7 +470,7 @@ function creerCarteEtapes(ctx) {
     // Texte calculé dans le toucher, avant toute attente : la copie de repli reste permise.
     const plats = platsADetailler(courant.plats ?? [], { semaines: courant.semaines ?? [], aujourdhui: courant.aujourdhui ?? new Date() });
     if (!plats.length) return;
-    const reussi = await copier(texteDemandeEtapes(plats, { appareils: courant.reglages?.appareils ?? null }));
+    const reussi = await copier(texteDemandeEtapes(plats, { reglages: courant.reglages ?? null }));
     if (reussi) {
       copie = true;
       message.textContent = [etat.annonce, etat.phraseSemaine].filter(Boolean).join(' ');
@@ -1064,12 +1065,11 @@ export function creer(ctx) {
       carteDrive.noeud,
       carteRayons.noeud,
       cartePlacard.noeud,
-      etatVide({
-        emoji: '⚙️',
-        teinte: 'olive',
-        titre: 'D’autres réglages arrivent',
-        texte: 'Les appareils trouveront leur place ici.',
-      }),
+      // « 🍳 Ma cuisine » (2026-10-20) : les appareils, à la place de « Les appareils trouveront leur place ici. ».
+      el('section', { class: 'carte', 'aria-labelledby': 'reglages-ma-cuisine' },
+        el('h2', { id: 'reglages-ma-cuisine' }, el('span', { 'aria-hidden': 'true' }, '🍳\u00A0'), TEXTES_MA_CUISINE.titre),
+        el('p', {}, TEXTES_MA_CUISINE.carteReglages),
+        el('a', { class: 'bouton bouton-secondaire bouton-plein', href: '#/ma-cuisine' }, TEXTES_MA_CUISINE.ouvrir)),
     ),
     maj(nouveau) {
       courant = nouveau;
