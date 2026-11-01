@@ -12,7 +12,7 @@ const PREFIXE = 'repas-courses-';
 const VERSION = '2f248f27397f';
 const VERSION_SDK = '12.19.0';
 // Date de publication affichée dans le panneau du profil (« Version du … ») : à changer à chaque mise en ligne.
-const PUBLIEE = '2026-10-19';
+const PUBLIEE = '2026-11-01';
 
 const CACHE_APP = `${PREFIXE}app-${VERSION}`;
 const CACHE_EXTERNE = `${PREFIXE}externe-${VERSION_SDK}`;
