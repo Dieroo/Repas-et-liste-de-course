@@ -502,7 +502,9 @@ export function creer(ctx) {
   const blocSemaine = el('div', { class: 'bloc-semaine' }, boutonSemaine, aideSemaine);
   // « Ma cuisine » (2026-10-20, décision 27) : un objet peu courant pas encore dit, ou absent ; gardée d'un rendu à
   // l'autre (le focus reste sur la réponse touchée). Plus rien à dire après une réponse : focus sur le titre.
-  const alerteCuisine = creerAlerteCuisine({ apresReponse: () => contenu.querySelector('h1')?.focus() });
+  // Titre gardé d'un rendu à l'autre : le focus qu'il reçoit tient après la mise à jour qui suit la réponse.
+  const titre = el('h1', { tabindex: '-1' });
+  const alerteCuisine = creerAlerteCuisine({ apresReponse: () => titre.focus() });
   // Ce qui décide si le bouton est principal : la fiche a-t-elle déjà un bouton principal ? (dernier rendu)
   let autrePrincipal = false;
 
@@ -983,7 +985,7 @@ export function creer(ctx) {
     if (!jete) notes.maj(courant);
     // Boutons gardés d'un rendu à l'autre : celui qui avait le focus le retrouve après la mise à jour.
     const blocs = [...blocsDemande.values()];
-    const focusGarde = [actionsRecette, blocSemaine, alerteCuisine.noeud, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes, lienCuisiner,
+    const focusGarde = [titre, actionsRecette, blocSemaine, alerteCuisine.noeud, lienModifier, carteReprise, notes.noeud, carteJete, boutonCorbeille, carteSansPreneur.noeud, carteEtapes, lienCuisiner,
       ...blocs.flatMap((bloc) => [bloc.bouton, bloc.phrase])]
       .some((n) => n.contains(document.activeElement))
       ? document.activeElement
@@ -1025,10 +1027,11 @@ export function creer(ctx) {
       if (texteEtapesCourtes.textContent !== phrase) texteEtapesCourtes.textContent = phrase;
     }
     alerteCuisine.maj(jete ? null : plat, courant);
+    if (titre.textContent !== plat.nom) titre.textContent = plat.nom;
     // replaceChildren écrirait « null » : les blocs absents sont retirés.
     contenu.replaceChildren(...[
       el('header', { class: 'vue-entete' },
-        el('h1', { tabindex: '-1' }, plat.nom),
+        titre,
         el('p', { class: 'badges' },
           el('span', { class: 'badge' }, LIBELLES_TYPE[typeDe(plat)] ?? 'Plat'),
           el('span', { class: `badge badge-${statut}` }, `${STATUTS[statut].emoji}\u00A0${STATUTS[statut].libelle}`),
